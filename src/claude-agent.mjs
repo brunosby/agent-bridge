@@ -9,13 +9,15 @@ import { spawnJsonl } from './proc.mjs';
  * Emits 'event' objects: { kind, ... } (see server.mjs for the list of kinds).
  */
 export class ClaudeAgent extends EventEmitter {
-  constructor({ id = 'claude', name = 'Claude', cwd, config, systemPromptFile, readOnly = false, tokens = 0, cachedTokens = 0, maxTurns = null }) {
+  constructor({ id = 'claude', name = 'Claude', cwd, config, systemPromptFile, readOnly = false, tokens = 0, cachedTokens = 0, maxTurns = null, profile = 'full', skillsOff = [] }) {
     super();
     this.id = id;
     this.name = name;
     this.label = name;
     this.readOnly = readOnly;
     this.maxTurns = maxTurns;
+    this.profile = profile;
+    this.skillsOff = skillsOff;
     this.tokens = tokens;
     this.cachedTokens = cachedTokens;
     this.available = true;
@@ -122,8 +124,11 @@ export class ClaudeAgent extends EventEmitter {
     // Step limit of the role (per message): keeps support roles short.
     if (this.maxTurns) args.push('--max-turns', String(this.maxTurns));
     if (c.permissionMode) args.push('--permission-mode', c.permissionMode);
-    // Roles that must not edit files lose the file-editing tools.
-    if (this.readOnly) args.push('--disallowedTools', 'Edit,Write,NotebookEdit');
+    // Roles that must not edit files lose the file-editing tools; skills switched off for the role are denied.
+    const deny = [...(this.readOnly ? ['Edit', 'Write', 'NotebookEdit'] : []), ...this.skillsOff.map((s) => `Skill(${s})`)];
+    if (deny.length) args.push('--disallowedTools', deny.join(','));
+    // Lean profile: no hooks (plugins' hooks run on every turn and change how support agents behave).
+    if (this.profile === 'lean') args.push('--settings', JSON.stringify({ disableAllHooks: true }));
     if (Array.isArray(c.allowedTools) && c.allowedTools.length) {
       args.push('--allowedTools', c.allowedTools.join(','));
     }
@@ -188,9 +193,11 @@ export class ClaudeAgent extends EventEmitter {
   }
 
   /** Role changed: apply read-only mode and new instructions by restarting on the same session. */
-  async reconfigure({ readOnly, maxTurns }) {
+  async reconfigure({ readOnly, maxTurns, profile, skillsOff }) {
     this.readOnly = Boolean(readOnly);
     this.maxTurns = maxTurns || null;
+    if (profile) this.profile = profile;
+    if (skillsOff) this.skillsOff = skillsOff;
     if (this.busy) {
       this.restartWhenIdle = true;
       return;
@@ -261,6 +268,7 @@ export class ClaudeAgent extends EventEmitter {
       case 'control_response': {
         const r = m.response?.response || {};
         if (Array.isArray(r.models)) {
+          this.commands = (r.commands || []).map((c) => ({ name: c.name, description: c.description || '' }));
           this.models = r.models.map((x) => ({ value: x.value, label: x.displayName || x.value, resolved: x.resolvedModel || null, description: x.description || '', efforts: x.supportsEffort ? x.supportedEffortLevels || [] : [] }));
           const current = this.models.find((x) => x.value === (this.model || 'default'));
           if (current?.resolved) this.resolvedModel = current.resolved;

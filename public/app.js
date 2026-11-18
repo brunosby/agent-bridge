@@ -203,6 +203,10 @@ function handle(ev) {
     case 'needRole':
       renderNeedRole(ev);
       break;
+    case 'finalReview':
+      renderFinalReview(ev);
+      break;
+    case 'finalReviewClosed':
     case 'needRoleClosed': {
       const el = approvals.get(ev.requestId);
       if (el) {
@@ -242,6 +246,35 @@ function updatePending() {
   $('pending').hidden = n === 0;
   const base = state ? `Agent Bridge · ${state.workDir}` : 'Agent Bridge';
   document.title = n ? `(${n}) Approval needed · ${base}` : base;
+}
+
+/** End of the work: the user approves the result or asks for changes. */
+function renderFinalReview(ev) {
+  const el = h('div', 'approval final-review');
+  el.dataset.title = 'Final confirmation';
+  el.appendChild(h('div', 'title', `${label(ev.agent)} finished the work · ${time(ev.at)}`));
+  if (ev.summary) {
+    const body = h('div', 'body');
+    renderMarkdown(body, ev.summary.length > 1500 ? `${ev.summary.slice(0, 1500)}…` : ev.summary);
+    el.appendChild(body);
+  }
+  const actions = h('div', 'actions');
+  const ok = h('button', 'primary', 'Approve');
+  ok.onclick = () => api('finalReview', { requestId: ev.requestId, action: 'approve' }).catch((e) => addSys(e.message, true));
+  const ch = h('button', null, 'Ask for changes');
+  ch.onclick = () =>
+    api('finalReview', { requestId: ev.requestId, action: 'changes' })
+      .then(() => {
+        $('target').value = ev.agent;
+        $('input').placeholder = `What should ${label(ev.agent)} change?`;
+        $('input').focus();
+      })
+      .catch((e) => addSys(e.message, true));
+  actions.append(ok, ch);
+  el.appendChild(actions);
+  approvals.set(ev.requestId, el);
+  $('pending').appendChild(el);
+  updatePending();
 }
 
 /** The orchestrator needs a role nobody in the team has: add it (with a recommended model) or use the closest agent. */
@@ -690,6 +723,8 @@ const SETTING_LABELS = {
   approvalTimeoutSec: ['Approval timeout (seconds)', 'Decline an unanswered approval after this time (0 = wait forever).'],
   bypassNewAgents: ['Bypass on for new agents', 'New agents start with bypass mode on.'],
   warnOnExtraAgents: ['Warn about token use when adding agents', ''],
+  maxReviewRounds: ['Review fix rounds', 'How many times the Reviewer CHANGES REQUESTED answer goes back to the coder before the orchestrator reports to you.'],
+  finalConfirmation: ['Ask me to approve the final result', 'Show Approve / Ask for changes when the orchestrator finishes.'],
   missingRolePolicy: ['When the orchestrator needs a missing role', 'Ask me (add the role with a recommended model, or continue with the closest agent), or always continue with the closest agent.'],
   sensitiveModelPatterns: ['Models with a data warning', 'One pattern per line (regex). Matching models show ⚠ and a warning about sensitive code.'],
   destructivePatterns: ['Destructive actions (always ask)', 'One regex per line. Bypass never approves these.'],
@@ -816,15 +851,70 @@ async function renderAccounts(refresh = false) {
   }
 }
 
-function renderRoles() {
+async function renderRoles() {
   const list = $('roleList');
+  list.textContent = 'Loading…';
+  let info = { installed: [], roles: {} };
+  try {
+    info = await api('skills');
+  } catch (e) {
+    addSys(`Could not list skills: ${e.message}`, true);
+  }
   list.textContent = '';
   for (const r of catalog.roles) {
+    const prof = info.roles[r.id] || { profile: r.profile || 'full', skillsOff: [] };
     const row = h('div', 'account');
     const head = h('div', 'acc-head');
     head.append(h('strong', null, r.name), h('span', 'hint', r.canEdit === 'none' ? 'read-only' : r.canEdit === 'tests' ? 'edits tests only' : 'edits files'));
     row.append(head, h('div', null, r.summary));
     if (r.recommended?.label) row.appendChild(h('div', 'hint', `Recommended models: ${r.recommended.label}`));
+
+    // Profile: full setup or lean (no hooks), plus skills switched off for this role.
+    const pl = h('label', 'inline');
+    pl.appendChild(document.createTextNode('Profile '));
+    const ps = h('select');
+    ps.append(new Option('Full (all your hooks, skills and plugins)', 'full'), new Option('Lean (no hooks; skills still available)', 'lean'));
+    ps.value = prof.profile;
+    pl.appendChild(ps);
+    row.appendChild(pl);
+
+    const skillBox = h('div', 'skills');
+    const boxes = [];
+    if (info.installed.length) {
+      skillBox.appendChild(h('div', 'hint', 'Skills switched off for this role (Claude and OpenCode agents; Codex has no per-session switch):'));
+      for (const name of info.installed) {
+        const l = h('label', 'check');
+        const cb = h('input');
+        cb.type = 'checkbox';
+        cb.value = name;
+        cb.checked = prof.skillsOff.includes(name);
+        l.append(cb, document.createTextNode(` ${name}`));
+        skillBox.appendChild(l);
+        boxes.push(cb);
+      }
+    } else {
+      skillBox.appendChild(h('div', 'hint', 'No installed skills found yet (the list fills in once a Claude agent has started).'));
+    }
+    row.appendChild(skillBox);
+
+    const actions = h('div', 'actions');
+    const msg = h('span', 'hint', prof.overridden ? 'Changed in Settings.' : 'Defaults from the role file.');
+    const save = h('button', 'primary', 'Save');
+    save.onclick = async () => {
+      try {
+        await api('roleProfile', { role: r.id, profile: ps.value, skillsOff: boxes.filter((b) => b.checked).map((b) => b.value) });
+        msg.textContent = 'Saved. Agents with this role pick it up (Claude restarts on the same session).';
+      } catch (e) {
+        msg.textContent = `Not saved: ${e.message}`;
+      }
+    };
+    const reset = h('button', null, 'Reset to defaults');
+    reset.onclick = async () => {
+      await api('roleProfile', { role: r.id, reset: true }).catch((e) => (msg.textContent = e.message));
+      renderRoles();
+    };
+    actions.append(msg, reset, save);
+    row.appendChild(actions);
     list.appendChild(row);
   }
 }

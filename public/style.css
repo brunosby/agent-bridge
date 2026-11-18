@@ -64,6 +64,12 @@ header { background: var(--panel); border-bottom: 1px solid var(--border); paddi
 .add-agent { align-self: center; border-style: dashed; }
 @keyframes pulse { 50% { opacity: 0.25; } }
 
+.skills { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 2px 12px; font-size: 12.5px; }
+.skills .hint { grid-column: 1 / -1; }
+label.inline { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+.final-review { border-color: #3d7a4b; background: #1d2a20; }
+.final-review .title { color: var(--user); }
+.final-review .body { max-height: 30vh; overflow-y: auto; font-size: 13px; }
 .closed-page { margin: auto; text-align: center; color: var(--muted); }
 
 /* Narrow windows: controls go under the title and cards take the full width. */

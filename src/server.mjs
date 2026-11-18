@@ -10,7 +10,8 @@ import { OpenCodeAgent } from './opencode-agent.mjs';
 import { buildInstructions, rosterText, ROUTING_MODES } from './prompts.mjs';
 import { buildMatcher, DEFAULT_DESTRUCTIVE_PATTERNS, DEFAULT_DELETION_PATTERNS } from './safety.mjs';
 import { listConversations, loadConversation, removeConversation, LOGS_DIR_NAME } from './history.mjs';
-import { loadRoles, isRecommended } from './roles.mjs';
+import { loadRoles, isRecommended, globMatch } from './roles.mjs';
+import os from 'node:os';
 import { createWorktree } from './worktree.mjs';
 import { PROVIDERS, cliStatus, mergeStatus, nextStep, openLoginTerminal } from './accounts.mjs';
 
@@ -57,6 +58,8 @@ const SETTINGS = {
   bypassNewAgents: { type: 'boolean', default: false },
   warnOnExtraAgents: { type: 'boolean', default: true },
   missingRolePolicy: { type: 'enum', values: ['ask', 'closest'], default: 'ask' },
+  maxReviewRounds: { type: 'number', min: 0, default: 2 },
+  finalConfirmation: { type: 'boolean', default: true },
   sensitiveModelPatterns: { type: 'list', default: ['big-pickle', 'stealth', ':free', '-free'] },
   destructivePatterns: { type: 'list', default: DEFAULT_DESTRUCTIVE_PATTERNS },
   deletionPatterns: { type: 'list', default: DEFAULT_DELETION_PATTERNS },
@@ -262,11 +265,11 @@ function createAgent(spec) {
   if (spec.driver === 'claude') {
     const promptFile = path.join(conv.runDir, `instructions-${spec.id}.txt`);
     fs.writeFileSync(promptFile, instructions);
-    agent = new ClaudeAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeSessionId: spec.sessionId || null }, systemPromptFile: promptFile, readOnly, tokens: spec.tokens || 0, cachedTokens: spec.cachedTokens || 0, maxTurns: role?.maxTurns || null });
+    agent = new ClaudeAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeSessionId: spec.sessionId || null }, systemPromptFile: promptFile, readOnly, tokens: spec.tokens || 0, cachedTokens: spec.cachedTokens || 0, maxTurns: role?.maxTurns || null, ...roleProfile(spec.role) });
   } else if (spec.driver === 'codex') {
     agent = new CodexAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeThreadId: spec.sessionId || null }, instructions, readOnly, tokens: spec.tokens || 0, cachedTokens: spec.cachedTokens || 0 });
   } else if (spec.driver === 'opencode') {
-    agent = new OpenCodeAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeSessionId: spec.sessionId || null }, instructions, readOnly, tokens: spec.tokens || 0, cachedTokens: spec.cachedTokens || 0 });
+    agent = new OpenCodeAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeSessionId: spec.sessionId || null }, instructions, readOnly, tokens: spec.tokens || 0, cachedTokens: spec.cachedTokens || 0, skillsOff: roleProfile(spec.role, true).skillsOff });
   } else {
     throw new Error(`unknown driver ${spec.driver}`);
   }
@@ -332,7 +335,7 @@ async function setRole(id, roleId) {
   } else if (agent.setInstructions) {
     agent.setInstructions(buildInstructions({ name: spec.name, role, routingMode: conv.routingMode, workDir: agent.cwd, userName: setting('userName'), extra: config[spec.driver]?.instructions }));
   }
-  await agent.reconfigure({ readOnly: role.canEdit === 'none', maxTurns: role.maxTurns || null });
+  await agent.reconfigure({ readOnly: role.canEdit === 'none', maxTurns: role.maxTurns || null, ...roleProfile(roleId) });
   conv.pendingRoleNote[id] = `[Role change] From now on your role is ${role.name}. ${role.summary}\n${role.instructions}`;
   conv.rosterVersion++;
   publish({ kind: 'system', text: `${spec.name} is now ${role.name}.` });
@@ -559,8 +562,29 @@ function routeTargets(fromId, text) {
   return [];
 }
 
+/**
+ * Review rounds: each CHANGES REQUESTED from a Reviewer counts one round; APPROVED resets the count.
+ * Past maxReviewRounds the orchestrator is told to stop the fix loop and report to the user instead.
+ */
+function reviewNote(fromId, text) {
+  if (conv.team.find((a) => a.id === fromId)?.role !== 'reviewer' || !text) return text;
+  if (/^\W*APPROVED/i.test(text)) {
+    conv.reviewRounds = 0;
+    return text;
+  }
+  if (!/^\W*CHANGES REQUESTED/i.test(text)) return text;
+  conv.reviewRounds = (conv.reviewRounds || 0) + 1;
+  const max = Number(setting('maxReviewRounds'));
+  if (conv.reviewRounds > max) {
+    publish({ kind: 'system', text: `The Reviewer still requests changes after ${max} fix round(s). ${agentName(orchestratorId())} will report to you instead of starting another round.` });
+    logError('bridge', `review round limit (${max}) reached`);
+    return `${text}\n\n[Agent Bridge: review round limit (${max}) reached. Do not send this back to the coder. Summarize for the user what was done and the open findings, and end with [[DONE]].]`;
+  }
+  return `${text}\n\n[Agent Bridge: review round ${conv.reviewRounds} of ${max}. Send the findings to the coder.]`;
+}
+
 function onTurnEnd(fromId, ev) {
-  const text = (ev.text || '').trim();
+  const text = reviewNote(fromId, (ev.text || '').trim());
   const orch = orchestratorId();
 
   // Orchestrator mode: results of the agents the orchestrator delegated to are collected and delivered
@@ -589,6 +613,13 @@ function onTurnEnd(fromId, ev) {
   if (DONE_MARKER.test(text) && closes) {
     relay.halted = true;
     publish({ kind: 'system', text: `${agentName(fromId)} marked the work as done. Waiting for you.` });
+    // Final confirmation: the user approves the result or asks for changes.
+    if (setting('finalConfirmation') && conv.routingMode === 'orchestrator') {
+      const requestId = `final-${Date.now()}`;
+      conv.pendingFinal = requestId;
+      publish({ kind: 'finalReview', agent: fromId, requestId, summary: text.replace(DONE_MARKER, '').trim() });
+    }
+    conv.reviewRounds = 0;
     publishState();
     return;
   }
@@ -613,6 +644,68 @@ function onTurnEnd(fromId, ev) {
     relay.hops += 1;
     deliver(to, `[Message from ${agentName(fromId)}]\n${text}`, { from: fromId });
   }
+}
+
+// ---------- role profiles and skills ----------
+
+/**
+ * Skills installed for Claude Code: plugin skills ("plugin:skill", reported by Claude's initialize answer)
+ * and personal skills in ~/.claude/skills. Codex skills cannot be switched per session, so they are not listed.
+ */
+function installedSkills() {
+  const names = new Set();
+  for (const a of Object.values(conv?.agents || {})) {
+    for (const c of a.commands || []) if (c.name.includes(':')) names.add(c.name);
+  }
+  // Plugin skills straight from the installed plugins, so the list is known before any Claude agent starts.
+  try {
+    const installed = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json'), 'utf8'));
+    for (const [key, entries] of Object.entries(installed.plugins || {})) {
+      const plugin = key.split('@')[0];
+      for (const e of [].concat(entries || [])) {
+        const dir = path.join(e.installPath || '', 'skills');
+        if (!e.installPath || !fs.existsSync(dir)) continue;
+        for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (d.isDirectory() && fs.existsSync(path.join(dir, d.name, 'SKILL.md'))) names.add(`${plugin}:${d.name}`);
+        }
+      }
+    }
+  } catch {
+    // no plugins installed
+  }
+  const base = path.join(os.homedir(), '.claude', 'skills');
+  const scan = (dir) => {
+    try {
+      for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!d.isDirectory()) continue;
+        if (fs.existsSync(path.join(dir, d.name, 'SKILL.md'))) names.add(d.name);
+        else if (d.name === 'synced') scan(path.join(dir, d.name));
+      }
+    } catch {
+      // no personal skills
+    }
+  };
+  scan(base);
+  return [...names].sort();
+}
+
+/**
+ * Profile of a role: "full" (the user's whole setup) or "lean" (no hooks), and the skills switched off.
+ * Settings > Roles can override the role file (config.roleOverrides[roleId] = { profile, skillsOff }).
+ * With keepPatterns, the role's patterns are returned too (OpenCode accepts patterns directly).
+ */
+function roleProfile(roleId, keepPatterns = false) {
+  const role = roles[roleId];
+  const o = config.roleOverrides?.[roleId];
+  const profile = o?.profile || role?.profile || 'full';
+  let skillsOff;
+  if (Array.isArray(o?.skillsOff)) skillsOff = o.skillsOff;
+  else {
+    const patterns = role?.skillsOff || [];
+    skillsOff = installedSkills().filter((n) => patterns.some((p) => globMatch(p, n)));
+    if (keepPatterns) skillsOff = [...new Set([...skillsOff, ...patterns])];
+  }
+  return { profile, skillsOff };
 }
 
 // ---------- missing roles ----------
@@ -905,6 +998,37 @@ async function api(action, body) {
       publish({ kind: 'system', text: `Routing: ${ROUTING_MODES[body.mode].label}. ${ROUTING_MODES[body.mode].rule}` });
       publishState();
       return { ok: true };
+    case 'finalReview': {
+      if (conv.pendingFinal !== body.requestId) throw new Error('this confirmation is no longer pending');
+      conv.pendingFinal = null;
+      publish({ kind: 'finalReviewClosed', requestId: body.requestId, action: body.action });
+      if (body.action === 'approve') {
+        publish({ kind: 'system', text: `${setting('userName')} approved the result.` });
+        logError('bridge', 'final result approved by the user');
+      } else {
+        publish({ kind: 'system', text: `${setting('userName')} asked for changes: write what to change in the message box.` });
+      }
+      return { ok: true };
+    }
+    case 'skills':
+      return {
+        installed: installedSkills(),
+        roles: Object.fromEntries(Object.keys(roles).map((id) => [id, { ...roleProfile(id), overridden: Boolean(config.roleOverrides?.[id]) }])),
+      };
+    case 'roleProfile': {
+      if (!roles[body.role]) throw new Error('unknown role');
+      const next = { ...config, roleOverrides: { ...(config.roleOverrides || {}) } };
+      if (body.reset) delete next.roleOverrides[body.role];
+      else next.roleOverrides[body.role] = { profile: body.profile === 'lean' ? 'lean' : 'full', skillsOff: (body.skillsOff || []).map(String) };
+      fs.writeFileSync(configPath, JSON.stringify(next, null, 2) + '\n');
+      config = next;
+      // Apply to the agents that have this role (Claude restarts on the same session when idle).
+      for (const spec of conv.team.filter((a) => a.role === body.role)) {
+        await conv.agents[spec.id]?.reconfigure({ readOnly: roles[body.role].canEdit === 'none', maxTurns: roles[body.role].maxTurns || null, ...roleProfile(body.role) });
+      }
+      publish({ kind: 'system', text: `Profile for ${roles[body.role].name} saved: ${roleProfile(body.role).profile}, ${roleProfile(body.role).skillsOff.length} skill(s) off.` });
+      return { ok: true };
+    }
     case 'resolveRole': {
       if (!conv.pendingRoleRequest || conv.pendingRoleRequest.requestId !== body.requestId) throw new Error('this request is no longer pending');
       const { requestId, roleId } = conv.pendingRoleRequest;

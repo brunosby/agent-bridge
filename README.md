@@ -66,6 +66,10 @@ How the roles behave, based on Anthropic's multi-agent research write-up, Cognit
 - **Coder** keeps the full context and does its own quick lookups; one Coder per area of the code (a second one only with its own worktree).
 - **Researcher**, **Reviewer**, **Tester** and **Architect** are short, focused passes with step limits.
 
+**Checks, review and approval.** The Coder runs the project's own lint, typecheck and tests (from `package.json` scripts, Makefile, CI config...) before handing work back and reports each result. The Reviewer may run the same checks without editing and answers APPROVED or CHANGES REQUESTED. CHANGES REQUESTED goes back to the coder through the orchestrator for up to `maxReviewRounds` rounds (default 2); after that the orchestrator reports the open findings to you. When the orchestrator finishes, a card asks you to **Approve** the result or **Ask for changes** (`finalConfirmation`).
+
+**Profiles and skills.** Each role has a profile: **Full** (Orchestrator, Coder: everything from your setup, including hooks, skills, plugins and CLAUDE.md) or **Lean** (Researcher, Reviewer, Tester, Architect: no hooks, via `--settings '{"disableAllHooks":true}'`; skills stay available because they load only when used). Settings > Roles lists the installed skills with checkboxes to switch some off per role; planning skills (`*:long-task`, `*:completion-criteria`, ...) are off by default for lean roles. Skills are switched off with `Skill(name)` rules for Claude agents and `skill` deny rules for OpenCode sessions; Codex only has a global switch in `config.toml`, so it is not per role.
+
 The names follow common multi-agent setups (Anthropic's orchestrator-workers, Magentic-One, CrewAI, MetaGPT, Aider's architect/editor). "Edits files: No" is enforced: Claude runs without its edit tools, Codex in a read-only sandbox, OpenCode with its `plan` agent.
 
 ## Routing

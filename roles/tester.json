@@ -17,5 +17,14 @@
   "fallback": [
     "coder"
   ],
-  "maxTurns": 40
+  "maxTurns": 40,
+  "profile": "lean",
+  "skillsOff": [
+    "*:long-task",
+    "*:completion-criteria",
+    "*:loop-design",
+    "*:create-skill",
+    "*:claude-md",
+    "*:handoff"
+  ]
 }

@@ -4,7 +4,9 @@ import path from 'node:path';
 /**
  * Role catalog: one JSON file per role in <app>/roles. Add a role by copying a file and changing it.
  * Fields: id, name, summary, canEdit ("all" | "none" | "tests"), recommended { label, patterns[] }, instructions,
- * fallback[] (roles to use when this one is missing), maxTurns (step limit, Claude agents), context ("diff": receives git diff + request).
+ * fallback[] (roles to use when this one is missing), maxTurns (step limit, Claude agents),
+ * context ("diff": receives git diff + request), profile ("full" | "lean": lean runs without hooks),
+ * skillsOff[] (skill name patterns switched off for the role, e.g. "*:long-task").
  */
 export function loadRoles(dir) {
   const roles = {};
@@ -23,12 +25,23 @@ export function loadRoles(dir) {
         fallback: Array.isArray(r.fallback) ? r.fallback : [],
         maxTurns: Number(r.maxTurns) > 0 ? Number(r.maxTurns) : null,
         context: r.context === 'diff' ? 'diff' : null,
+        profile: r.profile === 'lean' ? 'lean' : 'full',
+        skillsOff: Array.isArray(r.skillsOff) ? r.skillsOff : [],
       };
     } catch {
       // a broken role file is skipped; the rest of the catalog still loads
     }
   }
   return roles;
+}
+
+/** Glob match for skill names: * matches anything (e.g. "*:long-task"). */
+export function globMatch(pattern, name) {
+  const escaped = String(pattern)
+    .split('*')
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, (c) => `\\${c}`))
+    .join('.*');
+  return new RegExp(`^${escaped}$`, 'i').test(String(name));
 }
 
 /** True when a model id or label matches one of the role's recommended patterns. */

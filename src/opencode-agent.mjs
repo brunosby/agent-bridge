@@ -18,7 +18,7 @@ import { clip } from './claude-agent.mjs';
  * Any failure of this contract (server not starting, unknown endpoints) marks the agent unavailable.
  */
 export class OpenCodeAgent extends EventEmitter {
-  constructor({ id = 'opencode', name = 'OpenCode', cwd, config, instructions, readOnly = false, tokens = 0, cachedTokens = 0 }) {
+  constructor({ id = 'opencode', name = 'OpenCode', cwd, config, instructions, readOnly = false, tokens = 0, cachedTokens = 0, skillsOff = [] }) {
     super();
     this.id = id;
     this.name = name;
@@ -29,6 +29,7 @@ export class OpenCodeAgent extends EventEmitter {
     this.readOnly = readOnly;
     this.tokens = tokens;
     this.cachedTokens = cachedTokens;
+    this.skillsOff = skillsOff;
     this.sessionId = this.config.resumeSessionId || null;
     this.available = true;
     this.unavailableReason = null;
@@ -86,8 +87,9 @@ export class OpenCodeAgent extends EventEmitter {
     this.instructions = text;
   }
 
-  async reconfigure({ readOnly }) {
+  async reconfigure({ readOnly, skillsOff }) {
     this.readOnly = Boolean(readOnly);
+    if (skillsOff) this.skillsOff = skillsOff; // applies to the next OpenCode session
   }
 
   // ---------- server ----------
@@ -159,6 +161,8 @@ export class OpenCodeAgent extends EventEmitter {
     if (!this.sessionId) {
       // Ask before shell commands, edits and web fetches so requests reach the approval panel (and bypass rules).
       const ask = (this.config.askFor || ['bash', 'edit', 'webfetch']).map((permission) => ({ permission, pattern: '*', action: 'ask' }));
+      // Skills switched off for the role are denied for this session.
+      for (const s of this.skillsOff || []) ask.push({ permission: 'skill', pattern: s, action: 'deny' });
       const s = await this.http('POST', '/session', { title: `Agent Bridge · ${this.name}`, permission: ask });
       if (!s?.id) throw new Error('POST /session returned no id (API changed?)');
       this.sessionId = s.id;

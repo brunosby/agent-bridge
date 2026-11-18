@@ -18,5 +18,14 @@
     "architect",
     "orchestrator"
   ],
-  "maxTurns": 25
+  "maxTurns": 25,
+  "profile": "lean",
+  "skillsOff": [
+    "*:long-task",
+    "*:completion-criteria",
+    "*:loop-design",
+    "*:create-skill",
+    "*:claude-md",
+    "*:handoff"
+  ]
 }

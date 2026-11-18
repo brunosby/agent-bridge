@@ -137,14 +137,15 @@ export function loadConversation(logsDir, id) {
   const openApprovals = new Set();
   const openTurn = {};
   for (const e of events) {
-    if (e.kind === 'approval' || e.kind === 'needRole') openApprovals.add(e.requestId);
-    if (e.kind === 'needRoleClosed') openApprovals.delete(e.requestId);
+    if (e.kind === 'approval' || e.kind === 'needRole' || e.kind === 'finalReview') openApprovals.add(e.requestId);
+    if (e.kind === 'needRoleClosed' || e.kind === 'finalReviewClosed') openApprovals.delete(e.requestId);
     if (e.kind === 'approvalClosed') openApprovals.delete(e.requestId);
     if (['delta', 'text', 'tool'].includes(e.kind) && e.agent) openTurn[e.agent] = true;
     if (e.kind === 'turnEnd') openTurn[e.agent] = false;
   }
   for (const requestId of openApprovals) {
-    const kind = String(requestId).startsWith('role-') ? 'needRoleClosed' : 'approvalClosed';
+    const id = String(requestId);
+    const kind = id.startsWith('role-') ? 'needRoleClosed' : id.startsWith('final-') ? 'finalReviewClosed' : 'approvalClosed';
     events.push({ seq: ++lastSeq, at: lastAt, kind, requestId, decision: 'cancelled', action: 'cancelled' });
   }
   for (const [agent, open] of Object.entries(openTurn)) {
