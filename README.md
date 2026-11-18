@@ -6,7 +6,7 @@ You talk to an orchestrator; it hands tasks to the other agents by role (coder, 
 
 ## Quick start
 
-1. **Requirements:** Windows, [Node.js](https://nodejs.org) 20+, and the CLI of at least one provider: [Claude Code](https://code.claude.com/docs/en/setup), [Codex](https://developers.openai.com/codex/cli) or [OpenCode](https://opencode.ai/docs/). No `npm install` needed.
+1. **Requirements:** Windows, [Node.js](https://nodejs.org) 22.18+, and the CLI of at least one provider: [Claude Code](https://code.claude.com/docs/en/setup), [Codex](https://developers.openai.com/codex/cli) or [OpenCode](https://opencode.ai/docs/). No `npm install` needed to use it.
 2. **Open:** double-click `Agent Bridge.vbs` and choose the project folder. The page opens in your browser; there is no console window.
 3. **Check your accounts:** **Settings > Accounts** shows, per provider, whether the CLI is installed and signed in, with the next step (install command or a **Sign in** button that opens the CLI's own login).
 4. **Write your request** in the box at the bottom and press `Ctrl+Enter`.
@@ -96,20 +96,34 @@ Launcher options (`wscript "Agent Bridge.vbs" ...` or `agent-bridge.cmd ...`, wh
 
 ## How it works
 
-A Node.js server (`src/server.mjs`) starts one process per agent and talks to it through the provider's official interface:
+A local Node.js server starts one process per agent and talks to it through the provider's official interface:
 
 - Claude Code headless with streaming JSON in and out, with permission prompts routed to the page (`--permission-prompt-tool stdio`);
 - the Codex app-server JSON-RPC protocol;
 - the OpenCode HTTP server and its event stream.
 
-The page (`public/`) receives everything live over Server-Sent Events. If a provider's interface changes, that agent is shown as unavailable instead of breaking the app.
+The page receives everything live over Server-Sent Events. If a provider's interface changes, that agent is shown as unavailable instead of breaking the app.
+
+The code is strict TypeScript run directly by Node (no build step), in layers: `src/core` (pure logic and types), `src/providers` (one adapter per provider), `src/server` (team, routing, HTTP), `src/config` and `src/cli`. The page in `public/` uses ES modules and layered CSS. See [docs/architecture.md](docs/architecture.md).
 
 ```
-Agent Bridge.vbs      launcher (no console)      src/claude-agent.mjs    Claude Code driver
-agent-bridge.cmd      launcher (console)         src/codex-agent.mjs     Codex driver
-config.json           settings                   src/opencode-agent.mjs  OpenCode driver
-roles/                role catalog               src/accounts.mjs        account status and sign-in
-public/               web page                   src/safety.mjs          bypass rules
-logs/                 conversations and logs     src/history.mjs         saved conversations
-src/server.mjs        server, team, routing      src/worktree.mjs        git worktree per agent
+Agent Bridge.vbs     launcher (no console)          src/core/        roles, prompts, safety, history, types
+agent-bridge.cmd     launcher (console)             src/providers/   Claude Code, Codex, OpenCode, fake (tests)
+bin/agent-bridge.mjs entry point                    src/server/      team, conversation, routing, HTTP, API
+config.json          default settings               src/config/      options and settings
+roles/               role catalog                   src/cli/         start, restart, quit
+public/              web page (js/, css/)           test/            end-to-end and unit tests
+logs/                conversations (not in git)     docs/            architecture
 ```
+
+## Development
+
+```bash
+npm install
+```
+
+```bash
+npm run check
+```
+
+`npm install` only adds the development tools (lint, format, type check); the app itself has no dependencies. `npm run check` runs lint, type check and tests. The tests use a scripted `fake` provider, so they need no CLI, account or tokens. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
