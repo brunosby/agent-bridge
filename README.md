@@ -10,7 +10,9 @@ No dependencies: Node.js 20+ and the CLIs of the providers you use. The page lis
 
 ## Start
 
-Double-click `agent-bridge.cmd` and type the project folder, or run:
+**Without a console window (recommended):** double-click `Agent Bridge.vbs`, choose the project folder in the Windows folder picker, and the page opens. Server output goes to `logs\server.log`; if the app cannot start, a message box says why. Use **Restart** and **Quit** at the top of the page to restart or close it (Restart resumes the open conversation). Arguments work too, e.g. `wscript "Agent Bridge.vbs" --resume`.
+
+**With a console window:** double-click `agent-bridge.cmd` and type the project folder, or run:
 
 ```bat
 agent-bridge.cmd --cwd C:\path\to\project
@@ -26,7 +28,7 @@ agent-bridge.cmd --cwd C:\path\to\project
 | `--logs <dir>` | Keep conversations in another folder (useful for tests). |
 | `--main claude\|codex` | Old option: which agent is the orchestrator when no default team is saved. |
 
-Stop with `Ctrl+C` in the console window; all agent processes are closed. If the page says the app "was updated after this window started", close the console and start it again.
+Quit (or `Ctrl+C` in the console) closes all agent processes. If the page says the app "was updated after it started", press **Restart**.
 
 First time? Open **Settings > Accounts** to see which CLIs are installed and signed in.
 
@@ -117,7 +119,8 @@ Each conversation is saved in `logs/<timestamp>/`:
 ## Files
 
 ```
-agent-bridge.cmd        launcher
+Agent Bridge.vbs        launcher without a console window
+agent-bridge.cmd        launcher with a console window
 config.json             settings
 roles/                  role catalog
 src/server.mjs          HTTP + SSE server, team, routing, settings

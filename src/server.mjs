@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ClaudeAgent } from './claude-agent.mjs';
 import { CodexAgent } from './codex-agent.mjs';
@@ -829,11 +829,19 @@ async function api(action, body) {
       removeConversation(LOGS_DIR, id);
       return { ok: true };
     }
+    case 'restart':
+      publish({ kind: 'system', text: 'Restarting Agent Bridge... the page reloads by itself.' });
+      setTimeout(() => restartServer().catch((err) => logError('bridge', `restart failed: ${err.stack || err}`)), 100);
+      return { ok: true };
+    case 'quit':
+      publish({ kind: 'system', text: 'Agent Bridge is closing. Start it again from Agent Bridge.vbs (or agent-bridge.cmd).' });
+      setTimeout(() => shutdown(), 100);
+      return { ok: true };
     case 'new':
       await newConversation(body.workDir);
       return { ok: true };
     default:
-      throw new Error(`unknown action ${action}${codeChanged() ? '. The app was updated after it started: close the console window and run agent-bridge.cmd again.' : ''}`);
+      throw new Error(`unknown action ${action}${codeChanged() ? '. The app was updated after it started: press Restart at the top of the page.' : ''}`);
   }
 }
 
@@ -846,7 +854,7 @@ function serveStatic(pathname, res) {
     content = Buffer.from(content.toString('utf8').replace('__BRIDGE_TOKEN__', token));
     if (codeChanged() && !warnedOutdated) {
       warnedOutdated = true;
-      publish({ kind: 'error', text: 'Agent Bridge was updated after this window started, so new buttons may not work. Close the console window and run agent-bridge.cmd again.' });
+      publish({ kind: 'error', text: 'Agent Bridge was updated after it started, so new buttons may not work. Press Restart at the top of the page.' });
     }
   }
   send(res, 200, content, MIME[path.extname(file)] || 'application/octet-stream');
@@ -887,7 +895,8 @@ let restoreId = null;
 if (argv.resume) {
   const list = listConversations(LOGS_DIR);
   restoreId = argv.resume === true ? list[0]?.id : String(argv.resume);
-  if (!restoreId || !list.some((c) => c.id === restoreId)) fail(argv.resume === true ? 'no earlier conversation to resume' : `conversation ${argv.resume} not found in ${LOGS_DIR}`);
+  const exists = restoreId && (list.some((c) => c.id === restoreId) || fs.existsSync(path.join(LOGS_DIR, restoreId, 'transcript.jsonl')));
+  if (!exists) fail(argv.resume === true ? 'no earlier conversation to resume' : `conversation ${argv.resume} not found in ${LOGS_DIR}`);
 }
 
 try {
@@ -905,13 +914,23 @@ process.on('unhandledRejection', (err) => {
   logError('bridge', `unhandled rejection: ${err?.stack || err}`);
 });
 
+// After a restart the old process may still hold the port for a moment: retry for a few seconds.
+let listenTries = 0;
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE' && argv['wait-port'] && listenTries++ < 40) {
+    setTimeout(() => server.listen(port, '127.0.0.1'), 250);
+    return;
+  }
+  fail(err.code === 'EADDRINUSE' ? `Port ${port} is already in use. Is Agent Bridge already running?` : err.message);
+});
+
 server.listen(port, '127.0.0.1', () => {
   const address = `http://127.0.0.1:${server.address().port}/`;
   console.log(`Agent Bridge running at ${address}`);
   console.log(`Working directory: ${conv.workDir}`);
   console.log(`Team: ${conv.team.map((a) => `${a.name} (${a.driver}, ${a.role})`).join(', ')}`);
   console.log(`Transcript: ${path.join(conv.runDir, 'transcript.jsonl')}`);
-  console.log('Press Ctrl+C to stop.');
+  console.log('Stop or restart from the buttons at the top of the page (or Ctrl+C here).');
   if (!restoreId) publish({ kind: 'system', text: `Session started in ${conv.workDir}. Team: ${conv.team.map((a) => `${a.name} (${roles[a.role]?.name})`).join(', ')}. Routing: ${ROUTING_MODES[conv.routingMode].label}.` });
   startAgents();
   publishState();
@@ -920,8 +939,31 @@ server.listen(port, '127.0.0.1', () => {
 
 async function shutdown() {
   console.log('\nShutting down agents...');
+  // Stop accepting requests first, so the page sees the app as closed right away.
+  server.close();
+  for (const res of clients) res.end();
   await closeConversation();
   process.exit(0);
+}
+
+/**
+ * Restart from the page: start a new server process on the same port that resumes this conversation,
+ * then exit. Used instead of closing the console window (which does not exist with the hidden launcher).
+ */
+async function restartServer() {
+  const keep = [];
+  const skip = new Set(['resume', 'port', 'cwd', 'no-open', 'main']);
+  for (const [k, v] of Object.entries(argv)) if (!skip.has(k)) keep.push(`--${k}`, ...(v === true ? [] : [String(v)]));
+  const childArgs = [path.join(APP_DIR, 'src', 'server.mjs'), ...keep, '--resume', conv.id, '--port', String(server.address().port), '--no-open', '--wait-port'];
+  await closeConversation();
+  await new Promise((r) => server.close(() => r()));
+  for (const res of clients) res.end();
+  const logFile = path.join(LOGS_DIR, 'server.log');
+  fs.mkdirSync(LOGS_DIR, { recursive: true });
+  const out = fs.openSync(logFile, 'a');
+  const child = spawn(process.execPath, childArgs, { cwd: process.cwd(), detached: true, windowsHide: true, stdio: ['ignore', out, out] });
+  child.unref();
+  setTimeout(() => process.exit(0), 200);
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
@@ -950,5 +992,14 @@ function parseArgs(list) {
 
 function fail(msg) {
   console.error(`agent-bridge: ${msg}`);
+  // Started by the hidden launcher: nobody sees the console, so show the error in a message box.
+  if (argv.hidden && process.platform === 'win32') {
+    const text = `Agent Bridge could not start:\n\n${msg}`.replace(/'/g, "''");
+    try {
+      spawnSync('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', `Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('${text}', 'Agent Bridge') | Out-Null`], { windowsHide: true, timeout: 600000 });
+    } catch {
+      // nothing else to do
+    }
+  }
   process.exit(1);
 }

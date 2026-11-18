@@ -755,6 +755,39 @@ $('pause').onclick = () => api('relay', { pause: true });
 $('stopAll').onclick = () => api('interrupt', {});
 for (const b of document.querySelectorAll('[data-close]')) b.onclick = () => closeDialog(b.dataset.close);
 
+// ---------- restart / quit (there is no console window to close) ----------
+function busyConfirm(what) {
+  return !(state && state.team.some((a) => a.busy)) || confirm(`An agent is still working. ${what} anyway?`);
+}
+
+$('restartApp').onclick = async () => {
+  if (!busyConfirm('Restart')) return;
+  try {
+    await api('restart');
+  } catch (e) {
+    return addSys(`Restart failed: ${e.message}`, true);
+  }
+  addSys('Restarting... this page reloads when Agent Bridge is back.');
+  // The new process uses the same address with a new access token, so the page has to reload.
+  await new Promise((r) => setTimeout(r, 1500));
+  for (let i = 0; i < 60; i++) {
+    try {
+      const res = await fetch('/', { cache: 'no-store' });
+      if (res.ok) return location.reload();
+    } catch {
+      // still restarting
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  addSys('Agent Bridge did not come back. Check logs\\server.log and start it again.', true);
+};
+
+$('quitApp').onclick = async () => {
+  if (!busyConfirm('Quit') || !confirm('Close Agent Bridge and all agents?')) return;
+  await api('quit').catch(() => {});
+  document.body.innerHTML = '<div class="closed-page"><h2>Agent Bridge is closed</h2><p>Start it again with <code>Agent Bridge.vbs</code>. Conversations can be restored from the Conversations button.</p></div>';
+};
+
 async function loadCatalog() {
   catalog = await api('catalog');
   const r = $('routing');
