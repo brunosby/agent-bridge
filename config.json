@@ -1,0 +1,36 @@
+{
+  "mainAgent": "claude",
+  "userName": null,
+  "port": 0,
+  "openBrowser": true,
+  "autoRelay": true,
+  "maxHops": 8,
+  "approvalTimeoutSec": 120,
+  "claude": {
+    "command": "claude",
+    "model": null,
+    "permissionMode": "acceptEdits",
+    "allowedTools": [],
+    "extraArgs": [],
+    "instructions": null,
+    "permissionPrompts": true
+  },
+  "codex": {
+    "command": "codex",
+    "model": null,
+    "approvalPolicy": "on-request",
+    "sandbox": "workspace-write",
+    "extraArgs": [],
+    "instructions": null
+  },
+  "routingMode": "orchestrator",
+  "tokenLimit": 0,
+  "bypassNewAgents": false,
+  "warnOnExtraAgents": true,
+  "opencode": {
+    "command": "opencode",
+    "model": null,
+    "extraArgs": [],
+    "instructions": null
+  }
+}

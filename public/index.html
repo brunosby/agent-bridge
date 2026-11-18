@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="bridge-token" content="__BRIDGE_TOKEN__" />
+  <title>Agent Bridge</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div class="brand">Agent Bridge</div>
+      <button id="openConversations" title="Restore an earlier conversation or start a new one">Conversations</button>
+      <button id="openSettings" title="General settings, accounts and roles">Settings</button>
+      <div class="controls">
+        <label title="How replies move between agents">
+          Routing <select id="routing"></select>
+        </label>
+        <label title="Forward replies between agents automatically">
+          <input type="checkbox" id="auto" /> Auto-relay
+        </label>
+        <label title="Maximum agent-to-agent hand-offs before the relay pauses">
+          Max hops <input type="number" id="maxHops" min="0" max="500" />
+        </label>
+        <span id="tokens" class="pill" title="Tokens used by all agents in this conversation"></span>
+        <span id="relayState" class="pill"></span>
+        <button id="resume" title="Reset the hop counter and resume the relay">Resume</button>
+        <button id="pause">Pause</button>
+        <button id="stopAll" class="danger" title="Interrupt every agent and pause the relay">Stop all</button>
+      </div>
+    </div>
+    <div id="agents"></div>
+  </header>
+
+  <main id="log" aria-live="polite"></main>
+
+  <section id="pending" aria-live="assertive" hidden></section>
+
+  <footer>
+    <select id="target" title="Who receives your message"></select>
+    <textarea id="input" rows="3" placeholder="Message the agents... Use @Name to address one. (Ctrl+Enter to send)"></textarea>
+    <button id="send" class="primary">Send</button>
+  </footer>
+
+  <dialog id="convDialog">
+    <div class="dialog-head">
+      <strong>Conversations</strong>
+      <button class="close" data-close="convDialog" aria-label="Close">✕</button>
+    </div>
+    <div class="new-conv">
+      <input id="newWorkDir" placeholder="Project folder for a new conversation" />
+      <button id="newConversation" class="primary">New conversation</button>
+    </div>
+    <p class="hint">Restoring shows the old messages again and brings back the whole team (agents, roles, models) with their sessions. A new conversation uses the default team from Settings.</p>
+    <div id="convList" class="list"></div>
+  </dialog>
+
+  <dialog id="addDialog">
+    <div class="dialog-head">
+      <strong>Add agent</strong>
+      <button class="close" data-close="addDialog" aria-label="Close">✕</button>
+    </div>
+    <div class="form">
+      <label>Provider <select id="addDriver"></select></label>
+      <label>Role <select id="addRole"></select></label>
+      <div id="addRoleHint" class="hint"></div>
+      <label>Name <input id="addName" placeholder="Used in @mentions, e.g. Codex-Coder" /></label>
+      <label class="check"><input type="checkbox" id="addBypass" /> Bypass (approve automatically, except destructive actions)</label>
+      <label class="check"><input type="checkbox" id="addWorktree" /> Own git worktree (separate branch, so coders do not edit the same files)</label>
+      <div id="addWarning" class="warning-box" hidden></div>
+      <div class="actions"><button id="addConfirm" class="primary">Add agent</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="settingsDialog">
+    <div class="dialog-head">
+      <strong>Settings</strong>
+      <div class="tabs">
+        <button data-tab="general" class="tab active">General</button>
+        <button data-tab="accounts" class="tab">Accounts</button>
+        <button data-tab="roles" class="tab">Roles</button>
+      </div>
+      <button class="close" data-close="settingsDialog" aria-label="Close">✕</button>
+    </div>
+    <div id="tab-general" class="tabpane">
+      <div id="settingsForm" class="form"></div>
+      <label class="check"><input type="checkbox" id="saveTeam" /> Save the current team as the default for new conversations</label>
+      <div class="actions"><span id="settingsMsg" class="hint"></span><button id="saveSettings" class="primary">Save</button></div>
+    </div>
+    <div id="tab-accounts" class="tabpane" hidden>
+      <p class="hint">Status of each provider's CLI on this computer. Signing in always happens in the provider's own CLI; Agent Bridge never sees or stores credentials.</p>
+      <div id="accountList" class="list"></div>
+      <div class="actions"><button id="refreshAccounts">Check again</button></div>
+    </div>
+    <div id="tab-roles" class="tabpane" hidden>
+      <p class="hint">Roles live in the <code>roles</code> folder, one JSON file each. Copy a file to create a new role; it appears after saving settings or restarting.</p>
+      <div id="roleList" class="list"></div>
+    </div>
+  </dialog>
+
+  <script src="/app.js"></script>
+</body>
+</html>

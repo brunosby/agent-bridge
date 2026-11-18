@@ -1,0 +1,11 @@
+{
+  "name": "agent-bridge",
+  "version": "0.1.0",
+  "description": "Live two-agent conversation between Claude Code (headless) and Codex (app-server), with a local web UI.",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.mjs"
+  }
+}
