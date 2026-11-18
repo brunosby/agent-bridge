@@ -51,7 +51,10 @@ export function buildInstructions({ name, role, routingMode, workDir, userName, 
 /** Short roster sent to an agent when the team changes. */
 export function rosterText(team, selfId, routingMode) {
   const edits = { all: 'edits files', tests: 'edits tests only', none: 'read-only' };
-  const lines = team.map((a) => `- @${a.name}: ${a.roleName} (${edits[a.canEdit] || 'edits files'})${a.model ? `, model ${a.model}` : ''}${a.id === selfId ? ' (you)' : ''}`);
+  const lines = team.map(
+    (a) =>
+      `- @${a.name}: ${a.roleName} (${edits[a.canEdit] || 'edits files'})${a.model ? `, model ${a.model}` : ''}${a.id === selfId ? ' (you)' : ''}`,
+  );
   const mode = ROUTING_MODES[routingMode] || ROUTING_MODES.orchestrator;
   const noEditor = !team.some((a) => a.canEdit === 'all');
   const note = noEditor

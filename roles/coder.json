@@ -5,18 +5,9 @@
   "canEdit": "all",
   "recommended": {
     "label": "GPT-6.2-Sol, Sonnet 5.5, DeepSeek",
-    "patterns": [
-      "gpt-6",
-      "gpt-5\\.6",
-      "sonnet",
-      "deepseek",
-      "opus"
-    ]
+    "patterns": ["gpt-6", "gpt-5\\.6", "sonnet", "deepseek", "opus"]
   },
   "instructions": "You are the CODER (developer). Implement the task you were given, following the existing style of the project.\n- Change only the files your task needs. Say which files you are taking before you edit them.\n- Before you hand the work back, run the project's own checks that apply to what you changed: lint, typecheck and tests (look at package.json scripts, Makefile, pyproject, CI config, or the README to find them). Fix what fails. If a check does not exist or cannot run, say so.\n- Your reply goes back to whoever gave you the task: list the files changed, each check you ran with its result (pass/fail), and anything left open.\n- When you receive review findings, fix them and reply with what you changed for each finding.",
-  "fallback": [
-    "tester",
-    "architect"
-  ],
+  "fallback": ["tester", "architect"],
   "profile": "full"
 }

@@ -1,11 +1,27 @@
 {
   "name": "agent-bridge",
   "version": "0.1.0",
-  "description": "Live two-agent conversation between Claude Code (headless) and Codex (app-server), with a local web UI.",
+  "description": "A team of AI coding agents from different providers (Claude Code, Codex, OpenCode) working on one task, in a live local web page.",
   "type": "module",
   "private": true,
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
-    "start": "node src/server.mjs"
+    "start": "node src/server.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "npm run lint && npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^26.6.6",
+    "eslint": "^9.39.5",
+    "globals": "^17.14.0",
+    "prettier": "^3.10.1",
+    "typescript": "^7.0.2"
   }
 }

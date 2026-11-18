@@ -32,10 +32,6 @@
     "extraArgs": [],
     "instructions": null,
     "freeOnly": true,
-    "askFor": [
-      "bash",
-      "edit",
-      "webfetch"
-    ]
+    "askFor": ["bash", "edit", "webfetch"]
   }
 }

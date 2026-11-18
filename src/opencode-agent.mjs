@@ -18,7 +18,17 @@ import { clip } from './claude-agent.mjs';
  * Any failure of this contract (server not starting, unknown endpoints) marks the agent unavailable.
  */
 export class OpenCodeAgent extends EventEmitter {
-  constructor({ id = 'opencode', name = 'OpenCode', cwd, config, instructions, readOnly = false, tokens = 0, cachedTokens = 0, skillsOff = [] }) {
+  constructor({
+    id = 'opencode',
+    name = 'OpenCode',
+    cwd,
+    config,
+    instructions,
+    readOnly = false,
+    tokens = 0,
+    cachedTokens = 0,
+    skillsOff = [],
+  }) {
     super();
     this.id = id;
     this.name = name;
@@ -50,9 +60,15 @@ export class OpenCodeAgent extends EventEmitter {
     if (OpenCodeAgent._probe && Date.now() - OpenCodeAgent._probe.at < 60000) return OpenCodeAgent._probe.result;
     const command = cfg.command || 'opencode';
     const isWin = process.platform === 'win32';
-    const r = spawnSync(isWin ? 'cmd.exe' : command, isWin ? ['/d', '/s', '/c', command, '--version'] : ['--version'], { timeout: 8000, windowsHide: true, encoding: 'utf8' });
+    const r = spawnSync(isWin ? 'cmd.exe' : command, isWin ? ['/d', '/s', '/c', command, '--version'] : ['--version'], {
+      timeout: 8000,
+      windowsHide: true,
+      encoding: 'utf8',
+    });
     const ok = r.status === 0 && /\d+\.\d+/.test(r.stdout || '');
-    const result = ok ? { available: true, version: r.stdout.trim() } : { available: false, reason: 'OpenCode is not installed or does not run. See Settings > Accounts.' };
+    const result = ok
+      ? { available: true, version: r.stdout.trim() }
+      : { available: false, reason: 'OpenCode is not installed or does not run. See Settings > Accounts.' };
     OpenCodeAgent._probe = { at: Date.now(), result };
     return result;
   }
@@ -247,7 +263,11 @@ export class OpenCodeAgent extends EventEmitter {
         while ((i = buf.indexOf('\n\n')) >= 0) {
           const chunk = buf.slice(0, i);
           buf = buf.slice(i + 2);
-          const data = chunk.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('');
+          const data = chunk
+            .split('\n')
+            .filter((l) => l.startsWith('data:'))
+            .map((l) => l.slice(5).trim())
+            .join('');
           if (!data) continue;
           try {
             this.onEvent(JSON.parse(data));
@@ -280,10 +300,18 @@ export class OpenCodeAgent extends EventEmitter {
         // The first update ("pending") has no input yet; announce the tool once its input is known.
         if (!this.toolsSeen.has(part.id) && st.status !== 'pending') {
           this.toolsSeen.add(part.id);
-          this.emitEvent('tool', { key: part.id, title: part.tool || 'tool', detail: clip(st.input?.command || st.input?.filePath || st.title || JSON.stringify(st.input || {}), 300) });
+          this.emitEvent('tool', {
+            key: part.id,
+            title: part.tool || 'tool',
+            detail: clip(st.input?.command || st.input?.filePath || st.title || JSON.stringify(st.input || {}), 300),
+          });
         }
         if (st.status === 'completed' || st.status === 'error') {
-          this.emitEvent('toolResult', { key: part.id, ok: st.status === 'completed', detail: st.status === 'error' ? clip(st.error || '', 300) : undefined });
+          this.emitEvent('toolResult', {
+            key: part.id,
+            ok: st.status === 'completed',
+            detail: st.status === 'error' ? clip(st.error || '', 300) : undefined,
+          });
         }
       }
     } else if (type === 'message.updated' && p.info?.role === 'assistant') {
@@ -301,7 +329,12 @@ export class OpenCodeAgent extends EventEmitter {
         requestId: key,
         title: `OpenCode wants to use ${what}`,
         matchText: what === 'bash' ? command || patterns : `${what} ${file || patterns}`,
-        detail: [command && `$ ${command}`, file, !command && !file ? patterns : null, p.always?.length ? `"Allow for session" covers: ${p.always.join(', ')}` : null]
+        detail: [
+          command && `$ ${command}`,
+          file,
+          !command && !file ? patterns : null,
+          p.always?.length ? `"Allow for session" covers: ${p.always.join(', ')}` : null,
+        ]
           .filter(Boolean)
           .join('\n'),
         decisions: ['accept', 'acceptForSession', 'decline'],
@@ -313,8 +346,10 @@ export class OpenCodeAgent extends EventEmitter {
     } else if (type === 'session.error') {
       const msg = p.error?.data?.message || p.error?.message || p.error?.name || 'unknown error';
       this.emitEvent('error', { text: `OpenCode error: ${msg}` });
-      if (/auth|api key|unauthori[sz]ed|credit|billing|payment/i.test(msg)) this.emitEvent('account', { state: 'no_access', detail: clip(msg, 200) });
-      else if (/rate limit|quota|too many requests/i.test(msg)) this.emitEvent('account', { state: 'rate_limited', detail: clip(msg, 200) });
+      if (/auth|api key|unauthori[sz]ed|credit|billing|payment/i.test(msg))
+        this.emitEvent('account', { state: 'no_access', detail: clip(msg, 200) });
+      else if (/rate limit|quota|too many requests/i.test(msg))
+        this.emitEvent('account', { state: 'rate_limited', detail: clip(msg, 200) });
     }
   }
 
@@ -323,9 +358,9 @@ export class OpenCodeAgent extends EventEmitter {
     if (!a) return false;
     this.approvals.delete(requestId);
     const response = decision === 'accept' ? 'once' : decision === 'acceptForSession' ? 'always' : 'reject';
-    this.http('POST', `/session/${encodeURIComponent(this.sessionId)}/permissions/${encodeURIComponent(a.permissionId)}`, { response }).catch((err) =>
-      this.emitEvent('error', { text: `Could not answer the OpenCode permission request: ${err.message}` }),
-    );
+    this.http('POST', `/session/${encodeURIComponent(this.sessionId)}/permissions/${encodeURIComponent(a.permissionId)}`, {
+      response,
+    }).catch((err) => this.emitEvent('error', { text: `Could not answer the OpenCode permission request: ${err.message}` }));
     this.emitEvent('status', { busy: this.busy });
     return true;
   }
@@ -364,8 +399,13 @@ export class OpenCodeAgent extends EventEmitter {
       const res = await this.http('POST', `/session/${encodeURIComponent(this.sessionId)}/message`, body);
       const info = res?.info || {};
       const parts = res?.parts || [];
-      const answer = parts.filter((x) => x.type === 'text').map((x) => x.text || '').join('\n').trim();
-      for (const x of parts.filter((x) => x.type === 'text')) this.emitEvent('text', { key: x.id || `${info.id}-text`, text: x.text || '', final: true });
+      const answer = parts
+        .filter((x) => x.type === 'text')
+        .map((x) => x.text || '')
+        .join('\n')
+        .trim();
+      for (const x of parts.filter((x) => x.type === 'text'))
+        this.emitEvent('text', { key: x.id || `${info.id}-text`, text: x.text || '', final: true });
       const t = info.tokens || {};
       const used = (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (t.cache?.write || 0);
       this.cachedTokens += t.cache?.read || 0;

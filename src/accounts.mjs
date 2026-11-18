@@ -9,18 +9,33 @@ import { execFile } from 'node:child_process';
 export const PROVIDERS = {
   claude: {
     label: 'Claude Code',
-    install: { text: 'Install Claude Code (official installer for Windows PowerShell):', command: 'irm https://claude.ai/install.ps1 | iex', docs: 'https://code.claude.com/docs/en/setup' },
+    install: {
+      text: 'Install Claude Code (official installer for Windows PowerShell):',
+      command: 'irm https://claude.ai/install.ps1 | iex',
+      docs: 'https://code.claude.com/docs/en/setup',
+    },
     login: { text: 'Sign in with your Claude account or an API key:', command: 'claude auth login' },
   },
   codex: {
     label: 'Codex',
-    install: { text: 'Install the Codex CLI with npm:', command: 'npm install -g @openai/codex', docs: 'https://developers.openai.com/codex/cli' },
+    install: {
+      text: 'Install the Codex CLI with npm:',
+      command: 'npm install -g @openai/codex',
+      docs: 'https://developers.openai.com/codex/cli',
+    },
     login: { text: 'Sign in with ChatGPT or an API key:', command: 'codex login' },
   },
   opencode: {
     label: 'OpenCode',
-    install: { text: 'Install OpenCode with npm (it needs its install script):', command: 'npm install -g --allow-scripts=opencode-ai opencode-ai', docs: 'https://opencode.ai/docs/' },
-    login: { text: 'Connect a provider (OpenCode Zen, OpenRouter, DeepSeek, ...) with a login or an API key:', command: 'opencode auth login' },
+    install: {
+      text: 'Install OpenCode with npm (it needs its install script):',
+      command: 'npm install -g --allow-scripts=opencode-ai opencode-ai',
+      docs: 'https://opencode.ai/docs/',
+    },
+    login: {
+      text: 'Connect a provider (OpenCode Zen, OpenRouter, DeepSeek, ...) with a login or an API key:',
+      command: 'opencode auth login',
+    },
   },
 };
 
@@ -31,7 +46,13 @@ function run(command, args, timeoutMs = 15000) {
   const fullArgs = isWin ? ['/d', '/s', '/c', command, ...args] : args;
   return new Promise((resolve) => {
     execFile(file, fullArgs, { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
-      resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: `${stdout || ''}${stderr || ''}`.trim(), notFound: Boolean(err && (err.code === 'ENOENT' || /not recognized|não é reconhecido|command not found/i.test(`${stderr}${stdout}`))) });
+      resolve({
+        code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
+        out: `${stdout || ''}${stderr || ''}`.trim(),
+        notFound: Boolean(
+          err && (err.code === 'ENOENT' || /not recognized|não é reconhecido|command not found/i.test(`${stderr}${stdout}`)),
+        ),
+      });
     });
   });
 }
@@ -54,7 +75,10 @@ export async function cliStatus(driver, cfg = {}) {
     try {
       const j = JSON.parse(r.out.slice(r.out.indexOf('{')));
       if (!j.loggedIn) return { state: 'logged_out', version: inst.version, detail: 'Not signed in.' };
-      const how = j.authMethod === 'claude.ai' ? `Claude account${j.subscriptionType ? ` (${j.subscriptionType})` : ''}` : j.authMethod || 'signed in';
+      const how =
+        j.authMethod === 'claude.ai'
+          ? `Claude account${j.subscriptionType ? ` (${j.subscriptionType})` : ''}`
+          : j.authMethod || 'signed in';
       return { state: 'ok', version: inst.version, detail: how, expiresAt: j.loginExpiresAt || null };
     } catch {
       return { state: r.code === 0 ? 'ok' : 'logged_out', version: inst.version, detail: r.out.split('\n')[0].slice(0, 200) };
@@ -63,16 +87,33 @@ export async function cliStatus(driver, cfg = {}) {
   if (driver === 'codex') {
     const r = await run(command, ['login', 'status']);
     const line = r.out.split('\n').find((l) => /logged|login|api key/i.test(l)) || r.out.split('\n')[0] || '';
-    if (/not logged in/i.test(r.out) || r.code !== 0) return { state: 'logged_out', version: inst.version, detail: line.slice(0, 200) || 'Not signed in.' };
+    if (/not logged in/i.test(r.out) || r.code !== 0)
+      return { state: 'logged_out', version: inst.version, detail: line.slice(0, 200) || 'Not signed in.' };
     return { state: 'ok', version: inst.version, detail: line.replace(/^.*?(Logged in)/i, '$1').slice(0, 200) };
   }
   if (driver === 'opencode') {
     const r = await run(command, ['auth', 'list']);
+    // eslint-disable-next-line no-control-regex -- strips ANSI colour codes from the CLI output
     const text = r.out.replace(/\x1b\[[0-9;]*m/g, '');
     const none = /no credentials|0 credentials/i.test(text) || !text.trim();
     // OpenCode's built-in provider serves its free models without any sign-in, so "no credentials" is still usable.
-    if (none) return { state: 'ok', version: inst.version, detail: 'Free OpenCode models work without signing in. Use "Switch account" (opencode auth login) to connect other providers.' };
-    return { state: 'ok', version: inst.version, detail: text.split('\n').map((l) => l.replace(/^[^\w]+/, '').trim()).filter(Boolean).slice(0, 6).join(' · ').slice(0, 300) };
+    if (none)
+      return {
+        state: 'ok',
+        version: inst.version,
+        detail: 'Free OpenCode models work without signing in. Use "Switch account" (opencode auth login) to connect other providers.',
+      };
+    return {
+      state: 'ok',
+      version: inst.version,
+      detail: text
+        .split('\n')
+        .map((l) => l.replace(/^[^\w]+/, '').trim())
+        .filter(Boolean)
+        .slice(0, 6)
+        .join(' · ')
+        .slice(0, 300),
+    };
   }
   return { state: 'unknown', version: inst.version };
 }
@@ -108,9 +149,18 @@ export function nextStep(driver, status) {
     case 'logged_out':
       return { text: p.login.text, command: p.login.command, action: 'login' };
     case 'no_access':
-      return { text: 'Signed in, but the account cannot use the models (plan inactive, invalid key or no credit). Check the plan or sign in with another account:', command: p.login.command, action: 'login' };
+      return {
+        text: 'Signed in, but the account cannot use the models (plan inactive, invalid key or no credit). Check the plan or sign in with another account:',
+        command: p.login.command,
+        action: 'login',
+      };
     case 'rate_limited':
-      return { text: status.resetsAt ? `Usage limit reached. It resets at ${new Date(status.resetsAt).toLocaleString()}.` : 'Usage limit reached. Wait for the limit to reset or use another provider.', action: null };
+      return {
+        text: status.resetsAt
+          ? `Usage limit reached. It resets at ${new Date(status.resetsAt).toLocaleString()}.`
+          : 'Usage limit reached. Wait for the limit to reset or use another provider.',
+        action: null,
+      };
     default:
       return null;
   }

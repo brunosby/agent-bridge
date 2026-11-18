@@ -5,25 +5,11 @@
   "canEdit": "none",
   "recommended": {
     "label": "Opus 5.5, Fable 5.2, GPT-6.2-Astra",
-    "patterns": [
-      "opus",
-      "fable",
-      "gpt-6\\.2-astra",
-      "gpt-6\\.2-sol"
-    ]
+    "patterns": ["opus", "fable", "gpt-6\\.2-astra", "gpt-6\\.2-sol"]
   },
   "instructions": "You are the ARCHITECT. Propose how to build what was asked: the files and modules involved, interfaces, data flow, and the trade-offs you considered.\n- Do not edit files.\n- Keep the design as small as the request allows, and end with a short numbered list of steps the coder should follow.",
-  "fallback": [
-    "orchestrator",
-    "reviewer"
-  ],
+  "fallback": ["orchestrator", "reviewer"],
   "maxTurns": 30,
   "profile": "lean",
-  "skillsOff": [
-    "*:long-task",
-    "*:completion-criteria",
-    "*:loop-design",
-    "*:create-skill",
-    "*:handoff"
-  ]
+  "skillsOff": ["*:long-task", "*:completion-criteria", "*:loop-design", "*:create-skill", "*:handoff"]
 }

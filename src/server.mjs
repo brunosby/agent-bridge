@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { ClaudeAgent } from './claude-agent.mjs';
 import { CodexAgent } from './codex-agent.mjs';
 import { OpenCodeAgent } from './opencode-agent.mjs';
+import { FakeAgent } from './fake-agent.mjs';
 import { buildInstructions, rosterText, ROUTING_MODES } from './prompts.mjs';
 import { buildMatcher, DEFAULT_DESTRUCTIVE_PATTERNS, DEFAULT_DELETION_PATTERNS } from './safety.mjs';
 import { listConversations, loadConversation, removeConversation, LOGS_DIR_NAME } from './history.mjs';
@@ -84,6 +85,8 @@ const DRIVERS = {
   codex: { label: 'Codex', Agent: CodexAgent },
   opencode: { label: 'OpenCode', Agent: OpenCodeAgent },
 };
+// Scripted provider for automated tests only.
+if (config.enableFakeProvider) DRIVERS.fake = { label: 'Fake (tests)', Agent: FakeAgent };
 
 /** Team used for a new conversation: config.defaultTeam, else the old mainAgent setting. */
 function defaultTeam() {
@@ -112,7 +115,13 @@ async function listDriverModels(driver) {
   const live = conv && Object.entries(conv.agents).find(([id]) => conv.team.find((a) => a.id === id)?.driver === driver)?.[1];
   if (live?.models?.length) return live.models;
   const { Agent } = DRIVERS[driver];
-  const probe = new Agent({ id: `probe-${driver}`, name: 'probe', cwd: conv?.workDir || process.cwd(), config: { ...(config[driver] || {}) }, instructions: '' });
+  const probe = new Agent({
+    id: `probe-${driver}`,
+    name: 'probe',
+    cwd: conv?.workDir || process.cwd(),
+    config: { ...(config[driver] || {}) },
+    instructions: '',
+  });
   try {
     const models = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('no model list after 45 s')), 45000);
@@ -170,7 +179,10 @@ function publish(ev) {
 function logError(source, text) {
   if (!conv) return;
   try {
-    fs.appendFileSync(path.join(conv.runDir, 'errors.log'), `${new Date().toISOString()} [${source}] ${String(text).replace(/\s+$/g, '')}\n`);
+    fs.appendFileSync(
+      path.join(conv.runDir, 'errors.log'),
+      `${new Date().toISOString()} [${source}] ${String(text).replace(/\s+$/g, '')}\n`,
+    );
   } catch {
     // logging must never break the app
   }
@@ -180,7 +192,9 @@ const agentName = (id) => conv?.team.find((a) => a.id === id)?.name || id;
 
 function decorateModels(spec, agent) {
   const role = roles[spec.role];
-  const sensitive = setting('sensitiveModelPatterns').map((p) => safeRegex(p)).filter(Boolean);
+  const sensitive = setting('sensitiveModelPatterns')
+    .map((p) => safeRegex(p))
+    .filter(Boolean);
   const blocked = providerBlocked(spec.driver);
   return (agent.models || []).map((m) => ({
     ...m,
@@ -246,7 +260,10 @@ function snapshotLine() {
 
 // ---------- team ----------
 function uniqueName(base) {
-  const clean = String(base || 'Agent').replace(/[^\w-]/g, '').slice(0, 24) || 'Agent';
+  const clean =
+    String(base || 'Agent')
+      .replace(/[^\w-]/g, '')
+      .slice(0, 24) || 'Agent';
   const taken = new Set(conv.team.map((a) => a.name.toLowerCase()));
   if (!taken.has(clean.toLowerCase())) return clean;
   for (let i = 2; ; i++) if (!taken.has(`${clean}${i}`.toLowerCase())) return `${clean}${i}`;
@@ -277,11 +294,50 @@ function createAgent(spec) {
   if (spec.driver === 'claude') {
     const promptFile = path.join(conv.runDir, `instructions-${spec.id}.txt`);
     fs.writeFileSync(promptFile, instructions);
-    agent = new ClaudeAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeSessionId: spec.sessionId || null }, systemPromptFile: promptFile, readOnly, tokens: spec.tokens || 0, cachedTokens: spec.cachedTokens || 0, maxTurns: role?.maxTurns || null, ...roleProfile(spec.role) });
+    agent = new ClaudeAgent({
+      id: spec.id,
+      name: spec.name,
+      cwd,
+      config: { ...base, resumeSessionId: spec.sessionId || null },
+      systemPromptFile: promptFile,
+      readOnly,
+      tokens: spec.tokens || 0,
+      cachedTokens: spec.cachedTokens || 0,
+      maxTurns: role?.maxTurns || null,
+      ...roleProfile(spec.role),
+    });
   } else if (spec.driver === 'codex') {
-    agent = new CodexAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeThreadId: spec.sessionId || null }, instructions, readOnly, tokens: spec.tokens || 0, cachedTokens: spec.cachedTokens || 0 });
+    agent = new CodexAgent({
+      id: spec.id,
+      name: spec.name,
+      cwd,
+      config: { ...base, resumeThreadId: spec.sessionId || null },
+      instructions,
+      readOnly,
+      tokens: spec.tokens || 0,
+      cachedTokens: spec.cachedTokens || 0,
+    });
   } else if (spec.driver === 'opencode') {
-    agent = new OpenCodeAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeSessionId: spec.sessionId || null }, instructions, readOnly, tokens: spec.tokens || 0, cachedTokens: spec.cachedTokens || 0, skillsOff: roleProfile(spec.role, true).skillsOff });
+    agent = new OpenCodeAgent({
+      id: spec.id,
+      name: spec.name,
+      cwd,
+      config: { ...base, resumeSessionId: spec.sessionId || null },
+      instructions,
+      readOnly,
+      tokens: spec.tokens || 0,
+      cachedTokens: spec.cachedTokens || 0,
+      skillsOff: roleProfile(spec.role, true).skillsOff,
+    });
+  } else if (spec.driver === 'fake' && DRIVERS.fake) {
+    agent = new FakeAgent({
+      id: spec.id,
+      name: spec.name,
+      cwd,
+      config: { ...(config.fake || {}), ...base, resumeSessionId: spec.sessionId || null },
+      tokens: spec.tokens || 0,
+      cachedTokens: spec.cachedTokens || 0,
+    });
   } else {
     throw new Error(`unknown driver ${spec.driver}`);
   }
@@ -342,10 +398,26 @@ async function setRole(id, roleId) {
   if (spec.driver === 'claude') {
     fs.writeFileSync(
       path.join(conv.runDir, `instructions-${id}.txt`),
-      buildInstructions({ name: spec.name, role, routingMode: conv.routingMode, workDir: agent.cwd, userName: setting('userName'), extra: config.claude?.instructions }),
+      buildInstructions({
+        name: spec.name,
+        role,
+        routingMode: conv.routingMode,
+        workDir: agent.cwd,
+        userName: setting('userName'),
+        extra: config.claude?.instructions,
+      }),
     );
   } else if (agent.setInstructions) {
-    agent.setInstructions(buildInstructions({ name: spec.name, role, routingMode: conv.routingMode, workDir: agent.cwd, userName: setting('userName'), extra: config[spec.driver]?.instructions }));
+    agent.setInstructions(
+      buildInstructions({
+        name: spec.name,
+        role,
+        routingMode: conv.routingMode,
+        workDir: agent.cwd,
+        userName: setting('userName'),
+        extra: config[spec.driver]?.instructions,
+      }),
+    );
   }
   await agent.reconfigure({ readOnly: role.canEdit === 'none', maxTurns: role.maxTurns || null, ...roleProfile(roleId) });
   conv.pendingRoleNote[id] = `[Role change] From now on your role is ${role.name}. ${role.summary}\n${role.instructions}`;
@@ -472,14 +544,22 @@ function wireAgent(owner, id, agent) {
       if (changed && ev.state !== 'ok') {
         logError(agentName(id), `account: ${ev.state} ${ev.detail || ''}`);
         const when = ev.resetsAt ? ` until ${new Date(ev.resetsAt).toLocaleString()}` : '';
-        publish({ kind: 'error', agent: id, text: `${DRIVERS[driver].label}: ${ev.state === 'rate_limited' ? `usage limit reached${when}` : 'the account has no access (plan inactive, invalid key or no credit)'}. Its models are disabled; see Settings > Accounts.` });
+        publish({
+          kind: 'error',
+          agent: id,
+          text: `${DRIVERS[driver].label}: ${ev.state === 'rate_limited' ? `usage limit reached${when}` : 'the account has no access (plan inactive, invalid key or no credit)'}. Its models are disabled; see Settings > Accounts.`,
+        });
       }
       if (changed) publishState();
       return;
     }
     if (ev.kind === 'unavailable') {
       logError(agentName(id), `unavailable: ${ev.reason}`);
-      publish({ kind: 'error', agent: id, text: `${agentName(id)} is unavailable: ${ev.reason} Its models are disabled until you press Retry.` });
+      publish({
+        kind: 'error',
+        agent: id,
+        text: `${agentName(id)} is unavailable: ${ev.reason} Its models are disabled until you press Retry.`,
+      });
       publishState();
       return;
     }
@@ -509,7 +589,13 @@ function armApprovalTimeout(agentId, ev) {
   const timer = setTimeout(() => {
     approvalTimers.delete(ev.requestId);
     if (conv !== owner || !conv.agents[agentId]) return;
-    if (conv.agents[agentId].respondApproval(ev.requestId, 'decline', 'No answer from the user in time, so this was declined automatically. Continue without it or ask the user.')) {
+    if (
+      conv.agents[agentId].respondApproval(
+        ev.requestId,
+        'decline',
+        'No answer from the user in time, so this was declined automatically. Continue without it or ask the user.',
+      )
+    ) {
       publish({ kind: 'approvalClosed', requestId: ev.requestId, decision: 'timeout' });
       publishState();
     }
@@ -526,7 +612,10 @@ function checkTokenLimit() {
   if (!(limit > 0) || relay.halted) return false;
   if (totalTokens() < limit) return false;
   relay.halted = true;
-  publish({ kind: 'system', text: `Token limit reached (${totalTokens().toLocaleString()} of ${limit.toLocaleString()}). Hand-offs are paused; send a message or press Resume to continue.` });
+  publish({
+    kind: 'system',
+    text: `Token limit reached (${totalTokens().toLocaleString()} of ${limit.toLocaleString()}). Hand-offs are paused; send a message or press Resume to continue.`,
+  });
   publishState();
   return true;
 }
@@ -588,7 +677,10 @@ function reviewNote(fromId, text) {
   conv.reviewRounds = (conv.reviewRounds || 0) + 1;
   const max = Number(setting('maxReviewRounds'));
   if (conv.reviewRounds > max) {
-    publish({ kind: 'system', text: `The Reviewer still requests changes after ${max} fix round(s). ${agentName(orchestratorId())} will report to you instead of starting another round.` });
+    publish({
+      kind: 'system',
+      text: `The Reviewer still requests changes after ${max} fix round(s). ${agentName(orchestratorId())} will report to you instead of starting another round.`,
+    });
     logError('bridge', `review round limit (${max}) reached`);
     return `${text}\n\n[Agent Bridge: review round limit (${max}) reached. Do not send this back to the coder. Summarize for the user what was done and the open findings, and end with [[DONE]].]`;
   }
@@ -605,7 +697,10 @@ function onTurnEnd(fromId, ev) {
     conv.batch.pending.delete(fromId);
     conv.batch.results.push({ from: fromId, text: text || `(no answer${ev.detail ? `: ${ev.detail}` : ''})` });
     if (conv.batch.pending.size) {
-      publish({ kind: 'system', text: `${agentName(fromId)} finished. Waiting for ${[...conv.batch.pending].map(agentName).join(', ')} before passing the results to ${agentName(orch)}.` });
+      publish({
+        kind: 'system',
+        text: `${agentName(fromId)} finished. Waiting for ${[...conv.batch.pending].map(agentName).join(', ')} before passing the results to ${agentName(orch)}.`,
+      });
       return;
     }
     const results = conv.batch.results;
@@ -644,7 +739,10 @@ function onTurnEnd(fromId, ev) {
   }
   if (relay.hops + targets.length > relay.maxHops) {
     relay.halted = true;
-    publish({ kind: 'system', text: `Relay paused after ${relay.hops} hand-offs (limit ${relay.maxHops}). Send a message or press Resume to continue.` });
+    publish({
+      kind: 'system',
+      text: `Relay paused after ${relay.hops} hand-offs (limit ${relay.maxHops}). Send a message or press Resume to continue.`,
+    });
     publishState();
     return;
   }
@@ -735,12 +833,14 @@ function closestAgent(roleId) {
 /** Provider and model to suggest for a role: the first available model recommended for it. */
 function suggestFor(roleId) {
   const role = roles[roleId];
-  for (const driver of ['claude', 'codex', 'opencode']) {
+  for (const driver of Object.keys(DRIVERS)) {
     const models = driverModelCache[driver]?.models || [];
     const m = models.find((x) => x.value !== 'default' && !x.disabled && isRecommended(role, x));
     if (m && !providerBlocked(driver)) return { driver, model: m.value, modelLabel: m.label || m.value };
   }
-  return { driver: 'claude', model: null, modelLabel: 'default model' };
+  // No recommended model known: use the provider of the first agent in the team.
+  const driver = conv.team[0]?.driver || 'claude';
+  return { driver, model: null, modelLabel: 'default model' };
 }
 
 /** The orchestrator asked for a role nobody has. Ask the user (default) or continue with the closest agent. */
@@ -750,7 +850,11 @@ function handleNeedRole(fromId, text) {
   const roleId = m[1].toLowerCase();
   const existing = conv.team.find((a) => a.role === roleId);
   if (!roles[roleId] || existing) {
-    deliver(fromId, `[Message from Agent Bridge]\n${existing ? `@${existing.name} already has the ${roles[roleId].name} role; delegate to it.` : `"${roleId}" is not a role in this app. Roles: ${Object.keys(roles).join(', ')}.`}`, { from: 'user' });
+    deliver(
+      fromId,
+      `[Message from Agent Bridge]\n${existing ? `@${existing.name} already has the ${roles[roleId].name} role; delegate to it.` : `"${roleId}" is not a role in this app. Roles: ${Object.keys(roles).join(', ')}.`}`,
+      { from: 'user' },
+    );
     return true;
   }
   const closest = closestAgent(roleId);
@@ -785,10 +889,15 @@ async function resolveMissingRole(roleId, action) {
     const sug = suggestFor(roleId);
     const spec = await addAgent({ driver: sug.driver, role: roleId, model: sug.model });
     publish({ kind: 'system', text: `Added ${spec.name} for the missing ${role.name} role.` });
-    deliver(orch, `[Message from ${setting('userName')}]\nI added @${spec.name} as ${role.name}. Continue and delegate that work to it.`, { from: 'user' });
+    deliver(orch, `[Message from ${setting('userName')}]\nI added @${spec.name} as ${role.name}. Continue and delegate that work to it.`, {
+      from: 'user',
+    });
   } else {
     const closest = closestAgent(roleId);
-    publish({ kind: 'system', text: `No ${role.name} added: continuing with ${closest?.name || 'the orchestrator'} as the closest agent.` });
+    publish({
+      kind: 'system',
+      text: `No ${role.name} added: continuing with ${closest?.name || 'the orchestrator'} as the closest agent.`,
+    });
     logError('bridge', `missing role ${roleId}: continued with ${closest?.name || 'orchestrator'}`);
     deliver(
       orch,
@@ -809,7 +918,11 @@ function deliver(toId, text, { from }) {
     return;
   }
   if (agent.available === false) {
-    publish({ kind: 'error', agent: toId, text: `${agentName(toId)} is unavailable, so the message was not delivered. ${agent.unavailableReason || ''}` });
+    publish({
+      kind: 'error',
+      agent: toId,
+      text: `${agentName(toId)} is unavailable, so the message was not delivered. ${agent.unavailableReason || ''}`,
+    });
     return;
   }
   const extras = [];
@@ -818,7 +931,13 @@ function deliver(toId, text, { from }) {
     delete conv.pendingRoleNote[toId];
   }
   if ((conv.rosterSeen[toId] || 0) < conv.rosterVersion) {
-    const team = conv.team.map((a) => ({ id: a.id, name: a.name, roleName: roles[a.role]?.name || a.role, canEdit: roles[a.role]?.canEdit || 'all', model: conv.agents[a.id]?.resolvedModel || conv.agents[a.id]?.model }));
+    const team = conv.team.map((a) => ({
+      id: a.id,
+      name: a.name,
+      roleName: roles[a.role]?.name || a.role,
+      canEdit: roles[a.role]?.canEdit || 'all',
+      model: conv.agents[a.id]?.resolvedModel || conv.agents[a.id]?.model,
+    }));
     extras.push(rosterText(team, toId, conv.routingMode));
     conv.rosterSeen[toId] = conv.rosterVersion;
   }
@@ -836,9 +955,11 @@ function deliver(toId, text, { from }) {
 
 /** git diff of the working tree (tracked changes + list of new files), trimmed to a reasonable size. */
 function diffContext(dir) {
-  const git = (args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 15000, maxBuffer: 20 * 1024 * 1024 });
+  const git = (args) =>
+    spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 15000, maxBuffer: 20 * 1024 * 1024 });
   const inside = git(['rev-parse', '--is-inside-work-tree']);
-  if (inside.status !== 0) return '[Current changes]\n(The project folder is not a git repository: read the files the coder reported as changed.)';
+  if (inside.status !== 0)
+    return '[Current changes]\n(The project folder is not a git repository: read the files the coder reported as changed.)';
   const diff = git(['diff', 'HEAD', '--no-color']).stdout || '';
   const untracked = (git(['ls-files', '--others', '--exclude-standard']).stdout || '').trim();
   const limit = 40000;
@@ -886,7 +1007,10 @@ async function newConversation(workDir) {
   await closeConversation();
   openConversation({ workDir: dir });
   resetClients();
-  publish({ kind: 'system', text: `New conversation in ${dir}. Team: ${conv.team.map((a) => `${a.name} (${roles[a.role]?.name})`).join(', ')}.` });
+  publish({
+    kind: 'system',
+    text: `New conversation in ${dir}. Team: ${conv.team.map((a) => `${a.name} (${roles[a.role]?.name})`).join(', ')}.`,
+  });
   startAgents();
   publishState();
 }
@@ -904,7 +1028,8 @@ function saveSettings(input) {
     if (def.type === 'boolean') v = Boolean(v);
     else if (def.type === 'number') {
       v = Number(v);
-      if (!Number.isFinite(v) || v < (def.min ?? -Infinity)) throw new Error(`${key} must be a number${def.min !== undefined ? ` ≥ ${def.min}` : ''}`);
+      if (!Number.isFinite(v) || v < (def.min ?? -Infinity))
+        throw new Error(`${key} must be a number${def.min !== undefined ? ` ≥ ${def.min}` : ''}`);
     } else if (def.type === 'enum') {
       if (!def.values.includes(v)) throw new Error(`${key} must be one of ${def.values.join(', ')}`);
     } else if (def.type === 'list') {
@@ -914,7 +1039,14 @@ function saveSettings(input) {
     next[key] = v;
   }
   if (input.saveTeamAsDefault && conv) {
-    next.defaultTeam = conv.team.map((a) => ({ driver: a.driver, role: a.role, name: a.name, model: a.model || null, effort: a.effort || null, bypass: a.bypass }));
+    next.defaultTeam = conv.team.map((a) => ({
+      driver: a.driver,
+      role: a.role,
+      name: a.name,
+      model: a.model || null,
+      effort: a.effort || null,
+      bypass: a.bypass,
+    }));
   }
   saveLocalConfig(next);
   relay.auto = setting('autoRelay');
@@ -922,7 +1054,11 @@ function saveSettings(input) {
   if (conv) {
     conv.routingMode = 'routingMode' in input ? setting('routingMode') : conv.routingMode;
     for (const a of Object.values(conv.agents)) {
-      a.isDestructive = buildMatcher({ workDir: a.cwd, destructive: setting('destructivePatterns'), deletion: setting('deletionPatterns') });
+      a.isDestructive = buildMatcher({
+        workDir: a.cwd,
+        destructive: setting('destructivePatterns'),
+        deletion: setting('deletionPatterns'),
+      });
     }
   }
 }
@@ -932,7 +1068,11 @@ const token = crypto.randomBytes(18).toString('hex');
 const SRC_DIR = path.join(APP_DIR, 'src');
 const codeHash = () => {
   const h = crypto.createHash('sha1');
-  for (const f of fs.readdirSync(SRC_DIR).filter((n) => n.endsWith('.mjs')).sort()) h.update(f).update(fs.readFileSync(path.join(SRC_DIR, f)));
+  for (const f of fs
+    .readdirSync(SRC_DIR)
+    .filter((n) => n.endsWith('.mjs'))
+    .sort())
+    h.update(f).update(fs.readFileSync(path.join(SRC_DIR, f)));
   return h.digest('hex');
 };
 const bootHash = codeHash();
@@ -982,8 +1122,12 @@ async function api(action, body) {
   switch (action) {
     case 'catalog':
       return {
-        roles: Object.values(roles).map(({ instructions, ...r }) => r),
-        drivers: Object.entries(DRIVERS).map(([id, d]) => ({ id, label: d.label, ...(d.Agent.probe ? d.Agent.probe(config[id]) : { available: true }) })),
+        roles: Object.values(roles).map(({ instructions: _instructions, ...r }) => r),
+        drivers: Object.entries(DRIVERS).map(([id, d]) => ({
+          id,
+          label: d.label,
+          ...(d.Agent.probe ? d.Agent.probe(config[id]) : { available: true }),
+        })),
         routingModes: Object.entries(ROUTING_MODES).map(([id, m]) => ({ id, label: m.label, rule: m.rule })),
         settings: settingsView(),
         settingsSchema: SETTINGS,
@@ -1024,7 +1168,9 @@ async function api(action, body) {
     case 'skills':
       return {
         installed: installedSkills(),
-        roles: Object.fromEntries(Object.keys(roles).map((id) => [id, { ...roleProfile(id), overridden: Boolean(config.roleOverrides?.[id]) }])),
+        roles: Object.fromEntries(
+          Object.keys(roles).map((id) => [id, { ...roleProfile(id), overridden: Boolean(config.roleOverrides?.[id]) }]),
+        ),
       };
     case 'roleProfile': {
       if (!roles[body.role]) throw new Error('unknown role');
@@ -1034,13 +1180,21 @@ async function api(action, body) {
       saveLocalConfig({ roleOverrides });
       // Apply to the agents that have this role (Claude restarts on the same session when idle).
       for (const spec of conv.team.filter((a) => a.role === body.role)) {
-        await conv.agents[spec.id]?.reconfigure({ readOnly: roles[body.role].canEdit === 'none', maxTurns: roles[body.role].maxTurns || null, ...roleProfile(body.role) });
+        await conv.agents[spec.id]?.reconfigure({
+          readOnly: roles[body.role].canEdit === 'none',
+          maxTurns: roles[body.role].maxTurns || null,
+          ...roleProfile(body.role),
+        });
       }
-      publish({ kind: 'system', text: `Profile for ${roles[body.role].name} saved: ${roleProfile(body.role).profile}, ${roleProfile(body.role).skillsOff.length} skill(s) off.` });
+      publish({
+        kind: 'system',
+        text: `Profile for ${roles[body.role].name} saved: ${roleProfile(body.role).profile}, ${roleProfile(body.role).skillsOff.length} skill(s) off.`,
+      });
       return { ok: true };
     }
     case 'resolveRole': {
-      if (!conv.pendingRoleRequest || conv.pendingRoleRequest.requestId !== body.requestId) throw new Error('this request is no longer pending');
+      if (!conv.pendingRoleRequest || conv.pendingRoleRequest.requestId !== body.requestId)
+        throw new Error('this request is no longer pending');
       const { requestId, roleId } = conv.pendingRoleRequest;
       publish({ kind: 'needRoleClosed', requestId, action: body.action });
       if (body.action === 'add' || body.action === 'closest') await resolveMissingRole(roleId, body.action);
@@ -1080,7 +1234,8 @@ async function api(action, body) {
       const spec = conv.team.find((a) => a.id === body.agent);
       const effort = String(body.effort || 'default');
       if (effort !== 'default') {
-        const current = (agent.models || []).find((m) => m.value === (agent.model || 'default')) || (agent.models || []).find((m) => m.isDefault);
+        const current =
+          (agent.models || []).find((m) => m.value === (agent.model || 'default')) || (agent.models || []).find((m) => m.isDefault);
         if (!current?.efforts?.includes(effort)) throw new Error(`the model does not support effort "${effort}"`);
       }
       await agent.setEffort(effort);
@@ -1116,7 +1271,9 @@ async function api(action, body) {
     }
     case 'driverModels': {
       if (!DRIVERS[body.driver]) throw new Error('unknown provider');
-      const sensitive = setting('sensitiveModelPatterns').map((p) => safeRegex(p)).filter(Boolean);
+      const sensitive = setting('sensitiveModelPatterns')
+        .map((p) => safeRegex(p))
+        .filter(Boolean);
       const blocked = providerBlocked(body.driver);
       const models = (await listDriverModels(body.driver)).map((m) => ({
         ...m,
@@ -1160,7 +1317,10 @@ async function api(action, body) {
       const command = openLoginTerminal(body.driver, config[body.driver]);
       delete providerRuntime[body.driver];
       delete cliCache[body.driver];
-      publish({ kind: 'system', text: `Opened a terminal running "${command}". Finish the sign-in there, then press Check again in Settings > Accounts.` });
+      publish({
+        kind: 'system',
+        text: `Opened a terminal running "${command}". Finish the sign-in there, then press Check again in Settings > Accounts.`,
+      });
       return { ok: true };
     }
     case 'conversations':
@@ -1186,7 +1346,9 @@ async function api(action, body) {
       await newConversation(body.workDir);
       return { ok: true };
     default:
-      throw new Error(`unknown action ${action}${codeChanged() ? '. The app was updated after it started: press Restart at the top of the page.' : ''}`);
+      throw new Error(
+        `unknown action ${action}${codeChanged() ? '. The app was updated after it started: press Restart at the top of the page.' : ''}`,
+      );
   }
 }
 
@@ -1199,7 +1361,10 @@ function serveStatic(pathname, res) {
     content = Buffer.from(content.toString('utf8').replace('__BRIDGE_TOKEN__', token));
     if (codeChanged() && !warnedOutdated) {
       warnedOutdated = true;
-      publish({ kind: 'error', text: 'Agent Bridge was updated after it started, so new buttons may not work. Press Restart at the top of the page.' });
+      publish({
+        kind: 'error',
+        text: 'Agent Bridge was updated after it started, so new buttons may not work. Press Restart at the top of the page.',
+      });
     }
   }
   send(res, 200, content, MIME[path.extname(file)] || 'application/octet-stream');
@@ -1246,7 +1411,11 @@ if (argv.resume) {
 
 try {
   const { saved } = openConversation({ workDir: path.resolve(argv.cwd || config.workDir || process.cwd()), restoreId });
-  if (saved) publish({ kind: 'system', text: `Restored conversation from ${new Date(saved.startedAt).toLocaleString()} with ${conv.team.length} agent(s). Relay is paused until you send a message.` });
+  if (saved)
+    publish({
+      kind: 'system',
+      text: `Restored conversation from ${new Date(saved.startedAt).toLocaleString()} with ${conv.team.length} agent(s). Relay is paused until you send a message.`,
+    });
 } catch (err) {
   fail(err.message);
 }
@@ -1276,7 +1445,11 @@ server.listen(port, '127.0.0.1', () => {
   console.log(`Team: ${conv.team.map((a) => `${a.name} (${a.driver}, ${a.role})`).join(', ')}`);
   console.log(`Transcript: ${path.join(conv.runDir, 'transcript.jsonl')}`);
   console.log('Stop or restart from the buttons at the top of the page (or Ctrl+C here).');
-  if (!restoreId) publish({ kind: 'system', text: `Session started in ${conv.workDir}. Team: ${conv.team.map((a) => `${a.name} (${roles[a.role]?.name})`).join(', ')}. Routing: ${ROUTING_MODES[conv.routingMode].label}.` });
+  if (!restoreId)
+    publish({
+      kind: 'system',
+      text: `Session started in ${conv.workDir}. Team: ${conv.team.map((a) => `${a.name} (${roles[a.role]?.name})`).join(', ')}. Routing: ${ROUTING_MODES[conv.routingMode].label}.`,
+    });
   startAgents();
   publishState();
   if (!argv['no-open'] && setting('openBrowser') !== false) openBrowser(address);
@@ -1299,7 +1472,16 @@ async function restartServer() {
   const keep = [];
   const skip = new Set(['resume', 'port', 'cwd', 'no-open', 'main']);
   for (const [k, v] of Object.entries(argv)) if (!skip.has(k)) keep.push(`--${k}`, ...(v === true ? [] : [String(v)]));
-  const childArgs = [path.join(APP_DIR, 'src', 'server.mjs'), ...keep, '--resume', conv.id, '--port', String(server.address().port), '--no-open', '--wait-port'];
+  const childArgs = [
+    path.join(APP_DIR, 'src', 'server.mjs'),
+    ...keep,
+    '--resume',
+    conv.id,
+    '--port',
+    String(server.address().port),
+    '--no-open',
+    '--wait-port',
+  ];
   await closeConversation();
   // End the open event streams first: server.close() waits for every connection, and a browser tab
   // keeps its event stream open, so closing before ending them never finished.
@@ -1350,7 +1532,17 @@ function fail(msg) {
   if (argv.hidden && process.platform === 'win32') {
     const text = `Agent Bridge could not start:\n\n${msg}`.replace(/'/g, "''");
     try {
-      spawnSync('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', `Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('${text}', 'Agent Bridge') | Out-Null`], { windowsHide: true, timeout: 600000 });
+      spawnSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-WindowStyle',
+          'Hidden',
+          '-Command',
+          `Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('${text}', 'Agent Bridge') | Out-Null`,
+        ],
+        { windowsHide: true, timeout: 600000 },
+      );
     } catch {
       // nothing else to do
     }

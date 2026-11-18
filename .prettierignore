@@ -1,0 +1,4 @@
+node_modules/
+logs/
+*.md
+package-lock.json

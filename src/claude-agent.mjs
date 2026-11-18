@@ -9,7 +9,19 @@ import { spawnJsonl } from './proc.mjs';
  * Emits 'event' objects: { kind, ... } (see server.mjs for the list of kinds).
  */
 export class ClaudeAgent extends EventEmitter {
-  constructor({ id = 'claude', name = 'Claude', cwd, config, systemPromptFile, readOnly = false, tokens = 0, cachedTokens = 0, maxTurns = null, profile = 'full', skillsOff = [] }) {
+  constructor({
+    id = 'claude',
+    name = 'Claude',
+    cwd,
+    config,
+    systemPromptFile,
+    readOnly = false,
+    tokens = 0,
+    cachedTokens = 0,
+    maxTurns = null,
+    profile = 'full',
+    skillsOff = [],
+  }) {
     super();
     this.id = id;
     this.name = name;
@@ -73,7 +85,10 @@ export class ClaudeAgent extends EventEmitter {
           response: {
             subtype: 'success',
             request_id: m.request_id,
-            response: { behavior: 'deny', message: 'Questions are not supported in Agent Bridge. Ask the user in your message and end it with [[DONE]].' },
+            response: {
+              behavior: 'deny',
+              message: 'Questions are not supported in Agent Bridge. Ask the user in your message and end it with [[DONE]].',
+            },
           },
         });
         return;
@@ -85,7 +100,12 @@ export class ClaudeAgent extends EventEmitter {
         requestId: key,
         title: `Claude wants to use ${r.display_name || r.tool_name}`,
         matchText: `${r.tool_name} ${r.input?.command || r.input?.file_path || JSON.stringify(r.input || {})}`,
-        detail: [toolDetail(r.tool_name, r.input), r.description && r.description !== r.input?.command ? r.description : null, r.blocked_path && `path: ${r.blocked_path}`, r.decision_reason]
+        detail: [
+          toolDetail(r.tool_name, r.input),
+          r.description && r.description !== r.input?.command ? r.description : null,
+          r.blocked_path && `path: ${r.blocked_path}`,
+          r.decision_reason,
+        ]
           .filter((x) => typeof x === 'string' && x)
           .join('\n'),
         decisions: hasRule ? ['accept', 'acceptForSession', 'decline'] : ['accept', 'decline'],
@@ -93,7 +113,10 @@ export class ClaudeAgent extends EventEmitter {
       this.emitEvent('status', { busy: this.busy });
       return;
     }
-    this.proc.write({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: `agent-bridge does not handle ${r.subtype}` } });
+    this.proc.write({
+      type: 'control_response',
+      response: { subtype: 'error', request_id: m.request_id, error: `agent-bridge does not handle ${r.subtype}` },
+    });
     this.emitEvent('info', { text: `Rejected unsupported control request: ${r.subtype}` });
   }
 
@@ -112,13 +135,7 @@ export class ClaudeAgent extends EventEmitter {
 
   buildArgs() {
     const c = this.config;
-    const args = [
-      '-p',
-      '--input-format', 'stream-json',
-      '--output-format', 'stream-json',
-      '--verbose',
-      '--include-partial-messages',
-    ];
+    const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
     if (c.model) args.push('--model', c.model);
     if (c.effort) args.push('--effort', c.effort);
     // Step limit of the role (per message): keeps support roles short.
@@ -161,7 +178,10 @@ export class ClaudeAgent extends EventEmitter {
         this.pending = 0;
         this.closeApprovals();
         this.emitEvent('status', { busy: false });
-        if (!wasExpected) this.emitEvent('error', { text: `Claude process exited (code ${code}).${this.stderrTail.trim() ? ` ${this.stderrTail.trim().slice(-300)}` : ''}` });
+        if (!wasExpected)
+          this.emitEvent('error', {
+            text: `Claude process exited (code ${code}).${this.stderrTail.trim() ? ` ${this.stderrTail.trim().slice(-300)}` : ''}`,
+          });
         // A process that dies before producing any output usually means the CLI changed or is broken.
         if (!wasExpected && neverStarted) this.markUnavailable(`Claude Code did not start (exit code ${code}).`);
       },
@@ -269,7 +289,13 @@ export class ClaudeAgent extends EventEmitter {
         const r = m.response?.response || {};
         if (Array.isArray(r.models)) {
           this.commands = (r.commands || []).map((c) => ({ name: c.name, description: c.description || '' }));
-          this.models = r.models.map((x) => ({ value: x.value, label: x.displayName || x.value, resolved: x.resolvedModel || null, description: x.description || '', efforts: x.supportsEffort ? x.supportedEffortLevels || [] : [] }));
+          this.models = r.models.map((x) => ({
+            value: x.value,
+            label: x.displayName || x.value,
+            resolved: x.resolvedModel || null,
+            description: x.description || '',
+            efforts: x.supportsEffort ? x.supportedEffortLevels || [] : [],
+          }));
           const current = this.models.find((x) => x.value === (this.model || 'default'));
           if (current?.resolved) this.resolvedModel = current.resolved;
           this.emitEvent('models', {});
@@ -304,7 +330,11 @@ export class ClaudeAgent extends EventEmitter {
       case 'rate_limit_event': {
         const info = m.rate_limit_info || {};
         if (info.status && !/^allowed/.test(info.status)) {
-          this.emitEvent('account', { state: 'rate_limited', resetsAt: info.resetsAt ? info.resetsAt * 1000 : null, detail: `Usage limit reached (${info.rateLimitType || 'limit'}).` });
+          this.emitEvent('account', {
+            state: 'rate_limited',
+            resetsAt: info.resetsAt ? info.resetsAt * 1000 : null,
+            detail: `Usage limit reached (${info.rateLimitType || 'limit'}).`,
+          });
         }
         break;
       }
@@ -313,7 +343,10 @@ export class ClaudeAgent extends EventEmitter {
         if (m.parent_tool_use_id) break;
         const msg = m.message || {};
         if (m.error === 'authentication_failed' || m.error === 'billing_error') {
-          this.emitEvent('account', { state: 'no_access', detail: m.error === 'billing_error' ? 'Billing problem: plan inactive or no credit.' : 'Authentication failed: sign in again.' });
+          this.emitEvent('account', {
+            state: 'no_access',
+            detail: m.error === 'billing_error' ? 'Billing problem: plan inactive or no credit.' : 'Authentication failed: sign in again.',
+          });
         } else if (m.error === 'rate_limit') {
           this.emitEvent('account', { state: 'rate_limited', detail: 'Usage limit reached.' });
         }
@@ -348,7 +381,10 @@ export class ClaudeAgent extends EventEmitter {
           this.cachedTokens += u.cache_read_input_tokens || 0;
           this.emitEvent('usage', { tokens: this.tokens });
         }
-        if (m.is_error && /invalid api key|please run \/login|not logged in|oauth token|credit balance|billing|subscription/i.test(String(m.result || ''))) {
+        if (
+          m.is_error &&
+          /invalid api key|please run \/login|not logged in|oauth token|credit balance|billing|subscription/i.test(String(m.result || ''))
+        ) {
           this.emitEvent('account', { state: 'no_access', detail: String(m.result).slice(0, 200) });
         } else if (!m.is_error) {
           this.emitEvent('account', { state: 'ok' });

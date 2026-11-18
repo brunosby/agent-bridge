@@ -149,7 +149,8 @@ export function loadConversation(logsDir, id) {
     events.push({ seq: ++lastSeq, at: lastAt, kind, requestId, decision: 'cancelled', action: 'cancelled' });
   }
   for (const [agent, open] of Object.entries(openTurn)) {
-    if (open) events.push({ seq: ++lastSeq, at: lastAt, agent, kind: 'turnEnd', text: '', ok: false, detail: 'stopped when the app was closed' });
+    if (open)
+      events.push({ seq: ++lastSeq, at: lastAt, agent, kind: 'turnEnd', text: '', ok: false, detail: 'stopped when the app was closed' });
   }
   return { ...summary, events, lastSeq };
 }

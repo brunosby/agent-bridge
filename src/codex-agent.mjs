@@ -283,7 +283,9 @@ export class CodexAgent extends EventEmitter {
         matchText: isCommand ? String(p.command || '') : '',
         cwd: p.cwd || undefined,
         // Files this patch deletes (fileChange items are announced before their approval request).
-        deletePaths: isCommand ? [] : (this.fileChanges.get(p.itemId) || []).filter((c) => /delete/i.test(JSON.stringify(c.kind))).map((c) => c.path),
+        deletePaths: isCommand
+          ? []
+          : (this.fileChanges.get(p.itemId) || []).filter((c) => /delete/i.test(JSON.stringify(c.kind))).map((c) => c.path),
         detail: [p.command && `$ ${p.command}`, p.cwd && `in ${p.cwd}`, p.reason, p.grantRoot && `write access to ${p.grantRoot}`]
           .filter(Boolean)
           .join('\n'),
@@ -319,7 +321,11 @@ export class CodexAgent extends EventEmitter {
           this.emitEvent('tool', { key: it.id, title: 'shell', detail: clip(it.command, 300) });
         } else if (it.type === 'fileChange') {
           this.fileChanges.set(it.id, it.changes || []);
-          this.emitEvent('tool', { key: it.id, title: 'edit', detail: (it.changes || []).map((c) => `${c.kind?.type || c.kind || ''} ${c.path}`).join('\n') });
+          this.emitEvent('tool', {
+            key: it.id,
+            title: 'edit',
+            detail: (it.changes || []).map((c) => `${c.kind?.type || c.kind || ''} ${c.path}`).join('\n'),
+          });
         } else if (it.type === 'mcpToolCall') {
           this.emitEvent('tool', { key: it.id, title: `${it.server}.${it.tool}`, detail: clip(JSON.stringify(it.arguments), 200) });
         } else if (it.type === 'webSearch') {
@@ -335,7 +341,11 @@ export class CodexAgent extends EventEmitter {
           this.emitEvent('text', { key: it.id, text: it.text || '', final: true });
         } else if (it.type === 'commandExecution') {
           const ok = it.exitCode === 0 || it.exitCode === null;
-          this.emitEvent('toolResult', { key: it.id, ok, detail: ok ? undefined : `exit ${it.exitCode}\n${clip(it.aggregatedOutput || '', 400)}` });
+          this.emitEvent('toolResult', {
+            key: it.id,
+            ok,
+            detail: ok ? undefined : `exit ${it.exitCode}\n${clip(it.aggregatedOutput || '', 400)}`,
+          });
         } else if (it.type === 'fileChange' || it.type === 'mcpToolCall' || it.type === 'webSearch') {
           this.emitEvent('toolResult', { key: it.id, ok: !/fail|declin/i.test(String(it.status)) });
         }
@@ -353,7 +363,10 @@ export class CodexAgent extends EventEmitter {
         this.emitEvent('turnEnd', {
           text,
           ok: turn.status === 'completed',
-          detail: turn.status !== 'completed' ? `${turn.status}${turn.error ? `: ${turn.error.message || JSON.stringify(turn.error)}` : ''}` : undefined,
+          detail:
+            turn.status !== 'completed'
+              ? `${turn.status}${turn.error ? `: ${turn.error.message || JSON.stringify(turn.error)}` : ''}`
+              : undefined,
         });
         this.emitEvent('status', { busy: this.busy });
         if (this.queue.length) this.flush();
@@ -366,7 +379,11 @@ export class CodexAgent extends EventEmitter {
         const full = windows.find((w) => w.usedPercent >= 100);
         if (rl.rateLimitReachedType || full) {
           const resets = (full || windows[0])?.resetsAt;
-          this.emitEvent('account', { state: 'rate_limited', resetsAt: resets ? resets * 1000 : null, detail: 'Codex usage limit reached.' });
+          this.emitEvent('account', {
+            state: 'rate_limited',
+            resetsAt: resets ? resets * 1000 : null,
+            detail: 'Codex usage limit reached.',
+          });
         }
         break;
       }
@@ -383,11 +400,14 @@ export class CodexAgent extends EventEmitter {
         break;
       }
 
-      case 'error': {
-        const info = p.error?.codexErrorInfo;
-        if (info === 'unauthorized') this.emitEvent('account', { state: 'no_access', detail: p.error?.message || 'Codex is not authorized: sign in again.' });
-        else if (!p.willRetry && (info === 'rateLimitExceeded' || info === 'usageLimitExceeded')) this.emitEvent('account', { state: 'rate_limited', detail: p.error?.message || 'Codex usage limit reached.' });
-      }
+      case 'error':
+        {
+          const info = p.error?.codexErrorInfo;
+          if (info === 'unauthorized')
+            this.emitEvent('account', { state: 'no_access', detail: p.error?.message || 'Codex is not authorized: sign in again.' });
+          else if (!p.willRetry && (info === 'rateLimitExceeded' || info === 'usageLimitExceeded'))
+            this.emitEvent('account', { state: 'rate_limited', detail: p.error?.message || 'Codex usage limit reached.' });
+        }
         this.emitEvent('error', { text: `Codex error${p.willRetry ? ' (retrying)' : ''}: ${p.error?.message || JSON.stringify(p.error)}` });
         break;
 

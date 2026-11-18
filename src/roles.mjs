@@ -11,7 +11,10 @@ import path from 'node:path';
 export function loadRoles(dir) {
   const roles = {};
   if (!fs.existsSync(dir)) return roles;
-  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.json')).sort()) {
+  for (const f of fs
+    .readdirSync(dir)
+    .filter((n) => n.endsWith('.json'))
+    .sort()) {
     try {
       const r = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
       if (!r.id || !r.name) continue;
