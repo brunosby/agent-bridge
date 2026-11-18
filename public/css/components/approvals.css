@@ -54,8 +54,6 @@
 }
 
 /* Phones: action buttons take the full width, easier to tap. */
-@media (max-width: 639px) {
-  .approval .actions button {
-    flex: 1 1 100%;
-  }
+.approval .actions button {
+  flex: 1 1 100%;
 }

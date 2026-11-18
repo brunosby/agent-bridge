@@ -3,11 +3,12 @@
  * Cascade layers keep specificity predictable: later layers win regardless of selector weight.
  *   tokens     design tokens (custom properties): colours, spacing, type, radius
  *   base       reset and element defaults
- *   layout     the app shell (header, conversation, pending tray, composer) and breakpoints
+ *   layout     the app shell (header, conversation, pending tray, composer)
  *   components reusable blocks (buttons, forms, agent cards, messages, approvals, dialogs)
+ *   responsive viewport adaptations for the shell and components
  *   utilities  single-purpose helpers
  */
-@layer tokens, base, layout, components, utilities;
+@layer tokens, base, layout, components, responsive, utilities;
 
 @import url('tokens.css') layer(tokens);
 @import url('base.css') layer(base);
@@ -18,4 +19,5 @@
 @import url('components/messages.css') layer(components);
 @import url('components/approvals.css') layer(components);
 @import url('components/dialogs.css') layer(components);
+@import url('responsive.css') layer(responsive);
 @import url('utilities.css') layer(utilities);

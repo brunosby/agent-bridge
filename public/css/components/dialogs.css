@@ -157,28 +157,3 @@
 .cmd code {
   overflow-wrap: anywhere;
 }
-
-/* From tablets up: centred window instead of full screen. */
-@media (min-width: 640px) {
-  .dialog {
-    width: min(860px, 94vw);
-    height: auto;
-    max-height: 86vh;
-    margin: auto;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-xl);
-  }
-
-  .dialog--narrow {
-    width: min(560px, 94vw);
-  }
-
-  .tabs {
-    order: 0;
-    width: auto;
-  }
-
-  .tab {
-    flex: none;
-  }
-}

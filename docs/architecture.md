@@ -33,8 +33,8 @@ The code follows a "ports and adapters" layout: the core does not know how provi
 ## Page
 
 - ES modules loaded natively by the browser (`<script type="module">`), no bundler.
-- CSS uses cascade layers in this order: `tokens` (custom properties, light and dark theme), `base`, `layout` (app shell and breakpoints at 640 px and 1024 px), `components` (buttons, forms, agent card, messages, approvals, dialogs), `utilities`.
-- Mobile first: on phones the relay controls fold behind **Controls**, agent cards open on tap, and dialogs go full screen.
+- CSS uses cascade layers in this order: `tokens` (custom properties for light and dark themes), `base`, `layout` (app shell), `components`, `responsive` (viewport breakpoints), and `utilities`.
+- Viewport breakpoints live in `public/css/responsive.css`. At 640 px and wider, dialogs are centred and approval buttons can share a row. At 900 px and wider, the team, routing and usage appear in a sidebar. Below 900 px, the **Workspace** button opens that panel. At 550 px in height and below, the page can scroll to keep the conversation and composer reachable.
 
 ## Tests
 
