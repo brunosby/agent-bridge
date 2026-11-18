@@ -36,5 +36,6 @@ End If
 logDir = dir & "\logs"
 If Not fso.FolderExists(logDir) Then fso.CreateFolder logDir
 
-cmd = "cmd /d /c node """ & dir & "\src\server.mjs""" & args & " --hidden >> """ & logDir & "\server.log"" 2>&1"
+' Run node directly (hidden). The server writes logs\server.log itself (--log-file).
+cmd = "node """ & dir & "\src\server.mjs""" & args & " --hidden --log-file """ & logDir & "\server.log"""
 sh.Run cmd, 0, False

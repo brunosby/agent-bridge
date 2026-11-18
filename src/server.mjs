@@ -22,6 +22,24 @@ const DONE_MARKER = /^\s*\[\[DONE\]\]\s*$/m;
 
 // ---------- configuration ----------
 const argv = parseArgs(process.argv.slice(2));
+
+// --log-file: write console output to a file ourselves. Shell redirection (cmd ">>") locks the file,
+// so a restarted process could not write to it.
+if (argv['log-file']) {
+  const logPath = path.resolve(String(argv['log-file']));
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  const fd = fs.openSync(logPath, 'a');
+  const write = (...parts) => {
+    try {
+      fs.writeSync(fd, `${parts.map((p) => (typeof p === 'string' ? p : p instanceof Error ? p.stack : JSON.stringify(p))).join(' ')}\n`);
+    } catch {
+      // never let logging break the app
+    }
+  };
+  console.log = write;
+  console.error = write;
+  write(`--- ${new Date().toISOString()} start (pid ${process.pid}) ---`);
+}
 const configPath = path.resolve(argv.config || path.join(APP_DIR, 'config.json'));
 if (argv.logs) LOGS_DIR = path.resolve(argv.logs);
 let config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
@@ -1011,12 +1029,21 @@ async function restartServer() {
   for (const [k, v] of Object.entries(argv)) if (!skip.has(k)) keep.push(`--${k}`, ...(v === true ? [] : [String(v)]));
   const childArgs = [path.join(APP_DIR, 'src', 'server.mjs'), ...keep, '--resume', conv.id, '--port', String(server.address().port), '--no-open', '--wait-port'];
   await closeConversation();
-  await new Promise((r) => server.close(() => r()));
+  // End the open event streams first: server.close() waits for every connection, and a browser tab
+  // keeps its event stream open, so closing before ending them never finished.
   for (const res of clients) res.end();
-  const logFile = path.join(LOGS_DIR, 'server.log');
-  fs.mkdirSync(LOGS_DIR, { recursive: true });
-  const out = fs.openSync(logFile, 'a');
-  const child = spawn(process.execPath, childArgs, { cwd: process.cwd(), detached: true, windowsHide: true, stdio: ['ignore', out, out] });
+  clients.clear();
+  server.closeAllConnections?.();
+  await new Promise((r) => {
+    const t = setTimeout(r, 3000);
+    server.close(() => {
+      clearTimeout(t);
+      r();
+    });
+  });
+  // The new process writes its own log (--log-file); without one, use the app's logs/server.log.
+  if (!argv['log-file']) childArgs.push('--log-file', path.join(APP_DIR, 'logs', 'server.log'));
+  const child = spawn(process.execPath, childArgs, { cwd: process.cwd(), detached: true, windowsHide: true, stdio: 'ignore' });
   child.unref();
   setTimeout(() => process.exit(0), 200);
 }
