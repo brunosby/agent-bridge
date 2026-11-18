@@ -5,7 +5,7 @@
   width: min(100%, var(--content-max));
   border: 1px solid var(--color-border);
   border-left: 3px solid var(--accent);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--color-surface);
 }
 
@@ -42,13 +42,23 @@
 }
 
 .msg.user {
-  --accent: var(--color-success);
+  --accent: var(--color-workspace-accent);
   align-self: flex-end;
   width: fit-content;
   max-width: min(92%, var(--content-max));
   border-inline-width: 1px 3px;
   border-inline-color: var(--color-border) var(--accent);
-  background: var(--color-success-bg);
+  background: color-mix(in srgb, var(--accent) 14%, var(--color-surface));
+}
+
+.msg.user .who {
+  color: var(--color-text);
+}
+
+.msg.agent {
+  width: fit-content;
+  min-width: min(16rem, 100%);
+  max-width: 100%;
 }
 
 .msg.streaming .body::after {

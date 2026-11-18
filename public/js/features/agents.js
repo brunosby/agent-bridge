@@ -20,7 +20,7 @@ export function renderState() {
     }
   }
   for (const a of store.state.team) renderCard(a);
-  // Preserve focus and horizontal scroll when state updates without changing team order.
+  // Preserve focus when state updates without changing team order.
   for (const [index, id] of ids.entries()) {
     const card = cards[id].el;
     if (box.children[index] !== card) box.insertBefore(card, box.children[index] || null);
@@ -33,16 +33,8 @@ export function renderState() {
   pill.textContent = r.halted ? `paused · ${r.hops}/${r.maxHops}` : `hops ${r.hops}/${r.maxHops}`;
   pill.classList.toggle('halted', r.halted);
   // Nobody can edit files: say so before the user asks for a change.
-  const editors = store.state.team.filter((a) => roleOf(a.role)?.canEdit === 'all');
-  let noEd = $('noEditor');
-  if (!noEd) {
-    noEd = h('div', 'warning-box');
-    noEd.id = 'noEditor';
-    $('agents').parentElement.after(noEd);
-  }
-  noEd.textContent =
-    'No agent in this team can edit code (all roles are read-only or tests-only). Agents will only plan and review; add a Coder for changes.';
-  noEd.hidden = editors.length > 0 || !store.catalog.roles.length;
+  const hasEditor = store.state.team.some((a) => roleOf(a.role)?.canEdit === 'all');
+  $('noEditor').hidden = hasEditor || !store.catalog.roles.length;
 
   const tok = $('tokens');
   tok.textContent = `${fmtTokens(store.state.totalTokens)} new tokens${store.state.tokenLimit ? ` / ${fmtTokens(store.state.tokenLimit)}` : ''} · ${fmtTokens(store.state.totalCachedTokens || 0)} cached`;

@@ -89,8 +89,8 @@ $('quitApp').onclick = async () => {
     '<div class="closed-page"><h2>Agent Bridge is closed</h2><p>Start it again with <code>Agent Bridge.vbs</code>. Conversations can be restored from the Conversations button.</p></div>';
 };
 
-// Small screens: the relay controls are folded behind a "Controls" button.
+// Small screens: the Workspace button toggles the side panel.
 $('toggleControls').onclick = () => {
-  const open = document.querySelector('.app-header').classList.toggle('is-open');
+  const open = document.querySelector('.app').classList.toggle('is-open');
   $('toggleControls').setAttribute('aria-expanded', String(open));
 };

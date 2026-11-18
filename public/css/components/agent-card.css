@@ -2,15 +2,11 @@
 .card {
   --accent: var(--color-text-muted);
   display: grid;
-  flex: none;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 0 var(--space-2);
   min-height: 2.75rem;
-  max-width: min(22rem, 100%);
   padding: var(--space-1) var(--space-2);
-  scroll-snap-align: start;
-  scroll-margin-inline: var(--space-1);
   text-align: start;
   border-inline-start: 3px solid var(--accent);
   background: var(--color-surface-2);

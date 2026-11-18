@@ -64,11 +64,6 @@ label.inline {
   font-size: var(--text-sm);
 }
 
-/* Warning shown above the conversation when nobody in the team can edit code. */
-#noEditor {
-  margin: 0;
-}
-
 .list {
   display: flex;
   flex-direction: column;

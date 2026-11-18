@@ -14,7 +14,7 @@
       <header class="app-header">
         <div class="toolbar">
           <h1 class="brand">Agent Bridge</h1>
-          <button id="toggleControls" class="btn toolbar__toggle" aria-expanded="false" aria-controls="relayControls">Controls</button>
+          <button id="toggleControls" class="btn toolbar__toggle" aria-expanded="false" aria-controls="workspacePanel">Workspace</button>
           <nav class="toolbar__group" aria-label="Workspace">
             <button id="openConversations" class="btn" title="Restore an earlier conversation or start a new one">Conversations</button>
             <button id="openSettings" class="btn" title="General settings, accounts and roles">Settings</button>
@@ -26,47 +26,60 @@
               </div>
             </details>
           </nav>
-          <div id="relayControls" class="toolbar__group toolbar__group--end controls" role="group" aria-label="Relay">
-            <label class="field-inline" title="How replies move between agents">
-              Routing
-              <select id="routing"></select>
-            </label>
+        </div>
+      </header>
+
+      <aside id="workspacePanel" class="workspace-panel" aria-label="Workspace controls">
+        <section class="workspace-panel__section" aria-labelledby="teamTitle">
+          <h2 id="teamTitle">Team</h2>
+          <div class="team-bar">
+            <section id="agents" class="agents" aria-label="Agents"></section>
+            <button id="addAgent" class="btn add-agent">+ Add agent</button>
+          </div>
+        </section>
+        <section class="workspace-panel__section" aria-labelledby="routingTitle">
+          <h2 id="routingTitle">Routing</h2>
+          <div id="relayControls" class="relay-settings" role="group" aria-label="Relay">
+            <select id="routing" aria-label="Routing mode" title="How replies move between agents"></select>
             <label class="field-inline" title="Forward replies between agents automatically">
               <input type="checkbox" id="auto" /> Auto-relay
             </label>
             <label class="field-inline" title="Maximum agent-to-agent hand-offs before the relay pauses">
               Max hops <input type="number" id="maxHops" min="0" max="500" />
             </label>
-            <span id="tokens" class="pill" title="Tokens used by all agents in this conversation"></span>
-            <span id="relayState" class="pill"></span>
-            <button id="resume" class="btn" title="Reset the hop counter and resume the relay">Resume</button>
-            <button id="pause" class="btn">Pause</button>
-            <button id="stopAll" class="btn btn--danger" title="Interrupt every agent and pause the relay">Stop all</button>
           </div>
+        </section>
+        <section class="workspace-panel__section" aria-labelledby="usageTitle">
+          <h2 id="usageTitle">Usage</h2>
+          <span id="tokens" class="pill" title="Tokens used by all agents in this conversation"></span>
+        </section>
+      </aside>
+      <section class="conversation-bar" aria-labelledby="conversationTitle">
+        <div class="conversation-bar__title">
+          <h2 id="conversationTitle">Conversation</h2>
+          <span id="relayState" class="pill"></span>
         </div>
-        <div class="team-bar">
-          <section id="agents" class="agents" aria-label="Agents"></section>
-          <button id="addAgent" class="btn add-agent">+ Add agent</button>
+        <div class="conversation-bar__actions" role="group" aria-label="Session actions">
+          <button id="resume" class="btn" title="Reset the hop counter and resume the relay">Resume</button>
+          <button id="pause" class="btn">Pause</button>
+          <button id="stopAll" class="btn btn--danger" title="Interrupt every agent and pause the relay">Stop all</button>
         </div>
-      </header>
-
+      </section>
       <main id="log" class="log" aria-live="polite" aria-label="Conversation"></main>
 
       <section id="pending" class="pending" aria-live="assertive" aria-label="Waiting for you" hidden></section>
 
       <footer class="composer">
+        <p id="noEditor" class="warning-box composer__notice" hidden>
+          No agent on this team can edit code. Add a Coder to make code changes.
+        </p>
         <label class="composer__target" for="target">
           Send to
           <select id="target" title="Who receives your message"></select>
         </label>
         <label class="visually-hidden" for="input">Message</label>
-        <textarea
-          id="input"
-          class="composer__input"
-          rows="3"
-          placeholder="Message the agents... Use @Name to address one. (Ctrl+Enter to send)"
-        ></textarea>
-        <button id="send" class="btn btn--primary composer__send">Send</button>
+        <textarea id="input" class="composer__input" rows="3" placeholder="Write a message… Use @Name to address an agent."></textarea>
+        <button id="send" class="btn btn--primary composer__send" title="Ctrl+Enter to send">Send</button>
       </footer>
     </div>
 
