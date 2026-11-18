@@ -1,0 +1,21 @@
+/*
+ * Agent Bridge styles.
+ * Cascade layers keep specificity predictable: later layers win regardless of selector weight.
+ *   tokens     design tokens (custom properties): colours, spacing, type, radius
+ *   base       reset and element defaults
+ *   layout     the app shell (header, conversation, pending tray, composer) and breakpoints
+ *   components reusable blocks (buttons, forms, agent cards, messages, approvals, dialogs)
+ *   utilities  single-purpose helpers
+ */
+@layer tokens, base, layout, components, utilities;
+
+@import url('tokens.css') layer(tokens);
+@import url('base.css') layer(base);
+@import url('layout.css') layer(layout);
+@import url('components/buttons.css') layer(components);
+@import url('components/forms.css') layer(components);
+@import url('components/agent-card.css') layer(components);
+@import url('components/messages.css') layer(components);
+@import url('components/approvals.css') layer(components);
+@import url('components/dialogs.css') layer(components);
+@import url('utilities.css') layer(utilities);

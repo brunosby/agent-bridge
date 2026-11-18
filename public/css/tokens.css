@@ -1,0 +1,84 @@
+/* Design tokens. Components use these variables only, never raw values. */
+:root {
+  /* surfaces and text (dark theme by default) */
+  --color-bg: #15171c;
+  --color-surface: #1d2027;
+  --color-surface-2: #252932;
+  --color-code: #111317;
+  --color-border: #323744;
+  --color-text: #e6e8ee;
+  --color-text-muted: #9097a6;
+
+  /* status */
+  --color-success: #7bc47f;
+  --color-success-bg: #1f2a22;
+  --color-success-border: #3d7a4b;
+  --color-primary: #2f5d3a;
+  --color-danger: #e06464;
+  --color-danger-soft: #f3a3a3;
+  --color-danger-border: #7a3d3d;
+  --color-warning: #f0c36a;
+  --color-warning-bg: #2a2416;
+  --color-warning-tray: #221d12;
+  --color-warning-border: #8a6d2f;
+  --color-alert: #ff9c7a;
+
+  /* one accent per provider */
+  --color-claude: #e08a5a;
+  --color-codex: #5aa7e0;
+  --color-opencode: #b48ae0;
+  --color-fake: #9097a6;
+
+  /* type */
+  --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 0.875rem;
+  --text-lg: 1rem;
+  --leading: 1.5;
+
+  /* spacing scale */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+
+  /* shape and depth */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-pill: 999px;
+  --shadow-dialog: 0 12px 40px rgb(0 0 0 / 0.45);
+
+  /* sizes */
+  --content-max: 920px;
+  --indent-peer: 2.5rem;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --color-bg: #f6f7f9;
+    --color-surface: #ffffff;
+    --color-surface-2: #eef0f4;
+    --color-code: #f0f2f5;
+    --color-border: #d6dae2;
+    --color-text: #1d2129;
+    --color-text-muted: #5d6573;
+    --color-success: #2e7d32;
+    --color-success-bg: #eaf6ec;
+    --color-success-border: #9bd1a1;
+    --color-primary: #2e7d32;
+    --color-danger: #c62828;
+    --color-danger-soft: #c62828;
+    --color-danger-border: #e8a3a3;
+    --color-warning: #8a5a00;
+    --color-warning-bg: #fff6df;
+    --color-warning-tray: #fff9ec;
+    --color-warning-border: #e3c27a;
+    --color-alert: #b3471f;
+    --shadow-dialog: 0 12px 40px rgb(0 0 0 / 0.18);
+  }
+}

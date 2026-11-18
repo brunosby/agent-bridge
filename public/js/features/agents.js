@@ -1,0 +1,253 @@
+// Header: agent cards (role, model, effort, bypass), relay status and the message target menu.
+import { $, fmtTokens, h } from '../core/dom.js';
+import { agentOf, cards, roleOf, store } from '../core/store.js';
+import { openAddDialog } from './add-agent.js';
+import { updatePending } from './approvals.js';
+import { api } from '../core/api.js';
+import { addSys } from './conversation-log.js';
+export function renderState() {
+  const box = $('agents');
+  const ids = store.state.team.map((a) => a.id);
+  for (const id of Object.keys(cards)) {
+    if (!ids.includes(id)) {
+      cards[id].el.remove();
+      delete cards[id];
+    }
+  }
+  for (const a of store.state.team) renderCard(a);
+  // keep card order and the add button last
+  for (const id of ids) box.appendChild(cards[id].el);
+  let add = $('addAgent');
+  if (!add) {
+    add = h('button', 'add-agent', '+ Add agent');
+    add.id = 'addAgent';
+    add.onclick = openAddDialog;
+  }
+  box.appendChild(add);
+
+  const r = store.state.relay;
+  $('auto').checked = r.auto;
+  if (document.activeElement !== $('maxHops')) $('maxHops').value = r.maxHops;
+  const pill = $('relayState');
+  pill.textContent = r.halted ? `paused · ${r.hops}/${r.maxHops}` : `hops ${r.hops}/${r.maxHops}`;
+  pill.classList.toggle('halted', r.halted);
+  // Nobody can edit files: say so before the user asks for a change.
+  const editors = store.state.team.filter((a) => roleOf(a.role)?.canEdit === 'all');
+  let noEd = $('noEditor');
+  if (!noEd) {
+    noEd = h('div', 'warning-box');
+    noEd.id = 'noEditor';
+    $('agents').after(noEd);
+  }
+  noEd.textContent =
+    'No agent in this team can edit code (all roles are read-only or tests-only). Agents will only plan and review; add a Coder for changes.';
+  noEd.hidden = editors.length > 0 || !store.catalog.roles.length;
+
+  const tok = $('tokens');
+  tok.textContent = `${fmtTokens(store.state.totalTokens)} new tokens${store.state.tokenLimit ? ` / ${fmtTokens(store.state.tokenLimit)}` : ''} · ${fmtTokens(store.state.totalCachedTokens || 0)} cached`;
+  tok.title =
+    'New tokens = input, output and cache writes (what the token limit counts). Cached = tokens read from the prompt cache, which cost much less.';
+  tok.classList.toggle('halted', Boolean(store.state.tokenLimit && store.state.totalTokens >= store.state.tokenLimit));
+  if (document.activeElement !== $('routing')) $('routing').value = store.state.routingMode;
+  renderTargets();
+  updatePending();
+}
+
+export function renderTargets() {
+  const t = $('target');
+  if (document.activeElement === t) return;
+  const prev = t.value;
+  t.textContent = '';
+  const mode = store.catalog.routingModes.find((m) => m.id === store.state.routingMode);
+  const orch = store.state.team.find((a) => a.role === 'orchestrator') || store.state.team[0];
+  const autoLabel =
+    store.state.routingMode === 'orchestrator'
+      ? `Auto (${orch?.name || 'orchestrator'})`
+      : `Auto (${store.state.team[0]?.name || 'first agent'})`;
+  t.appendChild(new Option(autoLabel, 'auto'));
+  for (const a of store.state.team) t.appendChild(new Option(a.name, a.id));
+  t.appendChild(new Option('All agents', 'all'));
+  t.title = mode ? `Routing: ${mode.label}. @Name in the message also picks the agent.` : '';
+  t.value = [...t.options].some((o) => o.value === prev) ? prev : 'auto';
+}
+
+export function renderCard(a) {
+  let c = cards[a.id];
+  if (!c) {
+    const el = h('div', 'card');
+    const top = h('div', 'card-top');
+    const dot = h('span', 'dot');
+    const name = h('button', 'name');
+    name.type = 'button';
+    name.title = 'Show or hide the settings of this agent (small screens)';
+    name.setAttribute('aria-expanded', 'false');
+    name.onclick = () => name.setAttribute('aria-expanded', String(el.classList.toggle('is-open')));
+    const drv = h('span', 'badge');
+    const status = h('span', 'status');
+    const tokens = h('span', 'tok');
+    const stop = h('button', 'mini', 'Stop');
+    stop.onclick = () => api('interrupt', { agent: a.id }).catch((e) => addSys(e.message, true));
+    const retry = h('button', 'mini', 'Retry');
+    retry.onclick = () => api('retry', { agent: a.id }).catch((e) => addSys(e.message, true));
+    const remove = h('button', 'mini danger', '✕');
+    remove.title = 'Remove this agent from the conversation';
+    remove.onclick = () => {
+      if (confirm(`Remove ${a.name} from the conversation?`)) api('removeAgent', { agent: a.id }).catch((e) => alert(e.message));
+    };
+    top.append(dot, name, drv, status, tokens, stop, retry, remove);
+
+    const row = h('div', 'card-row');
+    const role = h('select', 'role');
+    role.title = 'Role of this agent';
+    role.onchange = () =>
+      api('role', { agent: a.id, role: role.value })
+        .then(() => role.blur())
+        .catch((e) => addSys(e.message, true));
+    const model = h('select', 'model');
+    model.title = 'Model (list from your account). ★ recommended for the role · ⚠ may use your data';
+    model.onchange = () =>
+      api('model', { agent: a.id, model: model.value })
+        .then(() => model.blur())
+        .catch((e) => {
+          addSys(`Model change failed: ${e.message}`, true);
+          model.dataset.sig = '';
+          renderCard(agentOf(a.id));
+        });
+    const effort = h('select', 'effort');
+    effort.title = 'Reasoning effort (only the levels this model supports)';
+    effort.onchange = () =>
+      api('effort', { agent: a.id, effort: effort.value })
+        .then(() => effort.blur())
+        .catch((e) => {
+          addSys(`Effort change failed: ${e.message}`, true);
+          effort.dataset.sig = '';
+          renderCard(agentOf(a.id));
+        });
+    const bypassLabel = h('label', 'bypass');
+    bypassLabel.title = 'Approve requests automatically, except destructive actions and deletions outside the project folder';
+    const bypass = h('input');
+    bypass.type = 'checkbox';
+    bypass.onchange = () => api('bypass', { agent: a.id, on: bypass.checked }).catch((e) => addSys(e.message, true));
+    bypassLabel.append(bypass, document.createTextNode(' Bypass'));
+    row.append(role, model, effort, bypassLabel);
+
+    const rec = h('div', 'rec');
+    const warn = h('div', 'card-warn');
+    el.append(top, row, rec, warn);
+    c = cards[a.id] = { el, dot, name, drv, status, tokens, stop, retry, role, model, effort, bypass, rec, warn };
+  }
+  const isOpen = c.el.classList.contains('is-open');
+  c.el.className = `card${isOpen ? ' is-open' : ''} drv-${a.driver}${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${a.bypass ? ' bypass-on' : ''}${!a.available || a.account ? ' unavailable' : ''}`;
+  c.name.textContent = a.name;
+  c.drv.textContent = a.driverLabel;
+  c.el.title = `${a.sessionId ? `Session: ${a.sessionId}` : 'No session yet'}${a.worktree ? `\nWorktree: ${a.cwd} (branch ${a.worktree.branch})` : ''}`;
+  c.status.textContent = !a.available
+    ? 'unavailable'
+    : a.account
+      ? a.account.state === 'rate_limited'
+        ? 'usage limit'
+        : 'no access'
+      : a.waitingApproval
+        ? 'waiting for approval'
+        : a.busy
+          ? 'working'
+          : 'idle';
+  c.tokens.textContent = `${fmtTokens(a.tokens)} tok${a.cachedTokens ? ` (+${fmtTokens(a.cachedTokens)} cache)` : ''}`;
+  c.stop.disabled = !a.busy;
+  c.retry.hidden = a.available;
+  c.bypass.checked = a.bypass;
+
+  // role select
+  if (document.activeElement !== c.role) {
+    const sig = JSON.stringify([a.role, store.catalog.roles.map((r) => r.id)]);
+    if (c.role.dataset.sig !== sig) {
+      c.role.dataset.sig = sig;
+      c.role.textContent = '';
+      for (const r of store.catalog.roles) {
+        const o = new Option(r.name, r.id);
+        o.title = r.summary;
+        c.role.appendChild(o);
+      }
+      c.role.value = a.role;
+    }
+  }
+  const role = roleOf(a.role);
+  c.rec.textContent = role?.recommended?.label ? `Recommended for ${role.name}: ${role.recommended.label}` : '';
+
+  // model select
+  if (document.activeElement !== c.model) {
+    const sig = JSON.stringify([a.model, a.resolvedModel, a.available, a.models.map((m) => [m.value, m.disabled, m.recommended])]);
+    if (c.model.dataset.sig !== sig) {
+      c.model.dataset.sig = sig;
+      c.model.textContent = '';
+      const def = a.models.find((m) => m.value === 'default' || m.isDefault);
+      const defName = def ? def.resolved || def.label || def.value : a.model === 'default' ? a.resolvedModel : null;
+      c.model.appendChild(new Option(`Default${defName ? ` (${defName})` : ''}`, 'default'));
+      const sorted = a.models
+        .filter((m) => m.value !== 'default')
+        .sort((x, y) => Number(x.disabled) - Number(y.disabled) || Number(y.recommended) - Number(x.recommended));
+      for (const m of sorted) {
+        const name = m.label && m.label !== m.value ? `${m.label} · ${m.value}` : m.value;
+        const o = new Option(`${m.recommended ? '★ ' : ''}${m.sensitive ? '⚠ ' : ''}${name}${m.disabled ? ' (unavailable)' : ''}`, m.value);
+        o.disabled = m.disabled;
+        o.title = [
+          m.description,
+          m.disabledReason,
+          m.sensitive ? 'Free/stealth model: your prompts may be used to train it. Avoid sensitive code.' : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+        c.model.appendChild(o);
+      }
+      if (!a.models.length)
+        c.model.appendChild(new Option(a.available ? 'Loading models…' : 'Unavailable', '', false, false)).disabled = true;
+      c.model.value = a.model;
+      c.model.disabled = !a.available;
+    }
+  }
+
+  // effort select: levels of the selected model (or of the default model)
+  const selected = a.models.find((m) => m.value === a.model) || a.models.find((m) => m.value === 'default' || m.isDefault);
+  const levels = selected?.efforts || [];
+  if (document.activeElement !== c.effort) {
+    const sig = JSON.stringify([a.effort, levels, selected?.defaultEffort]);
+    if (c.effort.dataset.sig !== sig) {
+      c.effort.dataset.sig = sig;
+      c.effort.textContent = '';
+      c.effort.appendChild(
+        new Option(
+          levels.length ? `Effort: default${selected?.defaultEffort ? ` (${selected.defaultEffort})` : ''}` : 'Effort: n/a',
+          'default',
+        ),
+      );
+      for (const l of levels) c.effort.appendChild(new Option(`Effort: ${l}`, l));
+      c.effort.value = levels.includes(a.effort) ? a.effort : 'default';
+      c.effort.disabled = !levels.length || !a.available;
+      c.effort.title = levels.length
+        ? 'Reasoning effort (only the levels this model supports)'
+        : 'This model does not expose an effort setting';
+    }
+  }
+
+  // warnings
+  const warnings = [];
+  if (!a.available)
+    warnings.push(
+      `Unavailable: ${a.unavailableReason || 'the provider did not start'}. Press Retry after fixing it (Settings > Accounts).`,
+    );
+  if (a.account)
+    warnings.push(
+      a.account.state === 'rate_limited'
+        ? `Usage limit reached${a.account.resetsAt ? ` until ${new Date(a.account.resetsAt).toLocaleString()}` : ''}.`
+        : `No access: ${a.account.detail || 'check the plan or sign in again'} (Settings > Accounts).`,
+    );
+  const current =
+    a.models.find((m) => m.value === a.model) ||
+    (a.model === 'default' ? a.models.find((m) => m.isDefault || m.value === a.resolvedModel) : null);
+  if (current?.sensitive)
+    warnings.push(
+      `⚠ ${current.label || current.value} is a free/stealth model: your prompts may be used for training. Avoid sensitive code${a.role === 'orchestrator' ? ', and remember the orchestrator sees the whole task' : ''}.`,
+    );
+  c.warn.textContent = warnings.join(' ');
+  c.warn.hidden = !warnings.length;
+}

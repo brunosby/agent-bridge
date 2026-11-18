@@ -1,0 +1,245 @@
+// Settings dialog: general settings, accounts and roles.
+import { $, h } from '../core/dom.js';
+import { store } from '../core/store.js';
+import { api } from '../core/api.js';
+import { loadCatalog } from '../main.js';
+import { addSys } from './conversation-log.js';
+export const SETTING_LABELS = {
+  userName: ['Your name', 'How the agents refer to you.'],
+  routingMode: ['Default routing', 'Used by new conversations. The header switch changes only the open one.'],
+  autoRelay: ['Auto-relay', 'Forward replies between agents automatically.'],
+  maxHops: ['Max hand-offs', 'Pause after this many agent-to-agent hand-offs (0 = never relay).'],
+  tokenLimit: ['Token limit per conversation', 'Pause hand-offs when all agents together pass this many tokens (0 = no limit).'],
+  approvalTimeoutSec: ['Approval timeout (seconds)', 'Decline an unanswered approval after this time (0 = wait forever).'],
+  bypassNewAgents: ['Bypass on for new agents', 'New agents start with bypass mode on.'],
+  warnOnExtraAgents: ['Warn about token use when adding agents', ''],
+  maxReviewRounds: [
+    'Review fix rounds',
+    'How many times the Reviewer CHANGES REQUESTED answer goes back to the coder before the orchestrator reports to you.',
+  ],
+  finalConfirmation: ['Ask me to approve the final result', 'Show Approve / Ask for changes when the orchestrator finishes.'],
+  missingRolePolicy: [
+    'When the orchestrator needs a missing role',
+    'Ask me (add the role with a recommended model, or continue with the closest agent), or always continue with the closest agent.',
+  ],
+  sensitiveModelPatterns: [
+    'Models with a data warning',
+    'One pattern per line (regex). Matching models show ⚠ and a warning about sensitive code.',
+  ],
+  destructivePatterns: ['Destructive actions (always ask)', 'One regex per line. Bypass never approves these.'],
+  deletionPatterns: ['Deletion commands', 'One regex per line. Bypass approves them only for single files inside the project folder.'],
+  openBrowser: ['Open the browser at start', ''],
+};
+
+export function renderSettingsForm() {
+  const form = $('settingsForm');
+  form.textContent = '';
+  for (const [key, def] of Object.entries(store.catalog.settingsSchema)) {
+    const [title, hint] = SETTING_LABELS[key] || [key, ''];
+    const value = store.catalog.settings[key];
+    let input;
+    if (def.type === 'boolean') {
+      const lab = h('label', 'check');
+      input = h('input');
+      input.type = 'checkbox';
+      input.checked = Boolean(value);
+      lab.append(input, document.createTextNode(` ${title}`));
+      form.appendChild(lab);
+    } else {
+      const lab = h('label', null, title);
+      if (def.type === 'enum') {
+        input = h('select');
+        for (const v of def.values) {
+          const m = store.catalog.routingModes.find((x) => x.id === v);
+          const names = { ask: 'Ask me', closest: 'Continue with the closest agent' };
+          input.appendChild(new Option(m ? m.label : names[v] || v, v));
+        }
+        input.value = value;
+      } else if (def.type === 'list') {
+        input = h('textarea');
+        input.rows = 4;
+        input.value = (value || []).join('\n');
+      } else {
+        input = h('input');
+        input.type = def.type === 'number' ? 'number' : 'text';
+        input.value = value ?? '';
+      }
+      lab.appendChild(input);
+      form.appendChild(lab);
+    }
+    input.dataset.key = key;
+    input.dataset.type = def.type;
+    if (hint) form.appendChild(h('div', 'hint', hint));
+  }
+}
+
+$('saveSettings').onclick = async () => {
+  const out = {};
+  for (const el of $('settingsForm').querySelectorAll('[data-key]')) {
+    const t = el.dataset.type;
+    out[el.dataset.key] = t === 'boolean' ? el.checked : t === 'number' ? Number(el.value) : t === 'list' ? el.value.split('\n') : el.value;
+  }
+  out.saveTeamAsDefault = $('saveTeam').checked;
+  try {
+    const r = await api('settings', out);
+    store.catalog.settings = r.settings;
+    $('settingsMsg').textContent = 'Saved.';
+    await loadCatalog();
+  } catch (e) {
+    $('settingsMsg').textContent = `Not saved: ${e.message}`;
+  }
+};
+
+export const STATE_TEXT = {
+  ok: ['Ready', 'ok'],
+  not_installed: ['Not installed', 'bad'],
+  logged_out: ['Installed, not signed in', 'warn'],
+  no_access: ['Signed in, no access', 'bad'],
+  rate_limited: ['Usage limit reached', 'warn'],
+  unknown: ['Unknown', 'warn'],
+};
+
+export async function renderAccounts(refresh = false) {
+  const list = $('accountList');
+  list.textContent = 'Checking…';
+  try {
+    const { accounts } = await api('accounts', { refresh });
+    list.textContent = '';
+    for (const acc of accounts) {
+      const row = h('div', 'account');
+      const [text, cls] = STATE_TEXT[acc.state] || [acc.state, 'warn'];
+      const head = h('div', 'acc-head');
+      head.append(h('strong', null, acc.label), h('span', `state ${cls}`, text));
+      if (acc.version) head.appendChild(h('span', 'hint', acc.version));
+      row.appendChild(head);
+      if (acc.detail) row.appendChild(h('div', 'hint', acc.detail));
+      if (acc.next) {
+        const step = h('div', 'next');
+        step.appendChild(h('div', null, acc.next.text));
+        if (acc.next.command) {
+          const cmd = h('div', 'cmd');
+          cmd.appendChild(h('code', null, acc.next.command));
+          const copy = h('button', 'mini', 'Copy');
+          copy.onclick = () => navigator.clipboard.writeText(acc.next.command).then(() => (copy.textContent = 'Copied'));
+          cmd.appendChild(copy);
+          step.appendChild(cmd);
+        }
+        if (acc.next.docs) {
+          const a = h('a', null, 'Official instructions');
+          a.href = acc.next.docs;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          step.appendChild(a);
+        }
+        if (acc.next.action === 'login') {
+          const b = h('button', 'primary', acc.state === 'logged_out' ? 'Sign in' : 'Sign in again');
+          b.title = 'Opens a terminal window that runs the sign-in command. Finish it there, then press Check again.';
+          b.onclick = () => api('login', { driver: acc.driver }).catch((e) => alert(e.message));
+          step.appendChild(b);
+        }
+        row.appendChild(step);
+      } else if (acc.state === 'ok') {
+        const b = h('button', 'mini', 'Switch account');
+        b.onclick = () => api('login', { driver: acc.driver }).catch((e) => alert(e.message));
+        row.appendChild(b);
+      }
+      list.appendChild(row);
+    }
+  } catch (e) {
+    list.textContent = `Could not check accounts: ${e.message}`;
+  }
+}
+
+export async function renderRoles() {
+  const list = $('roleList');
+  list.textContent = 'Loading…';
+  let info = { installed: [], roles: {} };
+  try {
+    info = await api('skills');
+  } catch (e) {
+    addSys(`Could not list skills: ${e.message}`, true);
+  }
+  list.textContent = '';
+  for (const r of store.catalog.roles) {
+    const prof = info.roles[r.id] || { profile: r.profile || 'full', skillsOff: [] };
+    const row = h('div', 'account');
+    const head = h('div', 'acc-head');
+    head.append(
+      h('strong', null, r.name),
+      h('span', 'hint', r.canEdit === 'none' ? 'read-only' : r.canEdit === 'tests' ? 'edits tests only' : 'edits files'),
+    );
+    row.append(head, h('div', null, r.summary));
+    if (r.recommended?.label) row.appendChild(h('div', 'hint', `Recommended models: ${r.recommended.label}`));
+
+    // Profile: full setup or lean (no hooks), plus skills switched off for this role.
+    const pl = h('label', 'inline');
+    pl.appendChild(document.createTextNode('Profile '));
+    const ps = h('select');
+    ps.append(
+      new Option('Full (all your hooks, skills and plugins)', 'full'),
+      new Option('Lean (no hooks; skills still available)', 'lean'),
+    );
+    ps.value = prof.profile;
+    pl.appendChild(ps);
+    row.appendChild(pl);
+
+    const skillBox = h('div', 'skills');
+    const boxes = [];
+    if (info.installed.length) {
+      skillBox.appendChild(
+        h('div', 'hint', 'Skills switched off for this role (Claude and OpenCode agents; Codex has no per-session switch):'),
+      );
+      for (const name of info.installed) {
+        const l = h('label', 'check');
+        const cb = h('input');
+        cb.type = 'checkbox';
+        cb.value = name;
+        cb.checked = prof.skillsOff.includes(name);
+        l.append(cb, document.createTextNode(` ${name}`));
+        skillBox.appendChild(l);
+        boxes.push(cb);
+      }
+    } else {
+      skillBox.appendChild(h('div', 'hint', 'No installed skills found yet (the list fills in once a Claude agent has started).'));
+    }
+    row.appendChild(skillBox);
+
+    const actions = h('div', 'actions');
+    const msg = h('span', 'hint', prof.overridden ? 'Changed in Settings.' : 'Defaults from the role file.');
+    const save = h('button', 'primary', 'Save');
+    save.onclick = async () => {
+      try {
+        await api('roleProfile', { role: r.id, profile: ps.value, skillsOff: boxes.filter((b) => b.checked).map((b) => b.value) });
+        msg.textContent = 'Saved. Agents with this role pick it up (Claude restarts on the same session).';
+      } catch (e) {
+        msg.textContent = `Not saved: ${e.message}`;
+      }
+    };
+    const reset = h('button', null, 'Reset to defaults');
+    reset.onclick = async () => {
+      await api('roleProfile', { role: r.id, reset: true }).catch((e) => (msg.textContent = e.message));
+      renderRoles();
+    };
+    actions.append(msg, reset, save);
+    row.appendChild(actions);
+    list.appendChild(row);
+  }
+}
+
+export function showTab(name) {
+  for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.dataset.tab === name);
+  for (const p of ['general', 'accounts', 'roles']) $(`tab-${p}`).hidden = p !== name;
+  if (name === 'accounts') renderAccounts();
+  if (name === 'roles') renderRoles();
+}
+
+for (const t of document.querySelectorAll('.tab')) t.onclick = () => showTab(t.dataset.tab);
+$('refreshAccounts').onclick = () => renderAccounts(true);
+$('openSettings').onclick = async () => {
+  await loadCatalog();
+  renderSettingsForm();
+  $('settingsMsg').textContent = '';
+  $('saveTeam').checked = false;
+  showTab('general');
+  $('settingsDialog').showModal();
+};

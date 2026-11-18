@@ -1,0 +1,152 @@
+/* Conversation entries: message bubbles, tool lines, hand-offs, system lines and turn ends. */
+.msg {
+  --accent: var(--color-text-muted);
+  max-width: var(--content-max);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+.msg .head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-2) var(--space-3) 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.msg .who {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.msg .body {
+  padding: var(--space-1) var(--space-3) var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.msg.drv-claude {
+  --accent: var(--color-claude);
+}
+
+.msg.drv-codex {
+  --accent: var(--color-codex);
+}
+
+.msg.drv-opencode {
+  --accent: var(--color-opencode);
+}
+
+.msg.user {
+  --accent: var(--color-success);
+  align-self: flex-end;
+  background: var(--color-success-bg);
+}
+
+.msg.streaming .body::after {
+  content: '▍';
+  color: var(--color-text-muted);
+  animation: pulse 1s infinite;
+}
+
+.body p {
+  margin: 0 0 var(--space-2);
+  white-space: pre-wrap;
+}
+
+.body pre {
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-code);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.body pre code {
+  padding: 0;
+  background: none;
+}
+
+.tool,
+.sys,
+.route {
+  max-width: var(--content-max);
+  padding: 2px var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.tool {
+  --accent: var(--color-text-muted);
+  border-left: 2px solid var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool.drv-claude {
+  --accent: var(--color-claude);
+}
+
+.tool.drv-codex {
+  --accent: var(--color-codex);
+}
+
+.tool.drv-opencode {
+  --accent: var(--color-opencode);
+}
+
+.tool .status {
+  margin-right: var(--space-2);
+}
+
+.tool.ok .status {
+  color: var(--color-success);
+}
+
+.tool.fail .status {
+  color: var(--color-danger);
+}
+
+.tool .err {
+  display: block;
+  color: var(--color-danger-soft);
+}
+
+.sys.error {
+  color: var(--color-danger);
+}
+
+.route {
+  text-align: center;
+  font-style: italic;
+}
+
+.turn-end {
+  padding: 0 var(--space-3) var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.turn-end.fail {
+  color: var(--color-danger);
+}
+
+/* From tablets up, peers are indented so the hand-offs read like a thread. */
+@media (min-width: 640px) {
+  .msg.drv-codex,
+  .tool.drv-codex {
+    margin-left: var(--indent-peer);
+  }
+
+  .msg.drv-opencode,
+  .tool.drv-opencode {
+    margin-left: calc(var(--indent-peer) / 2);
+  }
+}

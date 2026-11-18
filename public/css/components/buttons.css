@@ -1,0 +1,53 @@
+/* Buttons. `.btn--*` modifiers, plus the short classes the scripts set on generated buttons (primary, danger, mini). */
+button,
+.btn {
+  padding: var(--space-1) var(--space-3);
+  min-height: 2rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--color-text-muted);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn--primary,
+button.primary {
+  background: var(--color-primary);
+  border-color: var(--color-success-border);
+  color: #fff;
+}
+
+.btn--danger,
+button.danger {
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-soft);
+}
+
+.btn--icon {
+  min-width: 2rem;
+  padding: 0 var(--space-2);
+}
+
+button.mini {
+  min-height: 1.5rem;
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+}
+
+/* Touch screens: larger targets. */
+@media (pointer: coarse) {
+  button,
+  .btn {
+    min-height: 2.5rem;
+  }
+
+  button.mini {
+    min-height: 2rem;
+  }
+}

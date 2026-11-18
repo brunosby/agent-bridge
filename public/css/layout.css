@@ -1,0 +1,144 @@
+/*
+ * App shell: header (toolbar + agent cards), conversation, pending tray, composer.
+ * Mobile first; breakpoints: 640px (tablet) and 1024px (desktop).
+ */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+.app-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.toolbar__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.brand {
+  margin-right: auto;
+}
+
+/* On phones the relay controls take their own full-width row, folded behind the "Controls" button. */
+.toolbar__group--end {
+  width: 100%;
+}
+
+.app-header:not(.is-open) .toolbar__group--end {
+  display: none;
+}
+
+/* Agent cards scroll sideways on phones and wrap on larger screens. */
+.agents {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  padding-bottom: var(--space-1);
+}
+
+.log {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pending {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 45vh;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-warning-tray);
+  border-top: 2px solid var(--color-warning-border);
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    'target target'
+    'input send';
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+}
+
+.composer__target {
+  grid-area: target;
+}
+
+.composer__input {
+  grid-area: input;
+  resize: vertical;
+  min-height: 2.75rem;
+}
+
+.composer__send {
+  grid-area: send;
+  align-self: end;
+}
+
+@media (min-width: 640px) {
+  .toolbar__toggle {
+    display: none;
+  }
+
+  .app-header:not(.is-open) .toolbar__group--end {
+    display: flex;
+  }
+
+  .app-header,
+  .log,
+  .pending,
+  .composer {
+    padding-inline: var(--space-4);
+  }
+
+  .composer {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas: 'target input send';
+    align-items: end;
+  }
+
+  .composer__target {
+    max-width: 14rem;
+  }
+
+  .agents {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+}
+
+@media (min-width: 1024px) {
+  .brand {
+    margin-right: 0;
+  }
+
+  .toolbar__group--end {
+    width: auto;
+    margin-left: auto;
+  }
+}
