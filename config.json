@@ -1,5 +1,4 @@
 {
-  "mainAgent": "claude",
   "userName": null,
   "port": 0,
   "openBrowser": true,

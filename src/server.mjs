@@ -43,7 +43,19 @@ if (argv['log-file']) {
 }
 const configPath = path.resolve(argv.config || path.join(APP_DIR, 'config.json'));
 if (argv.logs) LOGS_DIR = path.resolve(argv.logs);
-let config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
+// config.json holds the shipped defaults; what the user changes in Settings is saved to config.local.json
+// next to it (ignored by git), so personal settings never end up in the repository.
+const localConfigPath = configPath.replace(/\.json$/i, '') + '.local.json';
+const readJsonFile = (p) => (fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : {});
+let localConfig = readJsonFile(localConfigPath);
+let config = { ...readJsonFile(configPath), ...localConfig };
+
+/** Save user changes: merged into config.local.json, then into the running config. */
+function saveLocalConfig(changes) {
+  localConfig = { ...localConfig, ...changes };
+  fs.writeFileSync(localConfigPath, JSON.stringify(localConfig, null, 2) + '\n');
+  config = { ...readJsonFile(configPath), ...localConfig };
+}
 const port = Number(argv.port ?? config.port ?? 0);
 let roles = loadRoles(ROLES_DIR);
 
@@ -885,7 +897,7 @@ function settingsView() {
 }
 
 function saveSettings(input) {
-  const next = { ...config };
+  const next = {};
   for (const [key, def] of Object.entries(SETTINGS)) {
     if (!(key in input)) continue;
     let v = input[key];
@@ -904,8 +916,7 @@ function saveSettings(input) {
   if (input.saveTeamAsDefault && conv) {
     next.defaultTeam = conv.team.map((a) => ({ driver: a.driver, role: a.role, name: a.name, model: a.model || null, effort: a.effort || null, bypass: a.bypass }));
   }
-  fs.writeFileSync(configPath, JSON.stringify(next, null, 2) + '\n');
-  config = next;
+  saveLocalConfig(next);
   relay.auto = setting('autoRelay');
   relay.maxHops = Number(setting('maxHops'));
   if (conv) {
@@ -1017,11 +1028,10 @@ async function api(action, body) {
       };
     case 'roleProfile': {
       if (!roles[body.role]) throw new Error('unknown role');
-      const next = { ...config, roleOverrides: { ...(config.roleOverrides || {}) } };
-      if (body.reset) delete next.roleOverrides[body.role];
-      else next.roleOverrides[body.role] = { profile: body.profile === 'lean' ? 'lean' : 'full', skillsOff: (body.skillsOff || []).map(String) };
-      fs.writeFileSync(configPath, JSON.stringify(next, null, 2) + '\n');
-      config = next;
+      const roleOverrides = { ...(config.roleOverrides || {}) };
+      if (body.reset) delete roleOverrides[body.role];
+      else roleOverrides[body.role] = { profile: body.profile === 'lean' ? 'lean' : 'full', skillsOff: (body.skillsOff || []).map(String) };
+      saveLocalConfig({ roleOverrides });
       // Apply to the agents that have this role (Claude restarts on the same session when idle).
       for (const spec of conv.team.filter((a) => a.role === body.role)) {
         await conv.agents[spec.id]?.reconfigure({ readOnly: roles[body.role].canEdit === 'none', maxTurns: roles[body.role].maxTurns || null, ...roleProfile(body.role) });
