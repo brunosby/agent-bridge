@@ -1,161 +1,115 @@
 # Agent Bridge
 
-A team of AI coding agents from different providers working on the same task, in a local web page where you watch everything live and step in at any time.
+A team of AI coding agents from different providers (Claude Code, Codex, OpenCode) working on one task, in a local web page where you watch the conversation live and step in at any time.
 
-- **Claude** runs as Claude Code in headless mode (`claude -p --input-format stream-json --output-format stream-json`), one long-lived process per agent ([headless docs](https://code.claude.com/docs/en/headless), [CLI reference](https://code.claude.com/docs/en/cli-reference)).
-- **Codex** runs as `codex app-server`, driven over its JSON-RPC protocol ([app-server docs](https://learn.chatgpt.com/docs/app-server)).
-- **OpenCode** runs as `opencode serve` (one server per agent, random password, `127.0.0.1` only) and gives access to its providers ([server docs](https://opencode.ai/docs/server/)). Its free models (Big Pickle, DeepSeek V4.1 Flash Free and others) work without signing in.
+You talk to an orchestrator; it hands tasks to the other agents by role (coder, reviewer, tester...), collects their results and comes back to you for the final approval.
 
-No dependencies: Node.js 20+ and the CLIs of the providers you use. The page listens on `127.0.0.1` only, and every API call needs a random token created at start.
+## Quick start
 
-## Start
+1. **Requirements:** Windows, [Node.js](https://nodejs.org) 20+, and the CLI of at least one provider: [Claude Code](https://code.claude.com/docs/en/setup), [Codex](https://developers.openai.com/codex/cli) or [OpenCode](https://opencode.ai/docs/). No `npm install` needed.
+2. **Open:** double-click `Agent Bridge.vbs` and choose the project folder. The page opens in your browser; there is no console window.
+3. **Check your accounts:** **Settings > Accounts** shows, per provider, whether the CLI is installed and signed in, with the next step (install command or a **Sign in** button that opens the CLI's own login).
+4. **Write your request** in the box at the bottom and press `Ctrl+Enter`.
 
-**Without a console window (recommended):** double-click `Agent Bridge.vbs`, choose the project folder in the Windows folder picker, and the page opens. Server output goes to `logs\server.log`; if the app cannot start, a message box says why. Use **Restart** and **Quit** at the top of the page to restart or close it (Restart resumes the open conversation). Arguments work too, e.g. `wscript "Agent Bridge.vbs" --resume`.
+Use **Restart** and **Quit** at the top of the page to restart or close the app.
 
-**With a console window:** double-click `agent-bridge.cmd` and type the project folder, or run:
+## Using it
 
-```bat
-agent-bridge.cmd --cwd C:\path\to\project
-```
+**The team.** Each agent has a card at the top with its role, model, effort level, bypass switch, tokens used, **Stop** and **✕**. The default team is Claude as Orchestrator and Codex as Coder. **+ Add agent** adds more (several from the same provider are fine); the form suggests a name (`Provider-Role`), lists the models of that provider and marks recommendations both ways: ★ models for the chosen role, ★ roles for the chosen model.
 
-| Flag | Meaning |
-| --- | --- |
-| `--cwd <dir>` | Project folder (default: current folder). |
-| `--resume [id]` | Reopen the last conversation, or the one with this id. |
-| `--port <n>` | Fixed port (default: a free one). |
-| `--no-open` | Do not open the browser. |
-| `--config <file>` | Use another config file. |
-| `--logs <dir>` | Keep conversations in another folder (useful for tests). |
-| `--main claude\|codex` | Old option: which agent is the orchestrator when no default team is saved. |
+**Messages.** Your message goes to the orchestrator by default. Pick another agent in the box's menu, start the message with `@Name`, or send it to all.
 
-Quit (or `Ctrl+C` in the console) closes all agent processes. If the page says the app "was updated after it started", press **Restart**.
+**Routing.** By default the orchestrator delegates with `@Name`, every other agent answers the orchestrator, and the results of parallel tasks reach it together in one message. Other modes are in the header's **Routing** menu: free mentions, fixed pipeline and round robin.
 
-First time? Open **Settings > Accounts** to see which CLIs are installed and signed in.
+**Approvals.** Permission requests from any agent appear in a yellow panel above the message box (**Allow once**, **Allow for session**, **Decline**). Unanswered requests are declined after 2 minutes and the agent carries on. **Bypass** on a card approves automatically, except destructive actions and deletions outside the project folder.
 
-## The team
+**Finishing.** When the work is done, a card shows the orchestrator's summary with **Approve** and **Ask for changes**. Hand-offs also stop at the hand-off limit, at the token limit, or when you press **Pause** / **Stop all**; send a message or press **Resume** to continue.
 
-Each agent has a card at the top of the page with:
-
-- **Role** (see below) and the models recommended for it;
-- **Model**, listed from your account. ★ = recommended for the role, ⚠ = free/stealth model that may use your prompts for training (avoid sensitive code; the warning also shows for orchestrators), greyed out = not available (provider not connected, no access, usage limit, or the CLI is broken);
-- **Effort**, with only the levels the model supports (Claude `--effort`, Codex `effort`);
-- **Bypass** (below), tokens used, **Stop**, **Retry** (when unavailable) and **✕** to remove it.
-
-**+ Add agent** adds more agents, including several from the same provider. The form fills the name as `Provider-Role`, lists the provider's models and effort levels, and marks recommendations both ways: ★ models for the chosen role, ★ roles for the chosen model. If no agent in the team can edit code, a warning appears at the top and the agents are told to plan and review only. Adding a third agent, or a second one on the same provider, shows a reminder that each agent spends its own tokens and shares its provider's quota. Optionally an agent gets its **own git worktree** (a branch next to the repository, `<repo>-agent-worktrees/...`), so coders never edit the same files; nothing is merged or deleted automatically.
-
-The default team for new conversations is Claude as Orchestrator and Codex as Coder; change it with **Settings > General > Save the current team as the default**.
+**Conversations.** Everything is saved. **Conversations** lists earlier conversations: **Restore** brings back the messages and the whole team with its sessions; **New conversation** starts fresh, optionally in another folder.
 
 ## Roles
 
-Roles live in `roles/`, one JSON file each (`id`, `name`, `summary`, `canEdit`, `recommended`, `instructions`). Copy a file to create a new one.
-
-| Role | Does | Edits files | Recommended |
+| Role | Does | Edits files | Recommended models |
 | --- | --- | --- | --- |
-| Orchestrator | Plans, delegates with @mentions, checks results, answers you | No | Opus 5.5, GPT-6.2-Sol, Fable 5.2 |
-| Architect | Designs the solution before coding | No | Opus 5.5, Fable 5.2, GPT-6.2-Astra |
-| Coder | Implements tasks and runs tests | Yes | GPT-6.2-Sol, Sonnet 5.5, DeepSeek |
-| Reviewer | Reviews plans and diffs, approves or requests changes | No | Opus 5.5, Sonnet 5.5, GPT-6.2-Sol |
-| Tester | Writes and runs tests | Tests only | Sonnet 5.5, GPT-6.1-Sol, Haiku 5.5 |
-| Researcher | Looks up docs and sources | No | Haiku 5.5, GPT-6-Luna, Big Pickle |
+| Orchestrator | Plans, delegates, checks results, answers you | No | Opus 5.5, GPT-6.2-Sol, Fable 5.2 |
+| Architect | Designs larger changes before coding | No | Opus 5.5, Fable 5.2, GPT-6.2-Astra |
+| Coder | Implements, then runs the project's lint, typecheck and tests | Yes | GPT-6.2-Sol, Sonnet 5.5, DeepSeek |
+| Reviewer | Reviews the diff against the request: APPROVED or CHANGES REQUESTED | No | Opus 5.5, Sonnet 5.5, GPT-6.2-Sol |
+| Tester | Writes and runs tests, reports failures | Tests only | Sonnet 5.5, GPT-6.1-Sol, Haiku 5.5 |
+| Researcher | Looks up documentation, returns a summary with links | No | Haiku 5.5, GPT-6-Luna, Big Pickle |
 
-Each role can also set `fallback` (closest roles when it is missing), `maxTurns` (step limit per message, applied to Claude agents with `--max-turns`) and `context: "diff"` (the Reviewer receives the original request plus `git diff HEAD` and new files instead of relying on the conversation).
+- **Read-only is enforced**, not just asked: Claude runs without its edit tools, Codex in a read-only sandbox, OpenCode with its `plan` agent.
+- The orchestrator **sizes the team to the request**: one agent for small things, Coder then Reviewer for normal changes, the others only for large work.
+- **Review loop:** CHANGES REQUESTED goes back to the coder for up to 2 rounds; after that the orchestrator reports the open findings to you.
+- **Missing role:** if the task needs a role nobody has, the page asks whether to add it (with a recommended model) or continue with the closest agent.
+- **Profiles:** Orchestrator and Coder use your full setup (hooks, skills, plugins, CLAUDE.md). The other roles run lean, without hooks. **Settings > Roles** changes a role's profile and switches skills off per role (Claude and OpenCode agents).
+- Roles live in `roles/`, one JSON file each; copy one to create a new role.
 
-How the roles behave, based on Anthropic's multi-agent research write-up, Cognition's "Don't build multi-agents", Claude Code subagents, OpenCode agents, Magentic-One, the OpenAI Agents SDK and Aider's architect/editor benchmark:
+## Providers
 
-- **Orchestrator** scales the team to the request (one agent for small things, Coder + Reviewer for normal features, Architect/Tester/Researcher only for large work), delegates in parallel, and does not send status messages while it waits.
-- **Coder** keeps the full context and does its own quick lookups; one Coder per area of the code (a second one only with its own worktree).
-- **Researcher**, **Reviewer**, **Tester** and **Architect** are short, focused passes with step limits.
+| Provider | Runs as | Sign-in |
+| --- | --- | --- |
+| Claude | Claude Code in headless mode | Claude account or API key (`claude auth login`) |
+| Codex | `codex app-server` | ChatGPT account or API key (`codex login`) |
+| OpenCode | `opencode serve`, one per agent | None for its free models; `opencode auth login` for other providers |
 
-**Checks, review and approval.** The Coder runs the project's own lint, typecheck and tests (from `package.json` scripts, Makefile, CI config...) before handing work back and reports each result. The Reviewer may run the same checks without editing and answers APPROVED or CHANGES REQUESTED. CHANGES REQUESTED goes back to the coder through the orchestrator for up to `maxReviewRounds` rounds (default 2); after that the orchestrator reports the open findings to you. When the orchestrator finishes, a card asks you to **Approve** the result or **Ask for changes** (`finalConfirmation`).
+Models are listed from your own account. Unavailable ones are greyed out: a provider that is not connected, no access, a usage limit, or a broken CLI.
 
-**Profiles and skills.** Each role has a profile: **Full** (Orchestrator, Coder: everything from your setup, including hooks, skills, plugins and CLAUDE.md) or **Lean** (Researcher, Reviewer, Tester, Architect: no hooks, via `--settings '{"disableAllHooks":true}'`; skills stay available because they load only when used). Settings > Roles lists the installed skills with checkboxes to switch some off per role; planning skills (`*:long-task`, `*:completion-criteria`, ...) are off by default for lean roles. Skills are switched off with `Skill(name)` rules for Claude agents and `skill` deny rules for OpenCode sessions; Codex only has a global switch in `config.toml`, so it is not per role.
+**OpenCode free models** (Big Pickle, DeepSeek V4.1 Flash Free and others) work without any account. Only free models are enabled by default (`opencode.freeOnly` in `config.json`). They show ⚠ because the provider may use prompts to improve them, so avoid sensitive code with them. Other providers can be connected through OpenCode with a login or an API key, for example DeepSeek or OpenRouter.
 
-The names follow common multi-agent setups (Anthropic's orchestrator-workers, Magentic-One, CrewAI, MetaGPT, Aider's architect/editor). "Edits files: No" is enforced: Claude runs without its edit tools, Codex in a read-only sandbox, OpenCode with its `plan` agent.
+[9router](https://github.com/decolua/9router), a local router that reuses subscription logins of other tools, can be added to OpenCode as an OpenAI-compatible provider. Agent Bridge does not set it up, because reusing subscriptions that way may go against those providers' terms of use.
 
-## Routing
+Effort levels follow the selected model (Claude and Codex). The per-role step limit applies to Claude agents only.
 
-The header's **Routing** menu (default in Settings):
+## Security and privacy
 
-| Mode | Who gets an agent's reply |
+- The page listens on `127.0.0.1` only, and every request needs a random token created at start.
+- Agent Bridge never sees or stores credentials: signing in always happens in each provider's CLI.
+- Bypass is a pattern check, not a sandbox. Use it on projects under version control.
+- Free and stealth models may use your prompts for training (⚠ in the model list).
+- An optional **own git worktree** per agent (in **+ Add agent**) keeps two coders from editing the same files. Agent Bridge never merges or deletes worktrees.
+
+## Configuration
+
+**Settings > General** (saved to `config.json`): your name, default routing, auto-relay, hand-off limit, token limit (counts new tokens; cached tokens are shown apart because they cost much less), review rounds, final confirmation, missing-role behaviour, approval timeout, bypass for new agents, and the safety patterns. **Save the current team as the default** sets the team for new conversations.
+
+Launcher options (`wscript "Agent Bridge.vbs" ...` or `agent-bridge.cmd ...`, which keeps a console window):
+
+| Option | Meaning |
 | --- | --- |
-| **Orchestrator + mentions** (default) | The orchestrator delegates with `@Name`; every other agent answers the orchestrator; an orchestrator message without mentions is for you. A worker's `[[DONE]]` still goes to the orchestrator. |
-| Free mentions | Whoever is mentioned; without a mention, back to whoever sent the last message. |
-| Fixed pipeline | The next agent in the list; the last one answers you. |
-| Round robin | The next agent in the list, in a loop. |
+| `--cwd <folder>` | Project folder (skips the folder picker). |
+| `--resume [id]` | Reopen the last conversation, or a specific one. |
+| `--port <n>` | Fixed port instead of a free one. |
+| `--no-open` | Do not open the browser. |
+| `--config <file>` | Use another config file. |
+| `--logs <folder>` | Keep conversations in another folder. |
 
-Your messages go to the box's target: **Auto** (the orchestrator, or the first agent), a specific agent, or all. A message that *starts* with `@Name` goes to that agent. Each agent sees the team list (names, roles, models, who can edit) whenever it changes.
+## Troubleshooting
 
-In orchestrator mode the results of all the agents the orchestrator delegated to are **collected and delivered in one message** when the last one finishes, so the orchestrator spends one turn instead of one per result.
+| Symptom | What to do |
+| --- | --- |
+| The app does not open | A message box explains why; details are in `logs\server.log`. |
+| The page says the app "was updated after it started" | Press **Restart**. |
+| An agent card is red, "unavailable" | Its CLI did not start or its protocol changed. Check **Settings > Accounts**, then press **Retry**. |
+| "No access" or "Usage limit" on a card | Plan, key or quota problem with that provider; the reset time is shown when known. |
+| Something went wrong during a conversation | `logs\<conversation>\errors.log` lists errors, unavailable agents and account problems. |
 
-**Missing roles.** When the orchestrator needs a role nobody in the team has, it writes `[[NEED_ROLE: reviewer]]`. By default the relay pauses and the page asks you: **Add** the role (with the first available model recommended for it) or **Continue with** the closest agent (from the role's `fallback` list; the choice is logged). *Settings > When the orchestrator needs a missing role* can make "continue with the closest agent" automatic. If no agent in the team can edit code, a warning shows at the top of the page.
+## How it works
 
-The relay stops when an orchestrator (or, in other modes, any agent) ends with a line containing only `[[DONE]]`, when the hand-off limit or the **token limit** is reached, or when you press **Pause** / **Stop all**. Sending a message or **Resume** continues.
+A Node.js server (`src/server.mjs`) starts one process per agent and talks to it through the provider's official interface:
 
-## Approvals and bypass
+- Claude Code headless with streaming JSON in and out, with permission prompts routed to the page (`--permission-prompt-tool stdio`);
+- the Codex app-server JSON-RPC protocol;
+- the OpenCode HTTP server and its event stream.
 
-Permission requests from every agent appear in a yellow panel pinned above the message box (**Allow once**, **Allow for session**, **Decline**). Unanswered requests are declined after `approvalTimeoutSec` (default 120 s) and the agent carries on.
-
-- Claude runs with `--permission-prompt-tool stdio` (the channel behind the Agent SDK's `canUseTool`); "Allow for session" is kept in memory only.
-- Codex approvals come from the app-server; OpenCode's from its permission endpoint.
-
-**Bypass** (per agent) approves automatically, except destructive actions (forced push, `git reset --hard`, database drops, disk tools, publishing...) and deletions that are recursive, follow a `cd`, use variables like `$HOME`, or touch anything outside the project folder. Patterns are in `src/safety.mjs` and editable in Settings. It is a pattern check, not a sandbox: use it on projects under version control.
-
-## Settings and accounts
-
-**Settings > General** (saved to `config.json`): your name, default routing, auto-relay, hand-off limit, token limit (counts new tokens; cached tokens are shown apart because they cost much less), missing-role behaviour, approval timeout, bypass for new agents, token warning, data-warning model patterns, safety patterns, opening the browser.
-
-**Settings > Accounts** checks each CLI with its own commands and shows one of: *Not installed*, *Installed, not signed in*, *Signed in, no access* (plan inactive, invalid key, no credit), *Usage limit reached* (with the reset time when the provider reports it), or *Ready*, plus the next step: the install command, or **Sign in**, which opens a terminal running the CLI's own login (`claude auth login`, `codex login`, `opencode auth login`). Agent Bridge never sees or stores credentials.
-
-No access and usage limits are also detected while agents work (Claude `rate_limit_event` and error codes, Codex `account/rateLimits/updated` and `unauthorized`, OpenCode session errors); that provider's models are disabled until it works again.
-
-**Settings > Roles** lists the catalog.
-
-## Providers through OpenCode
-
-Only **connected** providers are listed. Out of the box that is OpenCode's own provider with its free models; nothing to sign in. With `opencode.freeOnly` (default `true` in `config.json`) only free models are enabled; paid ones are listed but greyed out. Every OpenCode session is created with "ask" rules for `bash`, `edit` and `webfetch` (`opencode.askFor`), so its requests reach the approval panel and the bypass rules like the other agents.
-
-More providers can be connected with `opencode auth login` (a login or an API key, kept by OpenCode):
-
-- **OpenCode Zen**, including the free `big-pickle` model (free for a limited time; prompts may be used to improve it, hence the ⚠).
-- **DeepSeek** (`deepseek-flash`, `deepseek-v4-pro`) with an API key. DeepSeek also documents using it from Claude Code with `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`.
-- **OpenRouter** and other providers from the models.dev catalog.
-
-**9router (optional, off by default).** [9router](https://github.com/decolua/9router) is a local router with an OpenAI-compatible endpoint at `http://localhost:20128/v1`. It can sit *behind* OpenCode as a custom OpenAI-compatible provider in `opencode.jsonc`. It also reuses subscription logins of other tools, which may go against those providers' terms of use, so Agent Bridge does not configure it; add it to OpenCode yourself if you accept that risk.
-
-## Conversations and logs
-
-Each conversation is saved in `logs/<timestamp>/`:
-
-- `transcript.jsonl`: every event;
-- `errors.log`: errors, unavailable agents, account problems and error-like CLI output, one line each, for finding causes;
-- the instruction files given to Claude agents.
-
-**Conversations** (header) lists them: **Restore** shows the old messages and brings back the whole team (agents, roles, models, effort, bypass, sessions, tokens); **Remove** moves a log to `logs/.removed`; **New conversation** starts fresh. `--resume` reopens the last one from the command line. Closing only the browser tab loses nothing.
-
-## Files
+The page (`public/`) receives everything live over Server-Sent Events. If a provider's interface changes, that agent is shown as unavailable instead of breaking the app.
 
 ```
-Agent Bridge.vbs        launcher without a console window
-agent-bridge.cmd        launcher with a console window
-config.json             settings
-roles/                  role catalog
-src/server.mjs          HTTP + SSE server, team, routing, settings
-src/claude-agent.mjs    Claude Code headless driver
-src/codex-agent.mjs     Codex app-server driver
-src/opencode-agent.mjs  OpenCode server driver
-src/accounts.mjs        CLI install/sign-in status and login terminal
-src/prompts.mjs         agent instructions and routing modes
-src/roles.mjs           role catalog loader
-src/safety.mjs          bypass rules
-src/history.mjs         saved conversations
-src/worktree.mjs        optional git worktree per agent
-src/proc.mjs            process helpers
-public/                 web page
-dev-notes/CHECKPOINT.md development status
+Agent Bridge.vbs      launcher (no console)      src/claude-agent.mjs    Claude Code driver
+agent-bridge.cmd      launcher (console)         src/codex-agent.mjs     Codex driver
+config.json           settings                   src/opencode-agent.mjs  OpenCode driver
+roles/                role catalog               src/accounts.mjs        account status and sign-in
+public/               web page                   src/safety.mjs          bypass rules
+logs/                 conversations and logs     src/history.mjs         saved conversations
+src/server.mjs        server, team, routing      src/worktree.mjs        git worktree per agent
 ```
-
-## Status
-
-- Tested end to end: Claude, Codex and OpenCode agents (OpenCode 1.19.6 with Big Pickle and DeepSeek V4.1 Flash Free), teams of three, routing, approvals, bypass, effort, token counting, restore, worktree, settings and accounts status.
-- The OpenCode driver uses the events checked against the server's OpenAPI spec (`GET /doc`): `message.part.delta` (live text), `message.part.updated` (tools), `permission.asked` / `permission.replied`, `session.error`. If OpenCode changes them, the agent is shown as unavailable.
-- `codex app-server` is experimental; if its protocol changes, the Codex agent is shown as unavailable instead of breaking the app. `codex app-server generate-ts --out <dir>` prints the current protocol types.
