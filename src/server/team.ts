@@ -1,22 +1,24 @@
 // The team: creating, adding, removing and reconfiguring agents; role profiles; model lists.
-import { S } from './state.mjs';
+import type { Agent, AgentEvent, AgentSpec, ModelInfo } from '../core/types.ts';
+import type { RuntimeStatus } from '../providers/accounts.ts';
+import { S } from './state.ts';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { config, setting } from '../config/settings.mjs';
-import { argv } from '../config/args.mjs';
-import { publish, publishState } from './events.mjs';
-import { DRIVERS } from '../providers/registry.mjs';
-import { providerRuntime } from './state.mjs';
-import { buildInstructions } from '../core/prompts.mjs';
-import { ClaudeAgent } from '../providers/claude.mjs';
-import { CodexAgent } from '../providers/codex.mjs';
-import { OpenCodeAgent } from '../providers/opencode.mjs';
-import { FakeAgent } from '../providers/fake.mjs';
-import { buildMatcher } from '../core/safety.mjs';
-import { wireAgent } from './conversation.mjs';
-import { createWorktree } from '../workspace/worktree.mjs';
-import { globMatch } from '../core/roles.mjs';
+import { config, setting } from '../config/settings.ts';
+import { argv } from '../config/args.ts';
+import { publish, publishState } from './events.ts';
+import { DRIVERS } from '../providers/registry.ts';
+import { driverModelCache, providerRuntime } from './state.ts';
+import { buildInstructions } from '../core/prompts.ts';
+import { ClaudeAgent } from '../providers/claude.ts';
+import { CodexAgent } from '../providers/codex.ts';
+import { OpenCodeAgent } from '../providers/opencode.ts';
+import { FakeAgent } from '../providers/fake.ts';
+import { buildMatcher } from '../core/safety.ts';
+import { wireAgent } from './conversation.ts';
+import { createWorktree } from '../workspace/worktree.ts';
+import { globMatch } from '../core/roles.ts';
 /** Team used for a new conversation: config.defaultTeam, else the old mainAgent setting. */
 export function defaultTeam() {
   if (Array.isArray(config.defaultTeam) && config.defaultTeam.length) return config.defaultTeam.map((a) => ({ ...a }));
@@ -28,14 +30,11 @@ export function defaultTeam() {
   ];
 }
 
-/** Model lists per provider, for the "Add agent" form: { driver: { at, models } }. */
-export const driverModelCache = {};
-
 /**
  * Models of a provider before any agent of it exists: start a short-lived instance of its driver,
  * wait for its model list, and close it.
  */
-export async function listDriverModels(driver) {
+export async function listDriverModels(driver: string): Promise<ModelInfo[]> {
   const cached = driverModelCache[driver];
   if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.models;
   const live = S.conv && Object.entries(S.conv.agents).find(([id]) => S.conv.team.find((a) => a.id === id)?.driver === driver)?.[1];
@@ -49,9 +48,9 @@ export async function listDriverModels(driver) {
     instructions: '',
   });
   try {
-    const models = await new Promise((resolve, reject) => {
+    const models = await new Promise<ModelInfo[]>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('no model list after 45 s')), 45000);
-      probe.on('event', (ev) => {
+      probe.on('event', (ev: AgentEvent) => {
         if (ev.kind === 'models') {
           clearTimeout(timer);
           resolve(probe.models || []);
@@ -71,16 +70,15 @@ export async function listDriverModels(driver) {
     probe.shutdown().catch(() => {});
   }
 }
-export const cliCache = {};
 
-export function providerBlocked(driver) {
-  const r = providerRuntime[driver];
+export function providerBlocked(driver: string | undefined): RuntimeStatus | null {
+  const r = driver ? providerRuntime[driver] : undefined;
   if (!r || r.state === 'ok') return null;
   if (r.state === 'rate_limited' && r.resetsAt && r.resetsAt < Date.now()) return null;
   return r;
 }
 
-export function uniqueName(base) {
+export function uniqueName(base: string): string {
   const clean =
     String(base || 'Agent')
       .replace(/[^\w-]/g, '')
@@ -90,13 +88,14 @@ export function uniqueName(base) {
   for (let i = 2; ; i++) if (!taken.has(`${clean}${i}`.toLowerCase())) return `${clean}${i}`;
 }
 
-export function defaultName(driver, role) {
-  const d = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' }[driver] || 'Agent';
+export function defaultName(driver: string, role: string): string {
+  const names: Record<string, string> = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
+  const d = names[driver] || 'Agent';
   return `${d}-${S.roles[role]?.name || 'Agent'}`;
 }
 
 /** Create the agent process wrapper for one team member (the process itself starts lazily or on start()). */
-export function createAgent(spec) {
+export function createAgent(spec: AgentSpec): Agent {
   const role = S.roles[spec.role] || S.roles.coder || Object.values(S.roles)[0];
   const readOnly = role?.canEdit === 'none';
   const cwd = spec.cwd || S.conv.workDir;
@@ -111,7 +110,7 @@ export function createAgent(spec) {
   const base = { ...(config[spec.driver] || {}) };
   if (spec.model && spec.model !== 'default') base.model = spec.model;
   if (spec.effort) base.effort = spec.effort;
-  let agent;
+  let agent: Agent;
   if (spec.driver === 'claude') {
     const promptFile = path.join(S.conv.runDir, `instructions-${spec.id}.txt`);
     fs.writeFileSync(promptFile, instructions);
@@ -169,10 +168,20 @@ export function createAgent(spec) {
   return agent;
 }
 
-export async function addAgent({ driver, role, name, model, effort, bypass, worktree }) {
+export interface AddAgentInput {
+  driver: string;
+  role: string;
+  name?: string;
+  model?: string | null;
+  effort?: string | null;
+  bypass?: boolean;
+  worktree?: boolean;
+}
+
+export async function addAgent({ driver, role, name, model, effort, bypass, worktree }: AddAgentInput): Promise<AgentSpec> {
   if (!DRIVERS[driver]) throw new Error(`unknown provider ${driver}`);
   if (!S.roles[role]) throw new Error(`unknown role ${role}`);
-  const spec = {
+  const spec: AgentSpec = {
     id: `a${++S.conv.nextAgent}`,
     name: uniqueName(name || defaultName(driver, role)),
     driver,
@@ -196,7 +205,7 @@ export async function addAgent({ driver, role, name, model, effort, bypass, work
   return spec;
 }
 
-export async function removeAgent(id) {
+export async function removeAgent(id: string): Promise<void> {
   const idx = S.conv.team.findIndex((a) => a.id === id);
   if (idx < 0) throw new Error('unknown agent');
   if (S.conv.team.length === 1) throw new Error('a conversation needs at least one agent');
@@ -209,7 +218,7 @@ export async function removeAgent(id) {
   publishState();
 }
 
-export async function setRole(id, roleId) {
+export async function setRole(id: string, roleId: string): Promise<void> {
   const spec = S.conv.team.find((a) => a.id === id);
   if (!spec || !S.roles[roleId]) throw new Error('unknown agent or role');
   spec.role = roleId;
@@ -247,7 +256,7 @@ export async function setRole(id, roleId) {
   publishState();
 }
 
-export async function startAgent(agent) {
+export async function startAgent(agent: Agent): Promise<void> {
   try {
     await agent.start();
   } catch {
@@ -259,8 +268,8 @@ export async function startAgent(agent) {
  * Skills installed for Claude Code: plugin skills ("plugin:skill", reported by Claude's initialize answer)
  * and personal skills in ~/.claude/skills. Codex skills cannot be switched per session, so they are not listed.
  */
-export function installedSkills() {
-  const names = new Set();
+export function installedSkills(): string[] {
+  const names = new Set<string>();
   for (const a of Object.values(S.conv?.agents || {})) {
     for (const c of a.commands || []) if (c.name.includes(':')) names.add(c.name);
   }
@@ -269,7 +278,7 @@ export function installedSkills() {
     const installed = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json'), 'utf8'));
     for (const [key, entries] of Object.entries(installed.plugins || {})) {
       const plugin = key.split('@')[0];
-      for (const e of [].concat(entries || [])) {
+      for (const e of ([] as { installPath?: string }[]).concat((entries as { installPath?: string }[]) || [])) {
         const dir = path.join(e.installPath || '', 'skills');
         if (!e.installPath || !fs.existsSync(dir)) continue;
         for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -281,7 +290,7 @@ export function installedSkills() {
     // no plugins installed
   }
   const base = path.join(os.homedir(), '.claude', 'skills');
-  const scan = (dir) => {
+  const scan = (dir: string): void => {
     try {
       for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
         if (!d.isDirectory()) continue;
@@ -301,15 +310,15 @@ export function installedSkills() {
  * Settings > Roles can override the role file (config.roleOverrides[roleId] = { profile, skillsOff }).
  * With keepPatterns, the role's patterns are returned too (OpenCode accepts patterns directly).
  */
-export function roleProfile(roleId, keepPatterns = false) {
+export function roleProfile(roleId: string, keepPatterns = false): { profile: 'full' | 'lean'; skillsOff: string[] } {
   const role = S.roles[roleId];
   const o = config.roleOverrides?.[roleId];
   const profile = o?.profile || role?.profile || 'full';
-  let skillsOff;
+  let skillsOff: string[];
   if (Array.isArray(o?.skillsOff)) skillsOff = o.skillsOff;
   else {
     const patterns = role?.skillsOff || [];
-    skillsOff = installedSkills().filter((n) => patterns.some((p) => globMatch(p, n)));
+    skillsOff = installedSkills().filter((n) => patterns.some((p: string) => globMatch(p, n)));
     if (keepPatterns) skillsOff = [...new Set([...skillsOff, ...patterns])];
   }
   return { profile, skillsOff };

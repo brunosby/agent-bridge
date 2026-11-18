@@ -1,12 +1,27 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import type { AgentSpec, BridgeEvent } from './types.ts';
+
+/** One saved conversation, as shown in the Conversations list. */
+export interface ConversationSummary {
+  id: string;
+  startedAt: number | null;
+  lastAt: number | null;
+  title: string;
+  userMessages: number;
+  agentTurns: number;
+  workDir: string | null;
+  routingMode: string | null;
+  team: AgentSpec[];
+  sessionIds: string[];
+}
 
 /** Every run writes logs/<id>/transcript.jsonl; this module reads them back. */
 export const LOGS_DIR_NAME = 'logs';
 const ID_PATTERN = /^[0-9A-Za-z_-]+$/;
 
-function readEvents(file) {
-  const out = [];
+function readEvents(file: string): BridgeEvent[] {
+  const out: BridgeEvent[] = [];
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     if (!line.trim()) continue;
     try {
@@ -18,9 +33,9 @@ function readEvents(file) {
   return out;
 }
 
-function summarize(id, events) {
-  let state = null;
-  let first = null;
+function summarize(id: string, events: BridgeEvent[]): ConversationSummary {
+  let state: BridgeEvent | null = null;
+  let first: BridgeEvent | null = null;
   let users = 0;
   let turns = 0;
   for (const ev of events) {
@@ -42,15 +57,15 @@ function summarize(id, events) {
     workDir: state?.workDir || null,
     routingMode: state?.routingMode || null,
     team,
-    sessionIds: team.map((a) => a.sessionId).filter(Boolean),
+    sessionIds: team.map((a) => a.sessionId).filter((x): x is string => Boolean(x)),
   };
 }
 
 /** The team saved in a state snapshot. Older logs had two fixed agents (claude main/peer, codex). */
-function teamFromState(state) {
+function teamFromState(state: BridgeEvent | null): AgentSpec[] {
   if (!state) return [];
   if (Array.isArray(state.team)) {
-    return state.team.map((a) => ({
+    return state.team.map((a: AgentSpec) => ({
       id: a.id,
       name: a.name,
       driver: a.driver,
@@ -79,9 +94,9 @@ function teamFromState(state) {
 }
 
 /** Earlier conversations that have at least one message from the user, newest first. */
-export function listConversations(logsDir) {
+export function listConversations(logsDir: string): ConversationSummary[] {
   if (!fs.existsSync(logsDir)) return [];
-  const out = [];
+  const out: ConversationSummary[] = [];
   for (const id of fs.readdirSync(logsDir)) {
     const file = path.join(logsDir, id, 'transcript.jsonl');
     if (!ID_PATTERN.test(id) || !fs.existsSync(file)) continue;
@@ -90,7 +105,7 @@ export function listConversations(logsDir) {
   }
   out.sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
   // Logs that continue the same agent session are one conversation: keep only the most recent.
-  const seen = new Set();
+  const seen = new Set<string>();
   return out.filter((c) => {
     const keys = c.sessionIds;
     const duplicate = keys.some((k) => seen.has(k));
@@ -100,7 +115,7 @@ export function listConversations(logsDir) {
 }
 
 /** Take a conversation off the list. The folder is moved to logs/.removed, not deleted. */
-export function removeConversation(logsDir, id) {
+export function removeConversation(logsDir: string, id: string): void {
   if (!ID_PATTERN.test(id)) throw new Error('invalid conversation id');
   const from = path.join(logsDir, id);
   if (!fs.existsSync(from)) throw new Error(`conversation ${id} not found`);
@@ -113,29 +128,29 @@ export function removeConversation(logsDir, id) {
  * Load a conversation for replay: the events the page shows (without old state snapshots and CLI
  * noise), plus closing events for anything that was still open when the app stopped.
  */
-export function loadConversation(logsDir, id) {
+export function loadConversation(logsDir: string, id: string): ConversationSummary & { events: BridgeEvent[]; lastSeq: number } {
   if (!ID_PATTERN.test(id)) throw new Error('invalid conversation id');
   const file = path.join(logsDir, id, 'transcript.jsonl');
   if (!fs.existsSync(file)) throw new Error(`conversation ${id} not found`);
   const all = readEvents(file);
   const summary = summarize(id, all);
   const events = all.filter((e) => typeof e.seq === 'number' && e.kind !== 'state' && e.kind !== 'stderr');
-  let lastSeq = events.reduce((m, e) => Math.max(m, e.seq), 0);
+  let lastSeq = events.reduce((m, e) => Math.max(m, e.seq ?? 0), 0);
   const lastAt = summary.lastAt || Date.now();
 
   // Older logs used the provider name as the agent id; map it to the ids of the rebuilt team.
-  const legacy = Object.fromEntries(summary.team.filter((a) => a.driver).map((a) => [a.driver, a.id]));
+  const legacy: Record<string, string> = Object.fromEntries(summary.team.filter((a) => a.driver).map((a) => [a.driver, a.id]));
   const hasLegacyIds = events.some((e) => e.agent === 'claude' || e.agent === 'codex');
   if (hasLegacyIds) {
     for (const e of events) {
       for (const k of ['agent', 'from']) if (legacy[e[k]]) e[k] = legacy[e[k]];
       if (typeof e.to === 'string' && legacy[e.to]) e.to = legacy[e.to];
-      if (Array.isArray(e.to)) e.to = e.to.map((t) => legacy[t] || t);
+      if (Array.isArray(e.to)) e.to = e.to.map((t: string) => legacy[t] || t);
     }
   }
 
-  const openApprovals = new Set();
-  const openTurn = {};
+  const openApprovals = new Set<string>();
+  const openTurn: Record<string, boolean> = {};
   for (const e of events) {
     if (e.kind === 'approval' || e.kind === 'needRole' || e.kind === 'finalReview') openApprovals.add(e.requestId);
     if (e.kind === 'needRoleClosed' || e.kind === 'finalReviewClosed') openApprovals.delete(e.requestId);

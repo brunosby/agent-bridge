@@ -1,36 +1,37 @@
 // Entry point: start the server, open or restore a conversation, restart and quit.
-import { S } from '../server/state.mjs';
+import { S } from '../server/state.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile, spawn, spawnSync } from 'node:child_process';
-import { setupLogFile } from '../config/logging.mjs';
-import { argv } from '../config/args.mjs';
-import { listConversations } from '../core/history.mjs';
-import { APP_DIR, LOGS_DIR, config, port, setting } from '../config/settings.mjs';
-import { closeConversation, openConversation, startAgents } from '../server/conversation.mjs';
-import { logError, publish, publishState } from '../server/events.mjs';
-import { clients } from '../server/state.mjs';
-import { server } from '../server/http.mjs';
-import { ROUTING_MODES } from '../core/prompts.mjs';
+import { setupLogFile } from '../config/logging.ts';
+import { argv } from '../config/args.ts';
+import { listConversations } from '../core/history.ts';
+import { APP_DIR, LOGS_DIR, config, port, setting } from '../config/settings.ts';
+import { closeConversation, openConversation, startAgents } from '../server/conversation.ts';
+import { logError, publish, publishState } from '../server/events.ts';
+import { clients } from '../server/state.ts';
+import { server } from '../server/http.ts';
+import { ROUTING_MODES } from '../core/prompts.ts';
 setupLogFile();
 
-export let restoreId = null;
+let restoreId: string | null = null;
 if (argv.resume) {
   const list = listConversations(LOGS_DIR);
-  restoreId = argv.resume === true ? list[0]?.id : String(argv.resume);
+  restoreId = argv.resume === true ? (list[0]?.id ?? null) : String(argv.resume);
   const exists = restoreId && (list.some((c) => c.id === restoreId) || fs.existsSync(path.join(LOGS_DIR, restoreId, 'transcript.jsonl')));
   if (!exists) fail(argv.resume === true ? 'no earlier conversation to resume' : `conversation ${argv.resume} not found in ${LOGS_DIR}`);
 }
 
 try {
-  const { saved } = openConversation({ workDir: path.resolve(argv.cwd || config.workDir || process.cwd()), restoreId });
+  const workDir = typeof argv.cwd === 'string' ? argv.cwd : config.workDir || process.cwd();
+  const { saved } = openConversation({ workDir: path.resolve(workDir), restoreId });
   if (saved)
     publish({
       kind: 'system',
-      text: `Restored conversation from ${new Date(saved.startedAt).toLocaleString()} with ${S.conv.team.length} agent(s). Relay is paused until you send a message.`,
+      text: `Restored conversation from ${new Date(saved.startedAt || Date.now()).toLocaleString()} with ${S.conv.team.length} agent(s). Relay is paused until you send a message.`,
     });
 } catch (err) {
-  fail(err.message);
+  fail(err instanceof Error ? err.message : String(err));
 }
 
 process.on('uncaughtException', (err) => {
@@ -38,12 +39,12 @@ process.on('uncaughtException', (err) => {
   console.error(err);
 });
 process.on('unhandledRejection', (err) => {
-  logError('bridge', `unhandled rejection: ${err?.stack || err}`);
+  logError('bridge', `unhandled rejection: ${err instanceof Error ? err.stack : String(err)}`);
 });
 
 // After a restart the old process may still hold the port for a moment: retry for a few seconds.
-export let listenTries = 0;
-server.on('error', (err) => {
+let listenTries = 0;
+server.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE' && argv['wait-port'] && listenTries++ < 40) {
     setTimeout(() => server.listen(port, '127.0.0.1'), 250);
     return;
@@ -52,7 +53,7 @@ server.on('error', (err) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
-  const address = `http://127.0.0.1:${server.address().port}/`;
+  const address = `http://127.0.0.1:${listeningPort()}/`;
   console.log(`Agent Bridge running at ${address}`);
   console.log(`Working directory: ${S.conv.workDir}`);
   console.log(`Team: ${S.conv.team.map((a) => `${a.name} (${a.driver}, ${a.role})`).join(', ')}`);
@@ -91,7 +92,7 @@ export async function restartServer() {
     '--resume',
     S.conv.id,
     '--port',
-    String(server.address().port),
+    String(listeningPort()),
     '--no-open',
     '--wait-port',
   ];
@@ -101,7 +102,7 @@ export async function restartServer() {
   for (const res of clients) res.end();
   clients.clear();
   server.closeAllConnections?.();
-  await new Promise((r) => {
+  await new Promise<void>((r) => {
     const t = setTimeout(r, 3000);
     server.close(() => {
       clearTimeout(t);
@@ -117,13 +118,13 @@ export async function restartServer() {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-export function openBrowser(url) {
+export function openBrowser(url: string): void {
   if (process.platform === 'win32') execFile('cmd', ['/c', 'start', '', url]);
   else if (process.platform === 'darwin') execFile('open', [url]);
   else execFile('xdg-open', [url]);
 }
 
-export function fail(msg) {
+export function fail(msg: string): never {
   console.error(`agent-bridge: ${msg}`);
   // Started by the hidden launcher: nobody sees the console, so show the error in a message box.
   if (argv.hidden && process.platform === 'win32') {
@@ -145,4 +146,10 @@ export function fail(msg) {
     }
   }
   process.exit(1);
+}
+
+/** Port the server is listening on (a free one is chosen when --port is not given). */
+function listeningPort(): number {
+  const addr = server.address();
+  return typeof addr === 'object' && addr ? addr.port : port;
 }

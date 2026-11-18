@@ -1,4 +1,31 @@
 import { execFile } from 'node:child_process';
+import type { AccountState, DriverConfig } from '../core/types.ts';
+
+interface Step {
+  text: string;
+  command: string;
+  docs?: string;
+}
+
+export interface AccountStatus {
+  state: AccountState;
+  detail?: string;
+  version?: string;
+  expiresAt?: string | null;
+  resetsAt?: number | null;
+}
+
+export interface RuntimeStatus {
+  state: AccountState;
+  detail?: string | null;
+  resetsAt?: number | null;
+}
+
+interface RunResult {
+  code: number;
+  out: string;
+  notFound: boolean;
+}
 
 /**
  * Account status per provider, from each CLI's own commands. The app never reads or stores credentials:
@@ -6,7 +33,7 @@ import { execFile } from 'node:child_process';
  *
  * States: not_installed | logged_out | no_access | rate_limited | ok | unknown
  */
-export const PROVIDERS = {
+export const PROVIDERS: Record<string, { label: string; install: Step; login: Step }> = {
   claude: {
     label: 'Claude Code',
     install: {
@@ -39,12 +66,12 @@ export const PROVIDERS = {
   },
 };
 
-function run(command, args, timeoutMs = 15000) {
+function run(command: string, args: string[], timeoutMs = 15000): Promise<RunResult> {
   const isWin = process.platform === 'win32';
   // npm installs .cmd shims on Windows, which need cmd.exe. The commands and args here are fixed, never user input.
   const file = isWin ? 'cmd.exe' : command;
   const fullArgs = isWin ? ['/d', '/s', '/c', command, ...args] : args;
-  return new Promise((resolve) => {
+  return new Promise<RunResult>((resolve) => {
     execFile(file, fullArgs, { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       resolve({
         code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
@@ -57,7 +84,7 @@ function run(command, args, timeoutMs = 15000) {
   });
 }
 
-async function checkInstalled(command) {
+async function checkInstalled(command: string): Promise<{ installed: boolean; detail?: string; version?: string }> {
   const r = await run(command, ['--version'], 10000);
   if (r.notFound || (r.code !== 0 && !r.out)) return { installed: false };
   if (r.code !== 0) return { installed: false, detail: r.out.split('\n')[0].slice(0, 200) };
@@ -65,7 +92,7 @@ async function checkInstalled(command) {
 }
 
 /** Status from the CLI itself (installed, logged in). */
-export async function cliStatus(driver, cfg = {}) {
+export async function cliStatus(driver: string, cfg: DriverConfig = {}): Promise<AccountStatus> {
   const command = cfg.command || driver;
   const inst = await checkInstalled(command);
   if (!inst.installed) return { state: 'not_installed', detail: inst.detail || `${command} was not found on PATH.` };
@@ -86,7 +113,7 @@ export async function cliStatus(driver, cfg = {}) {
   }
   if (driver === 'codex') {
     const r = await run(command, ['login', 'status']);
-    const line = r.out.split('\n').find((l) => /logged|login|api key/i.test(l)) || r.out.split('\n')[0] || '';
+    const line = r.out.split('\n').find((l: string) => /logged|login|api key/i.test(l)) || r.out.split('\n')[0] || '';
     if (/not logged in/i.test(r.out) || r.code !== 0)
       return { state: 'logged_out', version: inst.version, detail: line.slice(0, 200) || 'Not signed in.' };
     return { state: 'ok', version: inst.version, detail: line.replace(/^.*?(Logged in)/i, '$1').slice(0, 200) };
@@ -108,7 +135,7 @@ export async function cliStatus(driver, cfg = {}) {
       version: inst.version,
       detail: text
         .split('\n')
-        .map((l) => l.replace(/^[^\w]+/, '').trim())
+        .map((l: string) => l.replace(/^[^\w]+/, '').trim())
         .filter(Boolean)
         .slice(0, 6)
         .join(' · ')
@@ -119,7 +146,7 @@ export async function cliStatus(driver, cfg = {}) {
 }
 
 /** Open a terminal window that runs the provider's own login command, for the user to finish. */
-export function openLoginTerminal(driver, cfg = {}) {
+export function openLoginTerminal(driver: string, cfg: DriverConfig = {}): string {
   const p = PROVIDERS[driver];
   if (!p) throw new Error('unknown provider');
   const parts = [cfg.command || driver, ...p.login.command.split(' ').slice(1)];
@@ -135,13 +162,16 @@ export function openLoginTerminal(driver, cfg = {}) {
 }
 
 /** Combine the CLI status with what the agents reported while running (no access, usage limit). */
-export function mergeStatus(cli, runtime) {
+export function mergeStatus(cli: AccountStatus, runtime: RuntimeStatus | null): AccountStatus {
   if (!runtime || ['not_installed', 'logged_out'].includes(cli.state)) return cli;
   if (runtime.state === 'rate_limited' && runtime.resetsAt && runtime.resetsAt < Date.now()) return cli;
   return { ...cli, state: runtime.state, detail: runtime.detail || cli.detail, resetsAt: runtime.resetsAt || null };
 }
 
-export function nextStep(driver, status) {
+export function nextStep(
+  driver: string,
+  status: AccountStatus,
+): { text: string; command?: string; docs?: string; action: 'login' | null } | null {
   const p = PROVIDERS[driver];
   switch (status.state) {
     case 'not_installed':

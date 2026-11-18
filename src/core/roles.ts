@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import type { ModelInfo, Role, RoleCatalog } from './types.ts';
 
 /**
  * Role catalog: one JSON file per role in <app>/roles. Add a role by copying a file and changing it.
@@ -8,8 +9,8 @@ import path from 'node:path';
  * context ("diff": receives git diff + request), profile ("full" | "lean": lean runs without hooks),
  * skillsOff[] (skill name patterns switched off for the role, e.g. "*:long-task").
  */
-export function loadRoles(dir) {
-  const roles = {};
+export function loadRoles(dir: string): RoleCatalog {
+  const roles: RoleCatalog = {};
   if (!fs.existsSync(dir)) return roles;
   for (const f of fs
     .readdirSync(dir)
@@ -39,7 +40,7 @@ export function loadRoles(dir) {
 }
 
 /** Glob match for skill names: * matches anything (e.g. "*:long-task"). */
-export function globMatch(pattern, name) {
+export function globMatch(pattern: string, name: string): boolean {
   const escaped = String(pattern)
     .split('*')
     .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, (c) => `\\${c}`))
@@ -48,9 +49,9 @@ export function globMatch(pattern, name) {
 }
 
 /** True when a model id or label matches one of the role's recommended patterns. */
-export function isRecommended(role, model) {
+export function isRecommended(role: Pick<Role, 'recommended'> | undefined, model: Partial<ModelInfo> | undefined): boolean {
   const text = `${model?.value || ''} ${model?.label || ''} ${model?.resolved || ''}`;
-  return (role?.recommended?.patterns || []).some((p) => {
+  return (role?.recommended?.patterns || []).some((p: string) => {
     try {
       return new RegExp(p, 'i').test(text);
     } catch {

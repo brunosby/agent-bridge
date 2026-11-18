@@ -1,17 +1,28 @@
 // Conversation lifecycle: open, close, restore, wire agent events, approvals timeout, token limit, settings.
-import { S } from './state.mjs';
+import type { Agent, AgentEvent, AgentSpec, Conversation, RoutingMode } from '../core/types.ts';
+import { S } from './state.ts';
 import fs from 'node:fs';
 import path from 'node:path';
-import { listConversations, loadConversation } from '../core/history.mjs';
-import { LOGS_DIR, SETTINGS, safeRegex, saveLocalConfig, setting } from '../config/settings.mjs';
-import { agentName, logError, publish, publishState, resetClients } from './events.mjs';
-import { ROUTING_MODES } from '../core/prompts.mjs';
-import { approvalTimers, cliCache, providerRuntime, relay } from './state.mjs';
-import { createAgent, defaultName, defaultTeam, driverModelCache, startAgent, uniqueName } from './team.mjs';
-import { DRIVERS } from '../providers/registry.mjs';
-import { onTurnEnd } from './routing.mjs';
-import { buildMatcher } from '../core/safety.mjs';
-export function openConversation({ workDir, restoreId, team, routingMode }) {
+import { listConversations, loadConversation } from '../core/history.ts';
+import { LOGS_DIR, SETTINGS, safeRegex, saveLocalConfig, setting } from '../config/settings.ts';
+import { agentName, logError, publish, publishState, resetClients } from './events.ts';
+import { ROUTING_MODES } from '../core/prompts.ts';
+import { approvalTimers, cliCache, providerRuntime, relay } from './state.ts';
+import { createAgent, defaultName, defaultTeam, startAgent, uniqueName } from './team.ts';
+import { driverModelCache } from './state.ts';
+import { DRIVERS } from '../providers/registry.ts';
+import { onTurnEnd } from './routing.ts';
+import { buildMatcher } from '../core/safety.ts';
+export interface OpenOptions {
+  workDir: string;
+  restoreId?: string | null;
+  team?: Partial<AgentSpec>[];
+  routingMode?: string;
+}
+
+export function openConversation({ workDir, restoreId, team, routingMode }: OpenOptions): {
+  saved: ReturnType<typeof loadConversation> | null;
+} {
   let saved = null;
   if (restoreId) {
     saved = loadConversation(LOGS_DIR, restoreId);
@@ -29,7 +40,7 @@ export function openConversation({ workDir, restoreId, team, routingMode }) {
     runDir,
     transcript: fs.createWriteStream(path.join(runDir, 'transcript.jsonl'), { flags: 'a' }),
     workDir,
-    routingMode: ROUTING_MODES[routingMode] ? routingMode : setting('routingMode'),
+    routingMode: (routingMode && routingMode in ROUTING_MODES ? routingMode : setting('routingMode')) as RoutingMode,
     team: [],
     agents: {},
     nextAgent: 0,
@@ -70,7 +81,7 @@ export function openConversation({ workDir, restoreId, team, routingMode }) {
 export async function closeConversation() {
   if (!S.conv) return;
   const old = S.conv;
-  S.conv = null;
+  S.conv = null as unknown as Conversation;
   for (const t of approvalTimers.values()) clearTimeout(t);
   approvalTimers.clear();
   await Promise.all(Object.values(old.agents).map((a) => a.shutdown().catch(() => {})));
@@ -81,8 +92,8 @@ export function startAgents() {
   for (const a of Object.values(S.conv.agents)) startAgent(a);
 }
 
-export function wireAgent(owner, id, agent) {
-  agent.on('event', (ev) => {
+export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
+  agent.on('event', (ev: AgentEvent) => {
     if (S.conv !== owner || owner.agents[id] !== agent) return; // late events from a closed conversation or removed agent
     if (ev.kind === 'stderr') {
       owner.transcript.write(JSON.stringify({ at: Date.now(), ...ev }) + '\n');
@@ -133,7 +144,7 @@ export function wireAgent(owner, id, agent) {
     }
     if (ev.kind === 'approval') {
       const spec = owner.team.find((a) => a.id === id);
-      const hit = agent.isDestructive({ command: ev.matchText, cwd: ev.cwd || agent.cwd, deletePaths: ev.deletePaths });
+      const hit = agent.isDestructive?.({ command: ev.matchText, cwd: ev.cwd || agent.cwd, deletePaths: ev.deletePaths }) ?? null;
       if (spec?.bypass && !hit) {
         agent.respondApproval(ev.requestId, 'accept');
         publish({ kind: 'autoApproved', agent: id, title: ev.title, detail: ev.detail });
@@ -149,7 +160,7 @@ export function wireAgent(owner, id, agent) {
   });
 }
 
-export function armApprovalTimeout(agentId, ev) {
+export function armApprovalTimeout(agentId: string, ev: AgentEvent): void {
   const sec = Number(setting('approvalTimeoutSec'));
   if (!(sec > 0)) return;
   ev.expiresAt = Date.now() + sec * 1000;
@@ -188,7 +199,7 @@ export function checkTokenLimit() {
   return true;
 }
 
-export async function restoreConversation(id) {
+export async function restoreConversation(id: string): Promise<void> {
   if (!listConversations(LOGS_DIR).some((c) => c.id === id)) throw new Error(`conversation ${id} not found`);
   await closeConversation();
   const { saved } = openConversation({ workDir: process.cwd(), restoreId: id });
@@ -196,13 +207,13 @@ export async function restoreConversation(id) {
   const resumed = S.conv.team.filter((a) => a.sessionId).map((a) => a.name);
   publish({
     kind: 'system',
-    text: `Restored conversation from ${new Date(saved.startedAt).toLocaleString()} in ${S.conv.workDir} with ${S.conv.team.length} agent(s). ${resumed.length ? `${resumed.join(', ')} continue their sessions.` : 'No agent sessions were saved, so the agents start fresh.'} Relay is paused until you send a message.`,
+    text: `Restored conversation from ${new Date(saved?.startedAt || Date.now()).toLocaleString()} in ${S.conv.workDir} with ${S.conv.team.length} agent(s). ${resumed.length ? `${resumed.join(', ')} continue their sessions.` : 'No agent sessions were saved, so the agents start fresh.'} Relay is paused until you send a message.`,
   });
   startAgents();
   publishState();
 }
 
-export async function newConversation(workDir) {
+export async function newConversation(workDir?: string): Promise<void> {
   const dir = path.resolve(workDir || S.conv?.workDir || process.cwd());
   if (!fs.existsSync(dir)) throw new Error(`Folder does not exist: ${dir}`);
   await closeConversation();
@@ -220,8 +231,8 @@ export function settingsView() {
   return Object.fromEntries(Object.keys(SETTINGS).map((k) => [k, setting(k)]));
 }
 
-export function saveSettings(input) {
-  const next = {};
+export function saveSettings(input: Record<string, any>): void {
+  const next: Record<string, unknown> = {};
   for (const [key, def] of Object.entries(SETTINGS)) {
     if (!(key in input)) continue;
     let v = input[key];
@@ -231,7 +242,7 @@ export function saveSettings(input) {
       if (!Number.isFinite(v) || v < (def.min ?? -Infinity))
         throw new Error(`${key} must be a number${def.min !== undefined ? ` ≥ ${def.min}` : ''}`);
     } else if (def.type === 'enum') {
-      if (!def.values.includes(v)) throw new Error(`${key} must be one of ${def.values.join(', ')}`);
+      if (!(def.values || []).includes(v)) throw new Error(`${key} must be one of ${(def.values || []).join(', ')}`);
     } else if (def.type === 'list') {
       v = (Array.isArray(v) ? v : String(v).split('\n')).map((s) => String(s).trim()).filter(Boolean);
       for (const p of v) if (!safeRegex(p)) throw new Error(`invalid pattern in ${key}: ${p}`);

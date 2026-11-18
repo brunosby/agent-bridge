@@ -73,18 +73,32 @@ const CHANGES_DIR = /(^|[\s;&|(])(cd|pushd|chdir|Set-Location|sl)\s/i;
 // Shell wrapper used by Codex on Windows: "...\powershell.exe" -Command "<real command>"
 const WRAPPER = /^\s*"?[^"\s]*?(powershell|pwsh|cmd|bash|sh)(\.exe)?"?\s+(-NoProfile\s+)?(-Command|-c|\/c|\/d\s+\/s\s+\/c)\s+/i;
 
-export function buildMatcher({ workDir, destructive = DEFAULT_DESTRUCTIVE_PATTERNS, deletion = DEFAULT_DELETION_PATTERNS }) {
+export interface MatchInput {
+  command?: string;
+  cwd?: string;
+  deletePaths?: string[];
+}
+
+export function buildMatcher({
+  workDir,
+  destructive = DEFAULT_DESTRUCTIVE_PATTERNS,
+  deletion = DEFAULT_DELETION_PATTERNS,
+}: {
+  workDir: string;
+  destructive?: string[];
+  deletion?: string[];
+}): (input: MatchInput) => string | null {
   const destructiveRx = destructive.map((p) => new RegExp(p, 'i'));
   const deletionRx = deletion.map((p) => new RegExp(p, 'i'));
   const root = normalize(workDir);
 
-  const inside = (p, base) => {
+  const inside = (p: string, base: string): boolean => {
     const full = normalize(path.resolve(base, toNativePath(p)));
     return full === root || full.startsWith(root + path.sep);
   };
 
   /** Returns a short reason when the action must be approved by the user, otherwise null. */
-  return function classify({ command, cwd, deletePaths }) {
+  return function classify({ command, cwd, deletePaths }: MatchInput): string | null {
     const base = cwd || workDir;
     for (const p of deletePaths || []) {
       if (!inside(p, base)) return `deletes ${p}, outside the project folder`;
@@ -108,8 +122,8 @@ export function buildMatcher({ workDir, destructive = DEFAULT_DESTRUCTIVE_PATTER
 }
 
 /** Path-like tokens: quoted strings or words containing a slash, a backslash, a drive letter or "..". */
-function pathTokens(text) {
-  const out = [];
+function pathTokens(text: string): string[] {
+  const out: string[] = [];
   const rx = /"([^"]+)"|'([^']+)'|([^\s"';&|()]+)/g;
   let m;
   while ((m = rx.exec(text))) {
@@ -121,7 +135,7 @@ function pathTokens(text) {
 }
 
 /** Git Bash style /d/project -> D:\project on Windows. */
-function toNativePath(p) {
+function toNativePath(p: string): string {
   if (process.platform === 'win32') {
     const m = /^\/([a-z])(\/.*)?$/i.exec(p);
     if (m) return `${m[1].toUpperCase()}:${(m[2] || '\\').replace(/\//g, '\\')}`;
@@ -129,7 +143,7 @@ function toNativePath(p) {
   return p;
 }
 
-function normalize(p) {
+function normalize(p: string): string {
   const r = path.resolve(p).replace(/[\\/]+$/, '');
   return process.platform === 'win32' ? r.toLowerCase() : r;
 }

@@ -1,22 +1,24 @@
 // Routing: who receives each message, review rounds, missing roles, delivery to agents.
-import { S } from './state.mjs';
+import type { AgentEvent, AgentSpec } from '../core/types.ts';
+import { S } from './state.ts';
 import { spawnSync } from 'node:child_process';
-import { agentName, logError, publish, publishState } from './events.mjs';
-import { setting } from '../config/settings.mjs';
-import { DONE_MARKER, relay } from './state.mjs';
-import { checkTokenLimit } from './conversation.mjs';
-import { DRIVERS } from '../providers/registry.mjs';
-import { addAgent, driverModelCache, providerBlocked } from './team.mjs';
-import { isRecommended } from '../core/roles.mjs';
-import { rosterText } from '../core/prompts.mjs';
+import { agentName, logError, publish, publishState } from './events.ts';
+import { setting } from '../config/settings.ts';
+import { DONE_MARKER, relay } from './state.ts';
+import { checkTokenLimit } from './conversation.ts';
+import { DRIVERS } from '../providers/registry.ts';
+import { addAgent, providerBlocked } from './team.ts';
+import { driverModelCache } from './state.ts';
+import { isRecommended } from '../core/roles.ts';
+import { rosterText } from '../core/prompts.ts';
 export function orchestratorId() {
   return (S.conv.team.find((a) => a.role === 'orchestrator') || S.conv.team[0])?.id;
 }
 
 /** @mentions of team members in a message, in order, without duplicates. */
-export function mentions(text, selfId) {
+export function mentions(text: string, selfId: string | null): string[] {
   const byName = new Map(S.conv.team.map((a) => [a.name.toLowerCase(), a.id]));
-  const out = [];
+  const out: string[] = [];
   for (const m of String(text).matchAll(/@([\w-]+)/g)) {
     const id = byName.get(m[1].toLowerCase());
     if (id && id !== selfId && !out.includes(id)) out.push(id);
@@ -24,7 +26,7 @@ export function mentions(text, selfId) {
   return out;
 }
 
-export function nextInOrder(fromId, wrap) {
+export function nextInOrder(fromId: string, wrap: boolean): string | null {
   const ids = S.conv.team.map((a) => a.id);
   const i = ids.indexOf(fromId);
   if (i < 0) return null;
@@ -33,7 +35,7 @@ export function nextInOrder(fromId, wrap) {
 }
 
 /** Who receives an agent's final message, by routing mode. Empty list = it is for the user. */
-export function routeTargets(fromId, text) {
+export function routeTargets(fromId: string, text: string): string[] {
   const mode = S.conv.routingMode;
   const ment = mentions(text, fromId);
   if (mode === 'orchestrator') {
@@ -46,8 +48,8 @@ export function routeTargets(fromId, text) {
     const back = S.conv.lastSender[fromId];
     return back && back !== 'user' && S.conv.agents[back] ? [back] : [];
   }
-  if (mode === 'pipeline') return [nextInOrder(fromId, false)].filter(Boolean);
-  if (mode === 'roundrobin') return [nextInOrder(fromId, true)].filter(Boolean);
+  if (mode === 'pipeline') return [nextInOrder(fromId, false)].filter((x): x is string => Boolean(x));
+  if (mode === 'roundrobin') return [nextInOrder(fromId, true)].filter((x): x is string => Boolean(x));
   return [];
 }
 
@@ -55,7 +57,7 @@ export function routeTargets(fromId, text) {
  * Review rounds: each CHANGES REQUESTED from a Reviewer counts one round; APPROVED resets the count.
  * Past maxReviewRounds the orchestrator is told to stop the fix loop and report to the user instead.
  */
-export function reviewNote(fromId, text) {
+export function reviewNote(fromId: string, text: string): string {
   if (S.conv.team.find((a) => a.id === fromId)?.role !== 'reviewer' || !text) return text;
   if (/^\W*APPROVED/i.test(text)) {
     S.conv.reviewRounds = 0;
@@ -75,7 +77,7 @@ export function reviewNote(fromId, text) {
   return `${text}\n\n[Agent Bridge: review round ${S.conv.reviewRounds} of ${max}. Send the findings to the coder.]`;
 }
 
-export function onTurnEnd(fromId, ev) {
+export function onTurnEnd(fromId: string, ev: AgentEvent): void {
   const text = reviewNote(fromId, (ev.text || '').trim());
   const orch = orchestratorId();
 
@@ -147,7 +149,7 @@ export function onTurnEnd(fromId, ev) {
 export const NEED_ROLE = /\[\[NEED_ROLE:\s*([\w-]+)\s*\]\]/i;
 
 /** Closest agent for a missing role: the role's fallback list, then the orchestrator. */
-export function closestAgent(roleId) {
+export function closestAgent(roleId: string): AgentSpec | undefined {
   for (const fb of S.roles[roleId]?.fallback || []) {
     const a = S.conv.team.find((x) => x.role === fb);
     if (a) return a;
@@ -156,7 +158,7 @@ export function closestAgent(roleId) {
 }
 
 /** Provider and model to suggest for a role: the first available model recommended for it. */
-export function suggestFor(roleId) {
+export function suggestFor(roleId: string): { driver: string; model: string | null; modelLabel: string } {
   const role = S.roles[roleId];
   for (const driver of Object.keys(DRIVERS)) {
     const models = driverModelCache[driver]?.models || [];
@@ -169,7 +171,7 @@ export function suggestFor(roleId) {
 }
 
 /** The orchestrator asked for a role nobody has. Ask the user (default) or continue with the closest agent. */
-export function handleNeedRole(fromId, text) {
+export function handleNeedRole(fromId: string, text: string): boolean {
   const m = NEED_ROLE.exec(text);
   if (!m) return false;
   const roleId = m[1].toLowerCase();
@@ -204,7 +206,7 @@ export function handleNeedRole(fromId, text) {
   return true;
 }
 
-export async function resolveMissingRole(roleId, action) {
+export async function resolveMissingRole(roleId: string, action: string): Promise<void> {
   const role = S.roles[roleId];
   const orch = orchestratorId();
   S.conv.pendingRoleRequest = null;
@@ -234,7 +236,7 @@ export async function resolveMissingRole(roleId, action) {
 }
 
 /** Send a message to one agent, adding the team roster or a role note when they changed. */
-export function deliver(toId, text, { from }) {
+export function deliver(toId: string, text: string, { from }: { from: string }): void {
   const agent = S.conv.agents[toId];
   if (!agent) return;
   const blocked = providerBlocked(S.conv.team.find((a) => a.id === toId)?.driver);
@@ -269,7 +271,7 @@ export function deliver(toId, text, { from }) {
   // Roles with context "diff" (Reviewer) get the original request and the current changes, so they
   // review what changed instead of reading the whole conversation.
   const spec = S.conv.team.find((a) => a.id === toId);
-  if (S.roles[spec?.role]?.context === 'diff' && from !== 'user') {
+  if (spec && S.roles[spec.role]?.context === 'diff' && from !== 'user') {
     extras.push(`[Original request from ${setting('userName')}]\n${S.conv.lastUserText || '(not available)'}`);
     extras.push(diffContext(agent.cwd || S.conv.workDir));
   }
@@ -279,8 +281,8 @@ export function deliver(toId, text, { from }) {
 }
 
 /** git diff of the working tree (tracked changes + list of new files), trimmed to a reasonable size. */
-export function diffContext(dir) {
-  const git = (args) =>
+export function diffContext(dir: string): string {
+  const git = (args: string[]) =>
     spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 15000, maxBuffer: 20 * 1024 * 1024 });
   const inside = git(['rev-parse', '--is-inside-work-tree']);
   if (inside.status !== 0)
@@ -292,7 +294,7 @@ export function diffContext(dir) {
   return `[Current changes (git diff HEAD)]\n${body.trim() ? `\`\`\`diff\n${body.trim()}\n\`\`\`` : '(no changes to tracked files)'}${untracked ? `\nNew files not in git yet:\n${untracked}` : ''}`;
 }
 
-export function userSend(text, target) {
+export function userSend(text: string, target?: string): void {
   S.conv.lastUserText = text;
   let targets;
   if (target === 'all') targets = S.conv.team.map((a) => a.id);

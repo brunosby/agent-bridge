@@ -1,14 +1,15 @@
 // Event bus: everything the page shows goes through publish() and the state snapshot.
+import type { Agent, AgentSpec, BridgeEvent, ModelInfo } from '../core/types.ts';
 import fs from 'node:fs';
 import path from 'node:path';
-import { S, clients, relay } from './state.mjs';
-import { safeRegex, setting } from '../config/settings.mjs';
-import { providerBlocked } from './team.mjs';
-import { isRecommended } from '../core/roles.mjs';
-import { DRIVERS } from '../providers/registry.mjs';
+import { S, clients, relay } from './state.ts';
+import { safeRegex, setting } from '../config/settings.ts';
+import { providerBlocked } from './team.ts';
+import { isRecommended } from '../core/roles.ts';
+import { DRIVERS } from '../providers/registry.ts';
 
-export function publish(ev) {
-  const full = { seq: ++S.seq, at: Date.now(), ...ev };
+export function publish(ev: BridgeEvent): void {
+  const full: BridgeEvent = { seq: ++S.seq, at: Date.now(), ...ev };
   S.history.push(full);
   if (S.history.length > 20000) S.history.splice(0, S.history.length - 20000);
   S.conv?.transcript.write(JSON.stringify(full) + '\n');
@@ -18,7 +19,7 @@ export function publish(ev) {
 }
 
 /** errors.log next to the transcript: one line per problem, for finding causes later. */
-export function logError(source, text) {
+export function logError(source: string, text: unknown): void {
   if (!S.conv) return;
   try {
     fs.appendFileSync(
@@ -30,13 +31,11 @@ export function logError(source, text) {
   }
 }
 
-export const agentName = (id) => S.conv?.team.find((a) => a.id === id)?.name || id;
+export const agentName = (id: string): string => S.conv?.team.find((a) => a.id === id)?.name || id;
 
-export function decorateModels(spec, agent) {
+export function decorateModels(spec: AgentSpec, agent: Agent): ModelInfo[] {
   const role = S.roles[spec.role];
-  const sensitive = setting('sensitiveModelPatterns')
-    .map((p) => safeRegex(p))
-    .filter(Boolean);
+  const sensitive = (setting('sensitiveModelPatterns') as string[]).map((p) => safeRegex(p)).filter((r): r is RegExp => r !== null);
   const blocked = providerBlocked(spec.driver);
   return (agent.models || []).map((m) => ({
     ...m,

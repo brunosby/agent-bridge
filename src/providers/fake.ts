@@ -1,5 +1,11 @@
-// @ts-check
 import { EventEmitter } from 'node:events';
+import type { Agent, AgentOptions, DriverConfig, ModelInfo } from '../core/types.ts';
+
+interface FakeRule {
+  agent?: string;
+  match?: string;
+  reply: string;
+}
 
 /**
  * Scripted agent for tests: answers from rules instead of calling a model, so routing, review loops and
@@ -9,9 +15,28 @@ import { EventEmitter } from 'node:events';
  * The first rule whose agent and match patterns fit the incoming message is used; "{n}" in a reply is
  * replaced by how many messages the agent has received.
  */
-export class FakeAgent extends EventEmitter {
-  /** @param {{ id?: string, name?: string, cwd?: string, config?: any, tokens?: number, cachedTokens?: number }} opts */
-  constructor({ id = 'fake', name = 'Fake', cwd = '.', config = {}, tokens = 0, cachedTokens = 0 }) {
+export class FakeAgent extends EventEmitter implements Agent {
+  id: string;
+  name: string;
+  label: string;
+  cwd: string;
+  config: DriverConfig;
+  tokens: number;
+  cachedTokens: number;
+  available = true;
+  unavailableReason: string | null = null;
+  approvals = new Map<string, unknown>();
+  sessionId: string;
+  models: ModelInfo[] = [
+    { value: 'fake-large', label: 'Fake Large', isDefault: true, efforts: ['low', 'high'] },
+    { value: 'fake-small', label: 'Fake Small', efforts: [] },
+  ];
+  resolvedModel: string | null = 'fake-large';
+  received = 0;
+  busyCount = 0;
+  inbox: string[] = [];
+
+  constructor({ id = 'fake', name = 'Fake', cwd = '.', config = {}, tokens = 0, cachedTokens = 0 }: AgentOptions) {
     super();
     this.id = id;
     this.name = name;
@@ -20,46 +45,31 @@ export class FakeAgent extends EventEmitter {
     this.config = config || {};
     this.tokens = tokens;
     this.cachedTokens = cachedTokens;
-    this.available = true;
-    this.unavailableReason = null;
-    this.approvals = new Map();
     this.sessionId = this.config.resumeSessionId || `fake-${id}`;
-    /** @type {{ value: string, label: string, isDefault?: boolean, efforts?: string[] }[]} */
-    this.models = [
-      { value: 'fake-large', label: 'Fake Large', isDefault: true, efforts: ['low', 'high'] },
-      { value: 'fake-small', label: 'Fake Small', efforts: [] },
-    ];
-    this.resolvedModel = 'fake-large';
-    this.received = 0;
-    this.busyCount = 0;
-    /** @type {string[]} */
-    this.inbox = [];
   }
 
-  get busy() {
+  get busy(): boolean {
     return this.busyCount > 0;
   }
 
-  get model() {
+  get model(): string | null {
     return this.config.model || null;
   }
 
-  get effort() {
+  get effort(): string | null {
     return this.config.effort || null;
   }
 
-  /** @param {string} kind @param {Record<string, unknown>} [data] */
-  emitEvent(kind, data = {}) {
+  emitEvent(kind: string, data: Record<string, unknown> = {}): void {
     this.emit('event', { agent: this.id, kind, ...data });
   }
 
-  async start() {
+  async start(): Promise<void> {
     this.emitEvent('session', { sessionId: this.sessionId });
     this.emitEvent('models', {});
   }
 
-  /** @param {string} text */
-  send(text) {
+  send(text: string): void {
     this.received += 1;
     this.inbox.push(text);
     this.busyCount += 1;
@@ -79,9 +89,8 @@ export class FakeAgent extends EventEmitter {
     );
   }
 
-  /** @param {string} text @param {number} n */
-  replyFor(text, n) {
-    for (const r of this.config.rules || []) {
+  replyFor(text: string, n: number): string {
+    for (const r of (this.config.rules || []) as FakeRule[]) {
       if (r.agent && !new RegExp(r.agent, 'i').test(this.name)) continue;
       if (r.match && !new RegExp(r.match, 'i').test(text)) continue;
       return String(r.reply).replace(/\{n\}/g, String(n));
@@ -89,27 +98,25 @@ export class FakeAgent extends EventEmitter {
     return `ok ${n}`;
   }
 
-  /** @param {string} model */
-  async setModel(model) {
+  async setModel(model: string): Promise<void> {
     this.config.model = model && model !== 'default' ? model : null;
   }
 
-  /** @param {string} effort */
-  async setEffort(effort) {
+  async setEffort(effort: string | null): Promise<void> {
     this.config.effort = effort && effort !== 'default' ? effort : null;
   }
 
-  async reconfigure() {}
+  async reconfigure(): Promise<void> {}
 
-  respondApproval() {
+  respondApproval(): boolean {
     return false;
   }
 
-  async interrupt() {}
+  async interrupt(): Promise<void> {}
 
-  async restart() {
+  async restart(): Promise<void> {
     this.available = true;
   }
 
-  async shutdown() {}
+  async shutdown(): Promise<void> {}
 }

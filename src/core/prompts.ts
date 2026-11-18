@@ -1,6 +1,8 @@
 /** Instructions given to each agent so it knows it is part of a live multi-agent conversation. */
 
-export const ROUTING_MODES = {
+import type { Role, RoutingMode } from './types.ts';
+
+export const ROUTING_MODES: Record<RoutingMode, { label: string; rule: string }> = {
   orchestrator: {
     label: 'Orchestrator + mentions',
     rule: 'The orchestrator delegates with @AgentName. Every other agent replies to the orchestrator only. When the orchestrator writes no @mention, its message goes to the user.',
@@ -19,8 +21,17 @@ export const ROUTING_MODES = {
   },
 };
 
-export function buildInstructions({ name, role, routingMode, workDir, userName, extra }) {
-  const mode = ROUTING_MODES[routingMode] || ROUTING_MODES.orchestrator;
+export interface InstructionOptions {
+  name: string;
+  role: Role | undefined;
+  routingMode: string;
+  workDir: string;
+  userName: string;
+  extra?: string | null;
+}
+
+export function buildInstructions({ name, role, routingMode, workDir, userName, extra }: InstructionOptions): string {
+  const mode = ROUTING_MODES[routingMode as RoutingMode] || ROUTING_MODES.orchestrator;
   const editRule =
     role?.canEdit === 'none'
       ? 'Your role does not edit files. Read, run read-only commands and report.'
@@ -49,13 +60,21 @@ export function buildInstructions({ name, role, routingMode, workDir, userName, 
 }
 
 /** Short roster sent to an agent when the team changes. */
-export function rosterText(team, selfId, routingMode) {
-  const edits = { all: 'edits files', tests: 'edits tests only', none: 'read-only' };
+export interface RosterMember {
+  id: string;
+  name: string;
+  roleName: string;
+  canEdit?: string;
+  model?: string | null;
+}
+
+export function rosterText(team: RosterMember[], selfId: string, routingMode: string): string {
+  const edits: Record<string, string> = { all: 'edits files', tests: 'edits tests only', none: 'read-only' };
   const lines = team.map(
     (a) =>
-      `- @${a.name}: ${a.roleName} (${edits[a.canEdit] || 'edits files'})${a.model ? `, model ${a.model}` : ''}${a.id === selfId ? ' (you)' : ''}`,
+      `- @${a.name}: ${a.roleName} (${edits[a.canEdit || 'all'] || 'edits files'})${a.model ? `, model ${a.model}` : ''}${a.id === selfId ? ' (you)' : ''}`,
   );
-  const mode = ROUTING_MODES[routingMode] || ROUTING_MODES.orchestrator;
+  const mode = ROUTING_MODES[routingMode as RoutingMode] || ROUTING_MODES.orchestrator;
   const noEditor = !team.some((a) => a.canEdit === 'all');
   const note = noEditor
     ? '\nNo agent in this team can edit production code. Do not try to work around it: plan and review only, and tell the user to add a Coder (or another role that edits files) when the task needs code changes.'

@@ -1,14 +1,45 @@
 import { EventEmitter } from 'node:events';
-import { spawnJsonl } from './process.mjs';
-import { clip } from './claude.mjs';
+import { spawnJsonl, type JsonlProcess } from './process.ts';
+import type { Agent, AgentOptions, DriverConfig, ModelInfo, ReconfigureOptions } from '../core/types.ts';
+import { clip } from './claude.ts';
 
 /**
  * Drives Codex through `codex app-server` (JSON-RPC 2.0 without the "jsonrpc" field, JSONL over stdio).
  * Flow: initialize -> initialized -> thread/start (or thread/resume) -> turn/start per message.
  * Approval requests arrive as server->client requests and are forwarded to the UI.
  */
-export class CodexAgent extends EventEmitter {
-  constructor({ id = 'codex', name = 'Codex', cwd, config, instructions, readOnly = false, tokens = 0, cachedTokens = 0 }) {
+export class CodexAgent extends EventEmitter implements Agent {
+  id: string;
+  name: string;
+  label: string;
+  readOnly: boolean;
+  sandboxOverride: boolean;
+  tokens: number;
+  cachedTokens: number;
+  available: boolean;
+  unavailableReason: string | null;
+  cwd: string;
+  config: DriverConfig;
+  instructions?: string;
+  nextId: number;
+  waiting: Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; method: string }>;
+  threadId: string | null;
+  activeTurnId: string | null;
+  turnMessages: { text: string; phase?: string | null }[];
+  queue: string[];
+  ready: Promise<void> | null;
+  approvals: Map<string, { rpcId: number | string; method: string }>;
+  fileChanges: Map<string, { path: string; kind: unknown }[]>;
+  models: ModelInfo[] = [];
+  resolvedModel: string | null = null;
+  proc: JsonlProcess | null = null;
+  stopping = false;
+
+  get sessionId(): string | null {
+    return this.threadId;
+  }
+
+  constructor({ id = 'codex', name = 'Codex', cwd, config, instructions, readOnly = false, tokens = 0, cachedTokens = 0 }: AgentOptions) {
     super();
     this.id = id;
     this.name = name;
@@ -37,20 +68,20 @@ export class CodexAgent extends EventEmitter {
     return Boolean(this.activeTurnId) || this.queue.length > 0;
   }
 
-  emitEvent(kind, data = {}) {
+  emitEvent(kind: string, data: Record<string, unknown> = {}): void {
     this.emit('event', { agent: this.id, kind, ...data });
   }
 
-  request(method, params) {
+  request(method: string, params: unknown): Promise<any> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.waiting.set(id, { resolve, reject, method });
-      this.proc.write({ method, id, params });
+      this.proc?.write({ method, id, params });
     });
   }
 
-  notify(method, params = {}) {
-    this.proc.write({ method, params });
+  notify(method: string, params: unknown = {}): void {
+    this.proc?.write({ method, params });
   }
 
   start() {
@@ -80,10 +111,10 @@ export class CodexAgent extends EventEmitter {
       },
     });
     this.ready = this.handshake().catch((err) => {
-      this.emitEvent('error', { text: `Codex start failed: ${err.message}` });
+      this.emitEvent('error', { text: `Codex start failed: ${errorText(err)}` });
       this.ready = null;
       // The handshake is the protocol contract; if it fails, treat Codex as unavailable instead of retrying forever.
-      this.markUnavailable(`Codex app-server did not start: ${err.message}`);
+      this.markUnavailable(`Codex app-server did not start: ${errorText(err)}`);
       throw err;
     });
     return this.ready;
@@ -100,13 +131,13 @@ export class CodexAgent extends EventEmitter {
       try {
         res = await this.request('thread/resume', { threadId: this.threadId || c.resumeThreadId });
       } catch (err) {
-        this.emitEvent('info', { text: `Could not resume the earlier Codex thread (${err.message}); starting a new one.` });
+        this.emitEvent('info', { text: `Could not resume the earlier Codex thread (${errorText(err)}); starting a new one.` });
         this.threadId = null;
         c.resumeThreadId = null;
       }
     }
     if (!res) {
-      const params = {
+      const params: Record<string, unknown> = {
         cwd: this.cwd,
         approvalPolicy: c.approvalPolicy || 'on-request',
         sandbox: this.readOnly ? 'read-only' : c.sandbox || 'workspace-write',
@@ -119,7 +150,7 @@ export class CodexAgent extends EventEmitter {
     this.threadId = res.thread.id;
     this.resolvedModel = res.model || null;
     this.emitEvent('session', { sessionId: this.threadId, model: res.model });
-    this.loadModels().catch((err) => this.emitEvent('info', { text: `model/list failed: ${err.message}` }));
+    this.loadModels().catch((err) => this.emitEvent('info', { text: `model/list failed: ${errorText(err)}` }));
     this.emitEvent('status', { busy: this.busy });
   }
 
@@ -139,7 +170,9 @@ export class CodexAgent extends EventEmitter {
         label: m.displayName || m.model,
         isDefault: Boolean(m.isDefault),
         description: m.description || '',
-        efforts: (m.supportedReasoningEfforts || []).map((e) => (typeof e === 'string' ? e : e.reasoningEffort)).filter(Boolean),
+        efforts: (m.supportedReasoningEfforts || [])
+          .map((e: string | { reasoningEffort: string }) => (typeof e === 'string' ? e : e.reasoningEffort))
+          .filter(Boolean),
         defaultEffort: m.defaultReasoningEffort || null,
       }));
     this.emitEvent('models', {});
@@ -150,7 +183,7 @@ export class CodexAgent extends EventEmitter {
   }
 
   /** Change the model. It is sent with every following turn/start, so it applies from the next turn. */
-  async setModel(model) {
+  async setModel(model: string): Promise<void> {
     const value = model && model !== 'default' ? model : null;
     this.config.model = value;
     this.emitEvent('info', {
@@ -158,7 +191,7 @@ export class CodexAgent extends EventEmitter {
     });
   }
 
-  async send(text) {
+  async send(text: string): Promise<void> {
     this.queue.push(text);
     this.emitEvent('status', { busy: true });
     try {
@@ -172,11 +205,11 @@ export class CodexAgent extends EventEmitter {
   }
 
   /** Start a turn with all queued text. If a turn is active, Codex adds the input to it. */
-  async flush() {
+  async flush(): Promise<void> {
     if (!this.queue.length || !this.threadId) return;
     const text = this.queue.splice(0).join('\n\n');
     try {
-      const params = { threadId: this.threadId, input: [{ type: 'text', text, text_elements: [] }] };
+      const params: Record<string, unknown> = { threadId: this.threadId, input: [{ type: 'text', text, text_elements: [] }] };
       // Always send the model explicitly (the account default when none is chosen), so switching back to default is unambiguous.
       const model = this.config.model || this.models?.find((m) => m.isDefault)?.value;
       if (model) params.model = model;
@@ -190,9 +223,9 @@ export class CodexAgent extends EventEmitter {
       if (model) this.resolvedModel = model;
       if (res?.turn?.id && !this.activeTurnId) this.activeTurnId = res.turn.id;
     } catch (err) {
-      this.emitEvent('error', { text: `turn/start failed: ${err.message}` });
-      if (/method not found|unknown (method|variant|field)|invalid params|missing field/i.test(err.message)) {
-        this.markUnavailable(`Codex protocol changed: ${err.message}`);
+      this.emitEvent('error', { text: `turn/start failed: ${errorText(err)}` });
+      if (/method not found|unknown (method|variant|field)|invalid params|missing field/i.test(errorText(err))) {
+        this.markUnavailable(`Codex protocol changed: ${errorText(err)}`);
       }
     }
     this.emitEvent('status', { busy: this.busy });
@@ -203,18 +236,18 @@ export class CodexAgent extends EventEmitter {
   }
 
   /** Reasoning effort is sent with every turn/start, so it applies from the next turn. */
-  async setEffort(effort) {
+  async setEffort(effort: string | null): Promise<void> {
     this.config.effort = effort && effort !== 'default' ? effort : null;
   }
 
-  markUnavailable(reason) {
+  markUnavailable(reason: string): void {
     this.available = false;
     this.unavailableReason = reason;
     this.emitEvent('unavailable', { reason });
   }
 
   /** Role changed: switch between read-only and workspace-write from the next turn. */
-  async reconfigure({ readOnly }) {
+  async reconfigure({ readOnly }: ReconfigureOptions): Promise<void> {
     if (Boolean(readOnly) !== this.readOnly) this.sandboxOverride = true;
     this.readOnly = Boolean(readOnly);
   }
@@ -234,12 +267,12 @@ export class CodexAgent extends EventEmitter {
     try {
       await this.request('turn/interrupt', { threadId: this.threadId, turnId: this.activeTurnId });
     } catch (err) {
-      this.emitEvent('error', { text: `turn/interrupt failed: ${err.message}` });
+      this.emitEvent('error', { text: `turn/interrupt failed: ${errorText(err)}` });
     }
   }
 
   /** Answer an approval request that the UI showed to the user. */
-  respondApproval(requestId, decision) {
+  respondApproval(requestId: string, decision: string): boolean {
     const a = this.approvals.get(requestId);
     if (!a) return false;
     this.approvals.delete(requestId);
@@ -253,7 +286,7 @@ export class CodexAgent extends EventEmitter {
     await this.proc?.kill();
   }
 
-  handle(m) {
+  handle(m: any): void {
     // Response to one of our requests.
     if (m.id !== undefined && m.method === undefined) {
       const w = this.waiting.get(m.id);
@@ -271,7 +304,7 @@ export class CodexAgent extends EventEmitter {
     this.handleNotification(m.method, m.params || {});
   }
 
-  handleServerRequest(m) {
+  handleServerRequest(m: any): void {
     const p = m.params || {};
     if (m.method === 'item/commandExecution/requestApproval' || m.method === 'item/fileChange/requestApproval') {
       const key = `codex-${m.id}`;
@@ -295,15 +328,15 @@ export class CodexAgent extends EventEmitter {
       return;
     }
     if (m.method === 'mcpServer/elicitation/request') {
-      this.proc.write({ id: m.id, result: { action: 'decline', content: null, _meta: null } });
+      this.proc?.write({ id: m.id, result: { action: 'decline', content: null, _meta: null } });
       this.emitEvent('info', { text: 'Declined an MCP elicitation request (not supported by the bridge).' });
       return;
     }
-    this.proc.write({ id: m.id, error: { code: -32601, message: `agent-bridge does not handle ${m.method}` } });
+    this.proc?.write({ id: m.id, error: { code: -32601, message: `agent-bridge does not handle ${m.method}` } });
     this.emitEvent('info', { text: `Rejected unsupported server request: ${m.method}` });
   }
 
-  handleNotification(method, p) {
+  handleNotification(method: string, p: any): void {
     switch (method) {
       case 'turn/started':
         this.activeTurnId = p.turn?.id || this.activeTurnId;
@@ -324,7 +357,7 @@ export class CodexAgent extends EventEmitter {
           this.emitEvent('tool', {
             key: it.id,
             title: 'edit',
-            detail: (it.changes || []).map((c) => `${c.kind?.type || c.kind || ''} ${c.path}`).join('\n'),
+            detail: (it.changes || []).map((c: any) => `${c.kind?.type || c.kind || ''} ${c.path}`).join('\n'),
           });
         } else if (it.type === 'mcpToolCall') {
           this.emitEvent('tool', { key: it.id, title: `${it.server}.${it.tool}`, detail: clip(JSON.stringify(it.arguments), 200) });
@@ -423,4 +456,9 @@ export class CodexAgent extends EventEmitter {
         break;
     }
   }
+}
+
+/** Message of an unknown thrown value. */
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

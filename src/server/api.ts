@@ -1,21 +1,32 @@
 // API actions called by the page.
-import { S } from './state.mjs';
-import { agentName, logError, publish, publishState } from './events.mjs';
-import { DRIVERS } from '../providers/registry.mjs';
-import { LOGS_DIR, ROLES_DIR, SETTINGS, config, safeRegex, saveLocalConfig, setting } from '../config/settings.mjs';
-import { ROUTING_MODES } from '../core/prompts.mjs';
-import { newConversation, restoreConversation, saveSettings, settingsView } from './conversation.mjs';
-import { resolveMissingRole, userSend } from './routing.mjs';
-import { approvalTimers, cliCache, providerRuntime, relay } from './state.mjs';
-import { addAgent, installedSkills, listDriverModels, providerBlocked, removeAgent, roleProfile, setRole } from './team.mjs';
-import { loadRoles } from '../core/roles.mjs';
-import { PROVIDERS, cliStatus, mergeStatus, nextStep, openLoginTerminal } from '../providers/accounts.mjs';
-import { listConversations, removeConversation } from '../core/history.mjs';
-import { restartServer, shutdown } from '../cli/main.mjs';
-import { codeChanged } from './http.mjs';
-export async function api(action, body) {
+import type { Agent, RoutingMode } from '../core/types.ts';
+import { S } from './state.ts';
+import { agentName, logError, publish, publishState } from './events.ts';
+import { DRIVERS } from '../providers/registry.ts';
+import { LOGS_DIR, ROLES_DIR, SETTINGS, config, safeRegex, saveLocalConfig, setting } from '../config/settings.ts';
+import { ROUTING_MODES } from '../core/prompts.ts';
+import { newConversation, restoreConversation, saveSettings, settingsView } from './conversation.ts';
+import { resolveMissingRole, userSend } from './routing.ts';
+import { approvalTimers, cliCache, providerRuntime, relay } from './state.ts';
+import {
+  type AddAgentInput,
+  addAgent,
+  installedSkills,
+  listDriverModels,
+  providerBlocked,
+  removeAgent,
+  roleProfile,
+  setRole,
+} from './team.ts';
+import { loadRoles } from '../core/roles.ts';
+import { PROVIDERS, cliStatus, mergeStatus, nextStep, openLoginTerminal } from '../providers/accounts.ts';
+import { listConversations, removeConversation } from '../core/history.ts';
+import { restartServer, shutdown } from '../cli/main.ts';
+import { codeChanged } from './http.ts';
+/** Handle one API call from the page. Returns the JSON answer; throws to send an error. */
+export async function api(action: string, body: Record<string, any>): Promise<unknown> {
   const agents = S.conv?.agents || {};
-  const agentOf = (id) => {
+  const agentOf = (id: string): Agent => {
     const a = agents[id];
     if (!a) throw new Error(`unknown agent ${id}`);
     return a;
@@ -27,7 +38,7 @@ export async function api(action, body) {
         drivers: Object.entries(DRIVERS).map(([id, d]) => ({
           id,
           label: d.label,
-          ...(d.Agent.probe ? d.Agent.probe(config[id]) : { available: true }),
+          ...(d.probe ? d.probe(config[id]) : { available: true }),
         })),
         routingModes: Object.entries(ROUTING_MODES).map(([id, m]) => ({ id, label: m.label, rule: m.rule })),
         settings: settingsView(),
@@ -47,13 +58,15 @@ export async function api(action, body) {
       if (body.pause) relay.halted = true;
       publishState();
       return { ok: true };
-    case 'routing':
-      if (!ROUTING_MODES[body.mode]) throw new Error('unknown routing mode');
+    case 'routing': {
+      if (!(body.mode in ROUTING_MODES)) throw new Error('unknown routing mode');
+      const mode = ROUTING_MODES[body.mode as RoutingMode];
       S.conv.routingMode = body.mode;
       S.conv.rosterVersion++;
-      publish({ kind: 'system', text: `Routing: ${ROUTING_MODES[body.mode].label}. ${ROUTING_MODES[body.mode].rule}` });
+      publish({ kind: 'system', text: `Routing: ${mode.label}. ${mode.rule}` });
       publishState();
       return { ok: true };
+    }
     case 'finalReview': {
       if (S.conv.pendingFinal !== body.requestId) throw new Error('this confirmation is no longer pending');
       S.conv.pendingFinal = null;
@@ -119,6 +132,7 @@ export async function api(action, body) {
       if (entry?.disabled) throw new Error(`model ${model} is not available: ${entry.disabledReason || 'not enabled for this account'}`);
       await agent.setModel(model);
       const spec = S.conv.team.find((a) => a.id === body.agent);
+      if (!spec) throw new Error(`unknown agent ${body.agent}`);
       spec.model = model === 'default' ? null : model;
       // Keep the effort only if the new model supports it.
       const efforts = (entry || (agent.models || []).find((m) => m.isDefault || m.value === 'default'))?.efforts || [];
@@ -133,6 +147,7 @@ export async function api(action, body) {
     case 'effort': {
       const agent = agentOf(body.agent);
       const spec = S.conv.team.find((a) => a.id === body.agent);
+      if (!spec) throw new Error(`unknown agent ${body.agent}`);
       const effort = String(body.effort || 'default');
       if (effort !== 'default') {
         const current =
@@ -150,6 +165,7 @@ export async function api(action, body) {
       return { ok: true };
     case 'bypass': {
       const spec = S.conv.team.find((a) => a.id === body.agent);
+      if (!spec) throw new Error(`unknown agent ${body.agent}`);
       if (!spec) throw new Error(`unknown agent ${body.agent}`);
       spec.bypass = Boolean(body.on);
       publish({
@@ -172,9 +188,7 @@ export async function api(action, body) {
     }
     case 'driverModels': {
       if (!DRIVERS[body.driver]) throw new Error('unknown provider');
-      const sensitive = setting('sensitiveModelPatterns')
-        .map((p) => safeRegex(p))
-        .filter(Boolean);
+      const sensitive = (setting('sensitiveModelPatterns') as string[]).map((p) => safeRegex(p)).filter((x): x is RegExp => x !== null);
       const blocked = providerBlocked(body.driver);
       const models = (await listDriverModels(body.driver)).map((m) => ({
         ...m,
@@ -185,7 +199,7 @@ export async function api(action, body) {
       return { models };
     }
     case 'addAgent':
-      return { ok: true, agent: await addAgent(body) };
+      return { ok: true, agent: await addAgent(body as AddAgentInput) };
     case 'removeAgent':
       await removeAgent(body.agent);
       return { ok: true };

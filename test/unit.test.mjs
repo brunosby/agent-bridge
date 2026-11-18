@@ -17,10 +17,10 @@ async function load(/** @type {string[]} */ ...candidates) {
   throw new Error(`module not found: ${candidates.join(', ')}`);
 }
 
-const safety = await load('core/safety.ts', 'core/safety.mjs', 'safety.mjs');
-const roles = await load('core/roles.ts', 'core/roles.mjs', 'roles.mjs');
-const prompts = await load('core/prompts.ts', 'core/prompts.mjs', 'prompts.mjs');
-const history = await load('core/history.ts', 'core/history.mjs', 'history.mjs');
+const safety = await load('core/safety.ts');
+const roles = await load('core/roles.ts');
+const prompts = await load('core/prompts.ts');
+const history = await load('core/history.ts');
 
 test('safety: single deletions inside the project pass, the rest is flagged', () => {
   const root = process.platform === 'win32' ? 'C:\\proj' : '/proj';

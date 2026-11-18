@@ -2,8 +2,10 @@ import { EventEmitter } from 'node:events';
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import net from 'node:net';
-import { killTree } from './process.mjs';
-import { clip } from './claude.mjs';
+import { killTree } from './process.ts';
+import type { ChildProcess } from 'node:child_process';
+import type { Agent, AgentOptions, DriverConfig, ModelInfo, ReconfigureOptions } from '../core/types.ts';
+import { clip } from './claude.ts';
 
 /**
  * Drives OpenCode through its official HTTP server (`opencode serve`, https://opencode.ai/docs/server/).
@@ -17,7 +19,36 @@ import { clip } from './claude.mjs';
  *
  * Any failure of this contract (server not starting, unknown endpoints) marks the agent unavailable.
  */
-export class OpenCodeAgent extends EventEmitter {
+export class OpenCodeAgent extends EventEmitter implements Agent {
+  static _probe: { at: number; result: { available: boolean; version?: string; reason?: string } } | null = null;
+  id: string;
+  name: string;
+  label: string;
+  cwd: string;
+  config: DriverConfig;
+  instructions?: string;
+  readOnly: boolean;
+  tokens: number;
+  cachedTokens: number;
+  skillsOff: string[];
+  sessionId: string | null;
+  available: boolean;
+  unavailableReason: string | null;
+  models: ModelInfo[];
+  resolvedModel: string | null;
+  approvals: Map<string, { permissionId: string }>;
+  queue: string[];
+  running: boolean;
+  ready: Promise<void> | null;
+  proc: ChildProcess | null;
+  sse: AbortController | null;
+  assistantMessages: Set<string>;
+  toolsSeen: Set<string>;
+  userParts = new Set<string>();
+  password = '';
+  base = '';
+  stopping = false;
+
   constructor({
     id = 'opencode',
     name = 'OpenCode',
@@ -28,7 +59,7 @@ export class OpenCodeAgent extends EventEmitter {
     tokens = 0,
     cachedTokens = 0,
     skillsOff = [],
-  }) {
+  }: AgentOptions) {
     super();
     this.id = id;
     this.name = name;
@@ -56,7 +87,7 @@ export class OpenCodeAgent extends EventEmitter {
   }
 
   /** Is the CLI on this machine? Used to grey out the provider in the "Add agent" form. */
-  static probe(cfg = {}) {
+  static probe(cfg: DriverConfig = {}): { available: boolean; version?: string; reason?: string } {
     if (OpenCodeAgent._probe && Date.now() - OpenCodeAgent._probe.at < 60000) return OpenCodeAgent._probe.result;
     const command = cfg.command || 'opencode';
     const isWin = process.platform === 'win32';
@@ -81,11 +112,11 @@ export class OpenCodeAgent extends EventEmitter {
     return this.config.model || null;
   }
 
-  emitEvent(kind, data = {}) {
+  emitEvent(kind: string, data: Record<string, unknown> = {}): void {
     this.emit('event', { agent: this.id, kind, ...data });
   }
 
-  markUnavailable(reason) {
+  markUnavailable(reason: string): void {
     this.available = false;
     this.unavailableReason = reason;
     this.emitEvent('unavailable', { reason });
@@ -99,11 +130,11 @@ export class OpenCodeAgent extends EventEmitter {
     throw new Error('Effort is not configurable for OpenCode agents in Agent Bridge.');
   }
 
-  setInstructions(text) {
+  setInstructions(text: string): void {
     this.instructions = text;
   }
 
-  async reconfigure({ readOnly, skillsOff }) {
+  async reconfigure({ readOnly, skillsOff }: ReconfigureOptions): Promise<void> {
     this.readOnly = Boolean(readOnly);
     if (skillsOff) this.skillsOff = skillsOff; // applies to the next OpenCode session
   }
@@ -113,8 +144,8 @@ export class OpenCodeAgent extends EventEmitter {
     if (this.ready) return this.ready;
     this.ready = this.boot().catch((err) => {
       this.ready = null;
-      this.emitEvent('error', { text: `OpenCode start failed: ${err.message}` });
-      this.markUnavailable(`OpenCode server did not start: ${err.message}`);
+      this.emitEvent('error', { text: `OpenCode start failed: ${errorText(err)}` });
+      this.markUnavailable(`OpenCode server did not start: ${errorText(err)}`);
       throw err;
     });
     return this.ready;
@@ -135,8 +166,8 @@ export class OpenCodeAgent extends EventEmitter {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, OPENCODE_SERVER_PASSWORD: this.password },
     });
-    this.proc.stdout.on('data', (d) => this.emitEvent('stderr', { text: String(d) }));
-    this.proc.stderr.on('data', (d) => this.emitEvent('stderr', { text: String(d) }));
+    this.proc.stdout?.on('data', (d) => this.emitEvent('stderr', { text: String(d) }));
+    this.proc.stderr?.on('data', (d) => this.emitEvent('stderr', { text: String(d) }));
     this.proc.on('exit', (code) => {
       const expected = this.stopping;
       this.proc = null;
@@ -168,7 +199,7 @@ export class OpenCodeAgent extends EventEmitter {
     await this.loadModels();
     if (this.sessionId) {
       try {
-        await this.http('GET', `/session/${encodeURIComponent(this.sessionId)}`);
+        await this.http('GET', `/session/${encodeURIComponent(this.sessionId || '')}`);
       } catch {
         this.emitEvent('info', { text: 'Could not find the earlier OpenCode session; starting a new one.' });
         this.sessionId = null;
@@ -176,7 +207,11 @@ export class OpenCodeAgent extends EventEmitter {
     }
     if (!this.sessionId) {
       // Ask before shell commands, edits and web fetches so requests reach the approval panel (and bypass rules).
-      const ask = (this.config.askFor || ['bash', 'edit', 'webfetch']).map((permission) => ({ permission, pattern: '*', action: 'ask' }));
+      const ask = (this.config.askFor || ['bash', 'edit', 'webfetch']).map((permission: string) => ({
+        permission,
+        pattern: '*',
+        action: 'ask',
+      }));
       // Skills switched off for the role are denied for this session.
       for (const s of this.skillsOff || []) ask.push({ permission: 'skill', pattern: s, action: 'deny' });
       const s = await this.http('POST', '/session', { title: `Agent Bridge · ${this.name}`, permission: ask });
@@ -188,7 +223,7 @@ export class OpenCodeAgent extends EventEmitter {
     this.emitEvent('status', { busy: this.busy });
   }
 
-  async http(method, path, body) {
+  async http(method: string, path: string, body?: unknown): Promise<any> {
     const res = await fetch(this.base + path, {
       method,
       headers: {
@@ -207,10 +242,10 @@ export class OpenCodeAgent extends EventEmitter {
     if (!p || !Array.isArray(p.all)) throw new Error('GET /provider did not return { all, connected } (API changed?)');
     // OpenCode knows hundreds of providers; only the connected ones are listed. With freeOnly (default),
     // models that cost anything are listed but disabled.
-    const connected = new Set(p.connected || []);
+    const connected = new Set<string>(p.connected || []);
     const freeOnly = this.config.freeOnly !== false;
-    const out = [];
-    for (const prov of p.all.filter((x) => connected.has(x.id))) {
+    const out: ModelInfo[] = [];
+    for (const prov of p.all.filter((x: { id: string }) => connected.has(x.id))) {
       const models = Array.isArray(prov.models) ? prov.models : Object.values(prov.models || {});
       for (const m of models) {
         const modelId = m.id || m.modelID;
@@ -226,7 +261,7 @@ export class OpenCodeAgent extends EventEmitter {
         });
       }
     }
-    out.sort((a, b) => Number(a.disabled) - Number(b.disabled) || a.label.localeCompare(b.label));
+    out.sort((a, b) => Number(a.disabled) - Number(b.disabled) || (a.label || '').localeCompare(b.label || ''));
     // The account default may be a paid model; mark the first enabled model as the default instead.
     const def = p.default?.opencode ? `opencode/${p.default.opencode}` : null;
     const defEntry = out.find((m) => m.value === def && !m.disabled) || out.find((m) => !m.disabled);
@@ -237,7 +272,7 @@ export class OpenCodeAgent extends EventEmitter {
     this.emitEvent('models', {});
   }
 
-  async setModel(model) {
+  async setModel(model: string): Promise<void> {
     this.config.model = model && model !== 'default' ? model : null;
     this.emitEvent('info', { text: `Model set to ${this.config.model || 'default'} (applies from the next message).` });
   }
@@ -252,6 +287,7 @@ export class OpenCodeAgent extends EventEmitter {
         headers: { Authorization: `Basic ${Buffer.from(`opencode:${this.password}`).toString('base64')}`, Accept: 'text/event-stream' },
         signal: ctrl.signal,
       });
+      if (!res.body) return;
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
@@ -277,11 +313,11 @@ export class OpenCodeAgent extends EventEmitter {
         }
       }
     } catch (err) {
-      if (!ctrl.signal.aborted) this.emitEvent('info', { text: `OpenCode event stream closed: ${err.message}` });
+      if (!ctrl.signal.aborted) this.emitEvent('info', { text: `OpenCode event stream closed: ${errorText(err)}` });
     }
   }
 
-  onEvent(ev) {
+  onEvent(ev: any): void {
     const type = ev.type || '';
     const p = ev.properties || {};
     const sid = p.sessionID || p.part?.sessionID || p.info?.sessionID;
@@ -353,14 +389,14 @@ export class OpenCodeAgent extends EventEmitter {
     }
   }
 
-  respondApproval(requestId, decision) {
+  respondApproval(requestId: string, decision: string): boolean {
     const a = this.approvals.get(requestId);
     if (!a) return false;
     this.approvals.delete(requestId);
     const response = decision === 'accept' ? 'once' : decision === 'acceptForSession' ? 'always' : 'reject';
-    this.http('POST', `/session/${encodeURIComponent(this.sessionId)}/permissions/${encodeURIComponent(a.permissionId)}`, {
+    this.http('POST', `/session/${encodeURIComponent(this.sessionId || '')}/permissions/${encodeURIComponent(a.permissionId)}`, {
       response,
-    }).catch((err) => this.emitEvent('error', { text: `Could not answer the OpenCode permission request: ${err.message}` }));
+    }).catch((err) => this.emitEvent('error', { text: `Could not answer the OpenCode permission request: ${errorText(err)}` }));
     this.emitEvent('status', { busy: this.busy });
     return true;
   }
@@ -371,7 +407,7 @@ export class OpenCodeAgent extends EventEmitter {
   }
 
   // ---------- messages ----------
-  async send(text) {
+  async send(text: string): Promise<void> {
     this.queue.push(text);
     this.emitEvent('status', { busy: true });
     try {
@@ -389,22 +425,26 @@ export class OpenCodeAgent extends EventEmitter {
     if (this.running || !this.queue.length) return;
     this.running = true;
     const text = this.queue.splice(0).join('\n\n');
-    const body = { parts: [{ type: 'text', text }], agent: this.readOnly ? 'plan' : 'build', system: this.instructions };
+    const body: Record<string, unknown> = {
+      parts: [{ type: 'text', text }],
+      agent: this.readOnly ? 'plan' : 'build',
+      system: this.instructions,
+    };
     const model = this.config.model;
     if (model) {
       const i = model.indexOf('/');
       body.model = { providerID: model.slice(0, i), modelID: model.slice(i + 1) };
     }
     try {
-      const res = await this.http('POST', `/session/${encodeURIComponent(this.sessionId)}/message`, body);
+      const res = await this.http('POST', `/session/${encodeURIComponent(this.sessionId || '')}/message`, body);
       const info = res?.info || {};
       const parts = res?.parts || [];
       const answer = parts
-        .filter((x) => x.type === 'text')
-        .map((x) => x.text || '')
+        .filter((x: any) => x.type === 'text')
+        .map((x: any) => x.text || '')
         .join('\n')
         .trim();
-      for (const x of parts.filter((x) => x.type === 'text'))
+      for (const x of parts.filter((x: any) => x.type === 'text'))
         this.emitEvent('text', { key: x.id || `${info.id}-text`, text: x.text || '', final: true });
       const t = info.tokens || {};
       const used = (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (t.cache?.write || 0);
@@ -422,9 +462,9 @@ export class OpenCodeAgent extends EventEmitter {
         this.emitEvent('turnEnd', { text: answer, ok: true });
       }
     } catch (err) {
-      this.emitEvent('error', { text: `OpenCode message failed: ${err.message}` });
-      if (/HTTP 404|HTTP 405/.test(err.message)) this.markUnavailable(`OpenCode API changed: ${err.message}`);
-      this.emitEvent('turnEnd', { text: '', ok: false, detail: clip(err.message, 300) });
+      this.emitEvent('error', { text: `OpenCode message failed: ${errorText(err)}` });
+      if (/HTTP 404|HTTP 405/.test(errorText(err))) this.markUnavailable(`OpenCode API changed: ${errorText(err)}`);
+      this.emitEvent('turnEnd', { text: '', ok: false, detail: clip(errorText(err), 300) });
     }
     this.running = false;
     this.emitEvent('status', { busy: this.busy });
@@ -434,9 +474,9 @@ export class OpenCodeAgent extends EventEmitter {
   async interrupt() {
     if (!this.running || !this.sessionId) return;
     try {
-      await this.http('POST', `/session/${encodeURIComponent(this.sessionId)}/abort`);
+      await this.http('POST', `/session/${encodeURIComponent(this.sessionId || '')}/abort`);
     } catch (err) {
-      this.emitEvent('error', { text: `OpenCode abort failed: ${err.message}` });
+      this.emitEvent('error', { text: `OpenCode abort failed: ${errorText(err)}` });
     }
   }
 
@@ -457,15 +497,21 @@ export class OpenCodeAgent extends EventEmitter {
   }
 }
 
-function freePort() {
+function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
     srv.listen(0, '127.0.0.1', () => {
-      const { port } = srv.address();
+      const addr = srv.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
       srv.close(() => resolve(port));
     });
     srv.on('error', reject);
   });
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Message of an unknown thrown value. */
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

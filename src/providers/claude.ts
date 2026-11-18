@@ -1,5 +1,12 @@
 import { EventEmitter } from 'node:events';
-import { spawnJsonl } from './process.mjs';
+import { spawnJsonl, type JsonlProcess } from './process.ts';
+import type { Agent, AgentOptions, DriverConfig, ModelInfo, ReconfigureOptions } from '../core/types.ts';
+
+interface ClaudeApproval {
+  rpcId: string;
+  input: unknown;
+  suggestions?: { type: string; behavior?: string; [k: string]: unknown }[];
+}
 
 /**
  * Drives Claude Code in headless mode:
@@ -8,7 +15,35 @@ import { spawnJsonl } from './process.mjs';
  *
  * Emits 'event' objects: { kind, ... } (see src/server/ for how they are used).
  */
-export class ClaudeAgent extends EventEmitter {
+export class ClaudeAgent extends EventEmitter implements Agent {
+  id: string;
+  name: string;
+  label: string;
+  cwd: string;
+  config: DriverConfig;
+  systemPromptFile?: string;
+  readOnly: boolean;
+  maxTurns: number | null;
+  profile: 'full' | 'lean';
+  skillsOff: string[];
+  tokens: number;
+  cachedTokens: number;
+  available: boolean;
+  unavailableReason: string | null;
+  stderrTail: string;
+  gotOutput: boolean;
+  sessionId: string | null;
+  pending: number;
+  proc: JsonlProcess | null;
+  streamedMessages: Set<string | null>;
+  currentMessageId: string | null;
+  models: ModelInfo[];
+  resolvedModel: string | null;
+  restartWhenIdle: boolean;
+  approvals: Map<string, ClaudeApproval>;
+  commands: { name: string; description: string }[] = [];
+  stopping = false;
+
   constructor({
     id = 'claude',
     name = 'Claude',
@@ -21,7 +56,7 @@ export class ClaudeAgent extends EventEmitter {
     maxTurns = null,
     profile = 'full',
     skillsOff = [],
-  }) {
+  }: AgentOptions) {
     super();
     this.id = id;
     this.name = name;
@@ -51,11 +86,11 @@ export class ClaudeAgent extends EventEmitter {
   }
 
   /** Answer a permission prompt shown in the page. decision: accept | acceptForSession | decline */
-  respondApproval(requestId, decision, reason) {
+  respondApproval(requestId: string, decision: string, reason?: string): boolean {
     const a = this.approvals.get(requestId);
     if (!a) return false;
     this.approvals.delete(requestId);
-    let response;
+    let response: Record<string, unknown>;
     if (decision === 'accept' || decision === 'acceptForSession') {
       response = { behavior: 'allow', updatedInput: a.input };
       if (decision === 'acceptForSession') {
@@ -76,11 +111,11 @@ export class ClaudeAgent extends EventEmitter {
     this.approvals.clear();
   }
 
-  handleControlRequest(m) {
+  handleControlRequest(m: any): void {
     const r = m.request || {};
     if (r.subtype === 'can_use_tool') {
       if (r.tool_name === 'AskUserQuestion') {
-        this.proc.write({
+        this.proc?.write({
           type: 'control_response',
           response: {
             subtype: 'success',
@@ -95,7 +130,7 @@ export class ClaudeAgent extends EventEmitter {
       }
       const key = `claude-${m.request_id}`;
       this.approvals.set(key, { rpcId: m.request_id, input: r.input, suggestions: r.permission_suggestions });
-      const hasRule = (r.permission_suggestions || []).some((s) => s.type === 'addRules');
+      const hasRule = (r.permission_suggestions || []).some((s: { type: string }) => s.type === 'addRules');
       this.emitEvent('approval', {
         requestId: key,
         title: `Claude wants to use ${r.display_name || r.tool_name}`,
@@ -113,7 +148,7 @@ export class ClaudeAgent extends EventEmitter {
       this.emitEvent('status', { busy: this.busy });
       return;
     }
-    this.proc.write({
+    this.proc?.write({
       type: 'control_response',
       response: { subtype: 'error', request_id: m.request_id, error: `agent-bridge does not handle ${r.subtype}` },
     });
@@ -129,11 +164,11 @@ export class ClaudeAgent extends EventEmitter {
     return this.pending > 0;
   }
 
-  emitEvent(kind, data = {}) {
+  emitEvent(kind: string, data: Record<string, unknown> = {}): void {
     this.emit('event', { agent: this.id, kind, ...data });
   }
 
-  buildArgs() {
+  buildArgs(): string[] {
     const c = this.config;
     const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
     if (c.model) args.push('--model', c.model);
@@ -187,7 +222,7 @@ export class ClaudeAgent extends EventEmitter {
       },
     });
     // Same control message the Agent SDK sends first; its answer lists the models this account can use.
-    this.proc.write({ type: 'control_request', request_id: `init-${Date.now()}`, request: { subtype: 'initialize' } });
+    this.proc?.write({ type: 'control_request', request_id: `init-${Date.now()}`, request: { subtype: 'initialize' } });
     this.emitEvent('status', { busy: false });
   }
 
@@ -195,7 +230,7 @@ export class ClaudeAgent extends EventEmitter {
    * Change the model. Claude Code takes --model at start, so the process is restarted with
    * --resume on the same session. If a turn is running, the restart waits for it to end.
    */
-  async setModel(model) {
+  async setModel(model: string): Promise<void> {
     this.config.model = model && model !== 'default' ? model : null;
     if (this.busy) {
       this.restartWhenIdle = true;
@@ -206,14 +241,14 @@ export class ClaudeAgent extends EventEmitter {
     this.emitEvent('info', { text: `Model set to ${model || 'default'}.` });
   }
 
-  markUnavailable(reason) {
+  markUnavailable(reason: string): void {
     this.available = false;
     this.unavailableReason = reason;
     this.emitEvent('unavailable', { reason });
   }
 
   /** Role changed: apply read-only mode and new instructions by restarting on the same session. */
-  async reconfigure({ readOnly, maxTurns, profile, skillsOff }) {
+  async reconfigure({ readOnly, maxTurns, profile, skillsOff }: ReconfigureOptions): Promise<void> {
     this.readOnly = Boolean(readOnly);
     this.maxTurns = maxTurns || null;
     if (profile) this.profile = profile;
@@ -230,7 +265,7 @@ export class ClaudeAgent extends EventEmitter {
   }
 
   /** Effort is a start flag (--effort), so it is applied like a model change. */
-  async setEffort(effort) {
+  async setEffort(effort: string | null): Promise<void> {
     this.config.effort = effort && effort !== 'default' ? effort : null;
     if (this.busy) {
       this.restartWhenIdle = true;
@@ -252,11 +287,11 @@ export class ClaudeAgent extends EventEmitter {
     this.start();
   }
 
-  send(text) {
+  send(text: string): void {
     if (!this.proc) this.start();
     this.pending += 1;
     this.emitEvent('status', { busy: true });
-    this.proc.write({
+    this.proc?.write({
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
@@ -278,7 +313,7 @@ export class ClaudeAgent extends EventEmitter {
     await this.proc?.kill();
   }
 
-  handle(m) {
+  handle(m: any): void {
     this.gotOutput = true;
     switch (m.type) {
       case 'control_request':
@@ -288,8 +323,11 @@ export class ClaudeAgent extends EventEmitter {
       case 'control_response': {
         const r = m.response?.response || {};
         if (Array.isArray(r.models)) {
-          this.commands = (r.commands || []).map((c) => ({ name: c.name, description: c.description || '' }));
-          this.models = r.models.map((x) => ({
+          this.commands = (r.commands || []).map((c: { name: string; description?: string }) => ({
+            name: c.name,
+            description: c.description || '',
+          }));
+          this.models = r.models.map((x: any) => ({
             value: x.value,
             label: x.displayName || x.value,
             resolved: x.resolvedModel || null,
@@ -350,7 +388,7 @@ export class ClaudeAgent extends EventEmitter {
         } else if (m.error === 'rate_limit') {
           this.emitEvent('account', { state: 'rate_limited', detail: 'Usage limit reached.' });
         }
-        (msg.content || []).forEach((block, i) => {
+        (msg.content || []).forEach((block: any, i: number) => {
           if (block.type === 'text' && !this.streamedMessages.has(msg.id)) {
             this.emitEvent('text', { key: `${msg.id}:${i}`, text: block.text });
           } else if (block.type === 'tool_use') {
@@ -407,7 +445,7 @@ export class ClaudeAgent extends EventEmitter {
   }
 }
 
-function toolDetail(name, input = {}) {
+function toolDetail(_name: string, input: any = {}): string {
   if (input.command) return clip(input.command, 300);
   if (input.file_path) return input.file_path;
   if (input.pattern) return `${input.pattern}${input.path ? ` in ${input.path}` : ''}`;
@@ -416,17 +454,17 @@ function toolDetail(name, input = {}) {
   return clip(JSON.stringify(input), 200);
 }
 
-function contentText(c) {
+function contentText(c: unknown): string {
   if (typeof c === 'string') return c;
   if (Array.isArray(c)) return c.map((b) => (typeof b === 'string' ? b : b.text || '')).join('\n');
   return '';
 }
 
-function summarize(m) {
+function summarize(m: unknown): string {
   return clip(JSON.stringify(m), 300);
 }
 
-export function clip(s, n) {
-  s = String(s ?? '');
+export function clip(value: unknown, n: number): string {
+  const s = String(value ?? '');
   return s.length > n ? `${s.slice(0, n)}…` : s;
 }

@@ -2,8 +2,8 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-function git(cwd, args) {
-  return new Promise((resolve, reject) => {
+function git(cwd: string, args: string[]): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     execFile('git', args, { cwd, windowsHide: true }, (err, stdout, stderr) => {
       if (err) reject(new Error((stderr || err.message).trim()));
       else resolve(stdout.trim());
@@ -16,8 +16,23 @@ function git(cwd, args) {
  * Created next to the repository: <repo>-agent-worktrees/<conversation>/<agent>, on a new branch
  * agent-bridge/<conversation>/<agent>. Nothing is deleted automatically; merge or remove it with git.
  */
-export async function createWorktree({ repoDir, conversationId, agentName }) {
-  let top;
+export interface Worktree {
+  path: string;
+  root: string;
+  branch: string;
+  reused?: boolean;
+}
+
+export async function createWorktree({
+  repoDir,
+  conversationId,
+  agentName,
+}: {
+  repoDir: string;
+  conversationId: string;
+  agentName: string;
+}): Promise<Worktree> {
+  let top: string;
   try {
     top = await git(repoDir, ['rev-parse', '--show-toplevel']);
   } catch {

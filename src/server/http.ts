@@ -1,18 +1,18 @@
 // HTTP server: page files, live event stream (SSE) and the API endpoint.
 import crypto from 'node:crypto';
-import { S } from './state.mjs';
+import { S } from './state.ts';
 import path from 'node:path';
 import fs from 'node:fs';
-import http from 'node:http';
-import { APP_DIR, PUBLIC_DIR } from '../config/settings.mjs';
-import { logError, publish, publishState, snapshotLine } from './events.mjs';
-import { clients } from './state.mjs';
-import { api } from './api.mjs';
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import { APP_DIR, PUBLIC_DIR } from '../config/settings.ts';
+import { logError, publish, publishState, snapshotLine } from './events.ts';
+import { clients } from './state.ts';
+import { api } from './api.ts';
 export const token = crypto.randomBytes(18).toString('hex');
 export const SRC_DIR = path.join(APP_DIR, 'src');
 export const codeHash = () => {
   const h = crypto.createHash('sha1');
-  const walk = (dir) => {
+  const walk = (dir: string): void => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p);
@@ -31,11 +31,18 @@ export const codeChanged = () => {
     return false;
   }
 };
-export const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+export const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+};
 
 export const server = http.createServer(async (req, res) => {
   try {
-    const url = new URL(req.url, 'http://127.0.0.1');
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
     if (req.method === 'GET' && url.pathname === '/events') {
       if (url.searchParams.get('token') !== token) return send(res, 403, 'forbidden');
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
@@ -54,12 +61,13 @@ export const server = http.createServer(async (req, res) => {
     if (req.method === 'GET') return serveStatic(url.pathname, res);
     send(res, 404, 'not found');
   } catch (err) {
-    logError('bridge', `${req.method} ${req.url}: ${err.stack || err.message}`);
-    send(res, 400, JSON.stringify({ error: err.message }), 'application/json');
+    const e = err instanceof Error ? err : new Error(String(err));
+    logError('bridge', `${req.method} ${req.url}: ${e.stack || e.message}`);
+    send(res, 400, JSON.stringify({ error: e.message }), 'application/json');
   }
 });
 
-export function serveStatic(pathname, res) {
+export function serveStatic(pathname: string, res: ServerResponse): void {
   const rel = pathname === '/' ? 'index.html' : pathname.slice(1);
   const file = path.resolve(PUBLIC_DIR, rel);
   if (!file.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(file)) return send(res, 404, 'not found');
@@ -77,15 +85,15 @@ export function serveStatic(pathname, res) {
   send(res, 200, content, MIME[path.extname(file)] || 'application/octet-stream');
 }
 
-export function send(res, status, body, type = 'text/plain; charset=utf-8') {
+export function send(res: ServerResponse, status: number, body: string | Buffer, type = 'text/plain; charset=utf-8'): void {
   res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
   res.end(body);
 }
 
-export function readJson(req) {
+export function readJson(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
     let data = '';
-    req.on('data', (c) => {
+    req.on('data', (c: Buffer) => {
       data += c;
       if (data.length > 1_000_000) reject(new Error('body too large'));
     });
