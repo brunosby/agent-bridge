@@ -18,7 +18,7 @@ import { clip } from './claude-agent.mjs';
  * Any failure of this contract (server not starting, unknown endpoints) marks the agent unavailable.
  */
 export class OpenCodeAgent extends EventEmitter {
-  constructor({ id = 'opencode', name = 'OpenCode', cwd, config, instructions, readOnly = false, tokens = 0 }) {
+  constructor({ id = 'opencode', name = 'OpenCode', cwd, config, instructions, readOnly = false, tokens = 0, cachedTokens = 0 }) {
     super();
     this.id = id;
     this.name = name;
@@ -28,6 +28,7 @@ export class OpenCodeAgent extends EventEmitter {
     this.instructions = instructions;
     this.readOnly = readOnly;
     this.tokens = tokens;
+    this.cachedTokens = cachedTokens;
     this.sessionId = this.config.resumeSessionId || null;
     this.available = true;
     this.unavailableReason = null;
@@ -362,7 +363,8 @@ export class OpenCodeAgent extends EventEmitter {
       const answer = parts.filter((x) => x.type === 'text').map((x) => x.text || '').join('\n').trim();
       for (const x of parts.filter((x) => x.type === 'text')) this.emitEvent('text', { key: x.id || `${info.id}-text`, text: x.text || '', final: true });
       const t = info.tokens || {};
-      const used = (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (t.cache?.read || 0) + (t.cache?.write || 0);
+      const used = (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (t.cache?.write || 0);
+      this.cachedTokens += t.cache?.read || 0;
       if (used) {
         this.tokens += used;
         this.emitEvent('usage', { tokens: this.tokens });

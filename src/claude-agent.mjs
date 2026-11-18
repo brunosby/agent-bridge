@@ -9,13 +9,15 @@ import { spawnJsonl } from './proc.mjs';
  * Emits 'event' objects: { kind, ... } (see server.mjs for the list of kinds).
  */
 export class ClaudeAgent extends EventEmitter {
-  constructor({ id = 'claude', name = 'Claude', cwd, config, systemPromptFile, readOnly = false, tokens = 0 }) {
+  constructor({ id = 'claude', name = 'Claude', cwd, config, systemPromptFile, readOnly = false, tokens = 0, cachedTokens = 0, maxTurns = null }) {
     super();
     this.id = id;
     this.name = name;
     this.label = name;
     this.readOnly = readOnly;
+    this.maxTurns = maxTurns;
     this.tokens = tokens;
+    this.cachedTokens = cachedTokens;
     this.available = true;
     this.unavailableReason = null;
     this.stderrTail = '';
@@ -117,6 +119,8 @@ export class ClaudeAgent extends EventEmitter {
     ];
     if (c.model) args.push('--model', c.model);
     if (c.effort) args.push('--effort', c.effort);
+    // Step limit of the role (per message): keeps support roles short.
+    if (this.maxTurns) args.push('--max-turns', String(this.maxTurns));
     if (c.permissionMode) args.push('--permission-mode', c.permissionMode);
     // Roles that must not edit files lose the file-editing tools.
     if (this.readOnly) args.push('--disallowedTools', 'Edit,Write,NotebookEdit');
@@ -184,8 +188,9 @@ export class ClaudeAgent extends EventEmitter {
   }
 
   /** Role changed: apply read-only mode and new instructions by restarting on the same session. */
-  async reconfigure({ readOnly }) {
+  async reconfigure({ readOnly, maxTurns }) {
     this.readOnly = Boolean(readOnly);
+    this.maxTurns = maxTurns || null;
     if (this.busy) {
       this.restartWhenIdle = true;
       return;
@@ -330,7 +335,9 @@ export class ClaudeAgent extends EventEmitter {
         this.pending = Math.max(0, this.pending - 1);
         if (m.usage) {
           const u = m.usage;
-          this.tokens += (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+          // tokens = new tokens (input, output, cache writes); cachedTokens = cache reads, which cost much less
+          this.tokens += (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_creation_input_tokens || 0);
+          this.cachedTokens += u.cache_read_input_tokens || 0;
           this.emitEvent('usage', { tokens: this.tokens });
         }
         if (m.is_error && /invalid api key|please run \/login|not logged in|oauth token|credit balance|billing|subscription/i.test(String(m.result || ''))) {

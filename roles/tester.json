@@ -5,7 +5,17 @@
   "canEdit": "tests",
   "recommended": {
     "label": "Sonnet 5.5, GPT-6.1-Sol, Haiku 5.5",
-    "patterns": ["sonnet", "gpt-6\\.1", "gpt-6-", "haiku", "deepseek-flash"]
+    "patterns": [
+      "sonnet",
+      "gpt-6\\.1",
+      "gpt-6-",
+      "haiku",
+      "deepseek-flash"
+    ]
   },
-  "instructions": "You are the TESTER (QA). Write or update tests for the change you were given and run them.\n- Edit only test files and test fixtures, never the production code.\n- Report each failure with the command, the output that matters and the likely cause."
+  "instructions": "You are the TESTER (QA). Write or update tests for the change you were given and run them.\n- Edit only test files and test fixtures, never the production code.\n- Reply with the command you ran and only the failures (command output that matters and the likely cause). If everything passes, say so in one line.",
+  "fallback": [
+    "coder"
+  ],
+  "maxTurns": 40
 }

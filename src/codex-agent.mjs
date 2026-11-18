@@ -8,7 +8,7 @@ import { clip } from './claude-agent.mjs';
  * Approval requests arrive as server->client requests and are forwarded to the UI.
  */
 export class CodexAgent extends EventEmitter {
-  constructor({ id = 'codex', name = 'Codex', cwd, config, instructions, readOnly = false, tokens = 0 }) {
+  constructor({ id = 'codex', name = 'Codex', cwd, config, instructions, readOnly = false, tokens = 0, cachedTokens = 0 }) {
     super();
     this.id = id;
     this.name = name;
@@ -16,6 +16,7 @@ export class CodexAgent extends EventEmitter {
     this.readOnly = readOnly;
     this.sandboxOverride = false;
     this.tokens = tokens;
+    this.cachedTokens = cachedTokens;
     this.available = true;
     this.unavailableReason = null;
     this.cwd = cwd;
@@ -371,9 +372,12 @@ export class CodexAgent extends EventEmitter {
       }
 
       case 'thread/tokenUsage/updated': {
-        const total = p.tokenUsage?.total?.totalTokens;
-        if (typeof total === 'number') {
-          this.tokens = Math.max(this.tokens, total);
+        // Thread totals (cumulative, also across resume): new tokens = total - cached input.
+        const t = p.tokenUsage?.total;
+        if (t && typeof t.totalTokens === 'number') {
+          const cached = t.cachedInputTokens || 0;
+          this.tokens = Math.max(this.tokens, t.totalTokens - cached);
+          this.cachedTokens = Math.max(this.cachedTokens, cached);
           this.emitEvent('usage', { tokens: this.tokens });
         }
         break;

@@ -60,6 +60,7 @@ function teamFromState(state) {
       bypass: Boolean(a.bypass),
       sessionId: a.sessionId || null,
       tokens: a.tokens || 0,
+      cachedTokens: a.cachedTokens || 0,
       cwd: a.cwd || null,
       worktree: a.worktree || null,
     }));
@@ -136,13 +137,15 @@ export function loadConversation(logsDir, id) {
   const openApprovals = new Set();
   const openTurn = {};
   for (const e of events) {
-    if (e.kind === 'approval') openApprovals.add(e.requestId);
+    if (e.kind === 'approval' || e.kind === 'needRole') openApprovals.add(e.requestId);
+    if (e.kind === 'needRoleClosed') openApprovals.delete(e.requestId);
     if (e.kind === 'approvalClosed') openApprovals.delete(e.requestId);
     if (['delta', 'text', 'tool'].includes(e.kind) && e.agent) openTurn[e.agent] = true;
     if (e.kind === 'turnEnd') openTurn[e.agent] = false;
   }
   for (const requestId of openApprovals) {
-    events.push({ seq: ++lastSeq, at: lastAt, kind: 'approvalClosed', requestId, decision: 'cancelled' });
+    const kind = String(requestId).startsWith('role-') ? 'needRoleClosed' : 'approvalClosed';
+    events.push({ seq: ++lastSeq, at: lastAt, kind, requestId, decision: 'cancelled', action: 'cancelled' });
   }
   for (const [agent, open] of Object.entries(openTurn)) {
     if (open) events.push({ seq: ++lastSeq, at: lastAt, agent, kind: 'turnEnd', text: '', ok: false, detail: 'stopped when the app was closed' });

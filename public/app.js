@@ -200,6 +200,18 @@ function handle(ev) {
     case 'approval':
       renderApproval(ev);
       break;
+    case 'needRole':
+      renderNeedRole(ev);
+      break;
+    case 'needRoleClosed': {
+      const el = approvals.get(ev.requestId);
+      if (el) {
+        approvals.delete(ev.requestId);
+        el.remove();
+        updatePending();
+      }
+      break;
+    }
     case 'approvalClosed': {
       const el = approvals.get(ev.requestId);
       if (!el) break;
@@ -230,6 +242,31 @@ function updatePending() {
   $('pending').hidden = n === 0;
   const base = state ? `Agent Bridge · ${state.workDir}` : 'Agent Bridge';
   document.title = n ? `(${n}) Approval needed · ${base}` : base;
+}
+
+/** The orchestrator needs a role nobody in the team has: add it (with a recommended model) or use the closest agent. */
+function renderNeedRole(ev) {
+  const el = h('div', 'approval need-role');
+  el.dataset.title = `Missing role: ${ev.roleName}`;
+  el.appendChild(h('div', 'title', `${label(ev.agent)} needs a ${ev.roleName}, and nobody in the team has that role · ${time(ev.at)}`));
+  el.appendChild(h('div', 'hint', 'The relay is paused until you choose. The default choice can be set in Settings.'));
+  const actions = h('div', 'actions');
+  const add = h('button', 'primary', `Add ${ev.roleName} (${ev.suggestion.driverLabel} · ${ev.suggestion.modelLabel})`);
+  add.onclick = () => api('resolveRole', { requestId: ev.requestId, action: 'add' }).catch((e) => addSys(e.message, true));
+  actions.appendChild(add);
+  if (ev.closest) {
+    const near = h('button', null, `Continue with ${ev.closest.name} (${ev.closest.roleName}, closest)`);
+    near.onclick = () => api('resolveRole', { requestId: ev.requestId, action: 'closest' }).catch((e) => addSys(e.message, true));
+    actions.appendChild(near);
+  }
+  const dismiss = h('button', 'danger', 'Dismiss');
+  dismiss.onclick = () => api('resolveRole', { requestId: ev.requestId, action: 'dismiss' }).catch((e) => addSys(e.message, true));
+  actions.appendChild(dismiss);
+  el.appendChild(actions);
+  approvals.set(ev.requestId, el);
+  $('pending').appendChild(el);
+  append(h('div', 'sys', `⏸ ${label(ev.agent)} asked for a ${ev.roleName}: choose below.`));
+  updatePending();
 }
 
 function renderApproval(ev) {
@@ -291,7 +328,8 @@ function renderState() {
   noEd.hidden = editors.length > 0 || !catalog.roles.length;
 
   const tok = $('tokens');
-  tok.textContent = `${fmtTokens(state.totalTokens)} tokens${state.tokenLimit ? ` / ${fmtTokens(state.tokenLimit)}` : ''}`;
+  tok.textContent = `${fmtTokens(state.totalTokens)} new tokens${state.tokenLimit ? ` / ${fmtTokens(state.tokenLimit)}` : ''} · ${fmtTokens(state.totalCachedTokens || 0)} cached`;
+  tok.title = 'New tokens = input, output and cache writes (what the token limit counts). Cached = tokens read from the prompt cache, which cost much less.';
   tok.classList.toggle('halted', Boolean(state.tokenLimit && state.totalTokens >= state.tokenLimit));
   if (document.activeElement !== $('routing')) $('routing').value = state.routingMode;
   renderTargets();
@@ -376,7 +414,7 @@ function renderCard(a) {
   c.drv.textContent = a.driverLabel;
   c.el.title = `${a.sessionId ? `Session: ${a.sessionId}` : 'No session yet'}${a.worktree ? `\nWorktree: ${a.cwd} (branch ${a.worktree.branch})` : ''}`;
   c.status.textContent = !a.available ? 'unavailable' : a.account ? (a.account.state === 'rate_limited' ? 'usage limit' : 'no access') : a.waitingApproval ? 'waiting for approval' : a.busy ? 'working' : 'idle';
-  c.tokens.textContent = `${fmtTokens(a.tokens)} tok`;
+  c.tokens.textContent = `${fmtTokens(a.tokens)} tok${a.cachedTokens ? ` (+${fmtTokens(a.cachedTokens)} cache)` : ''}`;
   c.stop.disabled = !a.busy;
   c.retry.hidden = a.available;
   c.bypass.checked = a.bypass;
@@ -600,11 +638,17 @@ function updateAddHints() {
   if (catalog.settings.warnOnExtraAgents !== false && state.team.length >= 2) {
     msgs.push(`This will be agent number ${state.team.length + 1}. Every agent spends its own tokens, and each hand-off is a paid turn.`);
   }
+  const addRoleObj = roleOf($('addRole').value);
+  const editors = state.team.filter((a) => roleOf(a.role)?.canEdit === 'all' && !a.worktree);
+  if (addRoleObj?.canEdit === 'all' && editors.length && !$('addWorktree').checked) {
+    msgs.push(`${editors.map((a) => a.name).join(', ')} already edit${editors.length === 1 ? 's' : ''} this folder. Two agents editing the same files make conflicting changes: tick \"Own git worktree\" or give them separate areas.`);
+  }
   if (same) msgs.push(`There ${same === 1 ? 'is already 1 agent' : `are already ${same} agents`} on this provider: they share the same plan quota and reach its usage limit sooner.`);
   w.textContent = msgs.join(' ');
   w.hidden = !msgs.length;
 }
 
+$('addWorktree').onchange = updateAddHints;
 $('addDriver').onchange = () => {
   updateAddHints();
   refreshName();
@@ -646,6 +690,7 @@ const SETTING_LABELS = {
   approvalTimeoutSec: ['Approval timeout (seconds)', 'Decline an unanswered approval after this time (0 = wait forever).'],
   bypassNewAgents: ['Bypass on for new agents', 'New agents start with bypass mode on.'],
   warnOnExtraAgents: ['Warn about token use when adding agents', ''],
+  missingRolePolicy: ['When the orchestrator needs a missing role', 'Ask me (add the role with a recommended model, or continue with the closest agent), or always continue with the closest agent.'],
   sensitiveModelPatterns: ['Models with a data warning', 'One pattern per line (regex). Matching models show ⚠ and a warning about sensitive code.'],
   destructivePatterns: ['Destructive actions (always ask)', 'One regex per line. Bypass never approves these.'],
   deletionPatterns: ['Deletion commands', 'One regex per line. Bypass approves them only for single files inside the project folder.'],
@@ -672,7 +717,8 @@ function renderSettingsForm() {
         input = h('select');
         for (const v of def.values) {
           const m = catalog.routingModes.find((x) => x.id === v);
-          input.appendChild(new Option(m ? m.label : v, v));
+          const names = { ask: 'Ask me', closest: 'Continue with the closest agent' };
+          input.appendChild(new Option(m ? m.label : names[v] || v, v));
         }
         input.value = value;
       } else if (def.type === 'list') {

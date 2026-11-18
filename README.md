@@ -58,6 +58,14 @@ Roles live in `roles/`, one JSON file each (`id`, `name`, `summary`, `canEdit`, 
 | Tester | Writes and runs tests | Tests only | Sonnet 5.5, GPT-6.1-Sol, Haiku 5.5 |
 | Researcher | Looks up docs and sources | No | Haiku 5.5, GPT-6-Luna, Big Pickle |
 
+Each role can also set `fallback` (closest roles when it is missing), `maxTurns` (step limit per message, applied to Claude agents with `--max-turns`) and `context: "diff"` (the Reviewer receives the original request plus `git diff HEAD` and new files instead of relying on the conversation).
+
+How the roles behave, based on Anthropic's multi-agent research write-up, Cognition's "Don't build multi-agents", Claude Code subagents, OpenCode agents, Magentic-One, the OpenAI Agents SDK and Aider's architect/editor benchmark:
+
+- **Orchestrator** scales the team to the request (one agent for small things, Coder + Reviewer for normal features, Architect/Tester/Researcher only for large work), delegates in parallel, and does not send status messages while it waits.
+- **Coder** keeps the full context and does its own quick lookups; one Coder per area of the code (a second one only with its own worktree).
+- **Researcher**, **Reviewer**, **Tester** and **Architect** are short, focused passes with step limits.
+
 The names follow common multi-agent setups (Anthropic's orchestrator-workers, Magentic-One, CrewAI, MetaGPT, Aider's architect/editor). "Edits files: No" is enforced: Claude runs without its edit tools, Codex in a read-only sandbox, OpenCode with its `plan` agent.
 
 ## Routing
@@ -71,7 +79,11 @@ The header's **Routing** menu (default in Settings):
 | Fixed pipeline | The next agent in the list; the last one answers you. |
 | Round robin | The next agent in the list, in a loop. |
 
-Your messages go to the box's target: **Auto** (the orchestrator, or the first agent), a specific agent, or all. A message that *starts* with `@Name` goes to that agent. Each agent sees the team list (names, roles, models) whenever it changes.
+Your messages go to the box's target: **Auto** (the orchestrator, or the first agent), a specific agent, or all. A message that *starts* with `@Name` goes to that agent. Each agent sees the team list (names, roles, models, who can edit) whenever it changes.
+
+In orchestrator mode the results of all the agents the orchestrator delegated to are **collected and delivered in one message** when the last one finishes, so the orchestrator spends one turn instead of one per result.
+
+**Missing roles.** When the orchestrator needs a role nobody in the team has, it writes `[[NEED_ROLE: reviewer]]`. By default the relay pauses and the page asks you: **Add** the role (with the first available model recommended for it) or **Continue with** the closest agent (from the role's `fallback` list; the choice is logged). *Settings > When the orchestrator needs a missing role* can make "continue with the closest agent" automatic. If no agent in the team can edit code, a warning shows at the top of the page.
 
 The relay stops when an orchestrator (or, in other modes, any agent) ends with a line containing only `[[DONE]]`, when the hand-off limit or the **token limit** is reached, or when you press **Pause** / **Stop all**. Sending a message or **Resume** continues.
 
@@ -86,7 +98,7 @@ Permission requests from every agent appear in a yellow panel pinned above the m
 
 ## Settings and accounts
 
-**Settings > General** (saved to `config.json`): your name, default routing, auto-relay, hand-off limit, token limit, approval timeout, bypass for new agents, token warning, data-warning model patterns, safety patterns, opening the browser.
+**Settings > General** (saved to `config.json`): your name, default routing, auto-relay, hand-off limit, token limit (counts new tokens; cached tokens are shown apart because they cost much less), missing-role behaviour, approval timeout, bypass for new agents, token warning, data-warning model patterns, safety patterns, opening the browser.
 
 **Settings > Accounts** checks each CLI with its own commands and shows one of: *Not installed*, *Installed, not signed in*, *Signed in, no access* (plan inactive, invalid key, no credit), *Usage limit reached* (with the reset time when the provider reports it), or *Ready*, plus the next step: the install command, or **Sign in**, which opens a terminal running the CLI's own login (`claude auth login`, `codex login`, `opencode auth login`). Agent Bridge never sees or stores credentials.
 

@@ -5,7 +5,18 @@
   "canEdit": "none",
   "recommended": {
     "label": "Opus 5.5, Sonnet 5.5, GPT-6.2-Sol",
-    "patterns": ["opus", "sonnet", "fable", "gpt-6\\.2"]
+    "patterns": [
+      "opus",
+      "sonnet",
+      "fable",
+      "gpt-6\\.2"
+    ]
   },
-  "instructions": "You are the REVIEWER (validator). Review the plan or the change you receive: correctness, edge cases, security, tests, and whether it does what was asked.\n- Do not edit files. Read the code and run read-only commands when you need evidence.\n- Start your reply with APPROVED or CHANGES REQUESTED, then list concrete findings with file paths and what to fix."
+  "instructions": "You are the REVIEWER (validator). You receive the change as a git diff plus the original request; review that, not the whole conversation. Check correctness, edge cases, security, tests, and whether it does what was asked.\n- Do not edit files. Read more code or run read-only commands only when the diff is not enough to judge.\n- One pass: start your reply with APPROVED or CHANGES REQUESTED, then list concrete findings with file paths and what to fix.",
+  "fallback": [
+    "architect",
+    "orchestrator"
+  ],
+  "maxTurns": 25,
+  "context": "diff"
 }

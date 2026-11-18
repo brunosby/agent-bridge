@@ -56,6 +56,7 @@ const SETTINGS = {
   approvalTimeoutSec: { type: 'number', min: 0, default: 120 },
   bypassNewAgents: { type: 'boolean', default: false },
   warnOnExtraAgents: { type: 'boolean', default: true },
+  missingRolePolicy: { type: 'enum', values: ['ask', 'closest'], default: 'ask' },
   sensitiveModelPatterns: { type: 'list', default: ['big-pickle', 'stealth', ':free', '-free'] },
   destructivePatterns: { type: 'list', default: DEFAULT_DESTRUCTIVE_PATTERNS },
   deletionPatterns: { type: 'list', default: DEFAULT_DELETION_PATTERNS },
@@ -195,6 +196,7 @@ function teamState() {
       resolvedModel: a?.resolvedModel || null,
       models: a ? decorateModels(spec, a) : [],
       tokens: a?.tokens || 0,
+      cachedTokens: a?.cachedTokens || 0,
       available: a ? a.available !== false : false,
       unavailableReason: a?.unavailableReason || null,
       account: providerBlocked(spec.driver),
@@ -212,6 +214,7 @@ function stateEvent() {
     relay: { ...relay },
     tokenLimit: Number(setting('tokenLimit')),
     totalTokens: team.reduce((s, a) => s + a.tokens, 0),
+    totalCachedTokens: team.reduce((s, a) => s + a.cachedTokens, 0),
     team,
   };
 }
@@ -259,11 +262,11 @@ function createAgent(spec) {
   if (spec.driver === 'claude') {
     const promptFile = path.join(conv.runDir, `instructions-${spec.id}.txt`);
     fs.writeFileSync(promptFile, instructions);
-    agent = new ClaudeAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeSessionId: spec.sessionId || null }, systemPromptFile: promptFile, readOnly, tokens: spec.tokens || 0 });
+    agent = new ClaudeAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeSessionId: spec.sessionId || null }, systemPromptFile: promptFile, readOnly, tokens: spec.tokens || 0, cachedTokens: spec.cachedTokens || 0, maxTurns: role?.maxTurns || null });
   } else if (spec.driver === 'codex') {
-    agent = new CodexAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeThreadId: spec.sessionId || null }, instructions, readOnly, tokens: spec.tokens || 0 });
+    agent = new CodexAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeThreadId: spec.sessionId || null }, instructions, readOnly, tokens: spec.tokens || 0, cachedTokens: spec.cachedTokens || 0 });
   } else if (spec.driver === 'opencode') {
-    agent = new OpenCodeAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeSessionId: spec.sessionId || null }, instructions, readOnly, tokens: spec.tokens || 0 });
+    agent = new OpenCodeAgent({ id: spec.id, name: spec.name, cwd, config: { ...base, resumeSessionId: spec.sessionId || null }, instructions, readOnly, tokens: spec.tokens || 0, cachedTokens: spec.cachedTokens || 0 });
   } else {
     throw new Error(`unknown driver ${spec.driver}`);
   }
@@ -329,7 +332,7 @@ async function setRole(id, roleId) {
   } else if (agent.setInstructions) {
     agent.setInstructions(buildInstructions({ name: spec.name, role, routingMode: conv.routingMode, workDir: agent.cwd, userName: setting('userName'), extra: config[spec.driver]?.instructions }));
   }
-  await agent.reconfigure({ readOnly: role.canEdit === 'none' });
+  await agent.reconfigure({ readOnly: role.canEdit === 'none', maxTurns: role.maxTurns || null });
   conv.pendingRoleNote[id] = `[Role change] From now on your role is ${role.name}. ${role.summary}\n${role.instructions}`;
   conv.rosterVersion++;
   publish({ kind: 'system', text: `${spec.name} is now ${role.name}.` });
@@ -389,6 +392,7 @@ function openConversation({ workDir, restoreId, team, routingMode }) {
       effort: t.effort && t.effort !== 'default' ? t.effort : null,
       bypass: Boolean(t.bypass),
       sessionId: saved ? t.sessionId || null : null,
+      cachedTokens: saved ? t.cachedTokens || 0 : 0,
       tokens: saved ? t.tokens || 0 : 0,
       cwd: t.cwd && t.worktree && fs.existsSync(t.cwd) ? t.cwd : undefined,
       worktree: t.cwd && t.worktree && fs.existsSync(t.cwd) ? t.worktree : undefined,
@@ -557,9 +561,31 @@ function routeTargets(fromId, text) {
 
 function onTurnEnd(fromId, ev) {
   const text = (ev.text || '').trim();
+  const orch = orchestratorId();
+
+  // Orchestrator mode: results of the agents the orchestrator delegated to are collected and delivered
+  // in one message once all of them have finished (one orchestrator turn instead of one per result).
+  if (conv.routingMode === 'orchestrator' && fromId !== orch && conv.batch?.pending.has(fromId)) {
+    conv.batch.pending.delete(fromId);
+    conv.batch.results.push({ from: fromId, text: text || `(no answer${ev.detail ? `: ${ev.detail}` : ''})` });
+    if (conv.batch.pending.size) {
+      publish({ kind: 'system', text: `${agentName(fromId)} finished. Waiting for ${[...conv.batch.pending].map(agentName).join(', ')} before passing the results to ${agentName(orch)}.` });
+      return;
+    }
+    const results = conv.batch.results;
+    conv.batch = null;
+    if (!relay.auto || relay.halted || checkTokenLimit()) return;
+    relay.hops += 1;
+    const body = results.map((r) => `[Message from ${agentName(r.from)}]\n${r.text}`).join('\n\n');
+    deliver(orch, results.length > 1 ? `[Results from ${results.length} agents]\n\n${body}` : body, { from: results[0].from });
+    return;
+  }
   if (!text) return;
+
+  if (fromId === orch && handleNeedRole(fromId, text)) return;
+
   // In orchestrator mode only the orchestrator closes the work; a worker's [[DONE]] still goes back to it.
-  const closes = conv.routingMode !== 'orchestrator' || fromId === orchestratorId();
+  const closes = conv.routingMode !== 'orchestrator' || fromId === orch;
   if (DONE_MARKER.test(text) && closes) {
     relay.halted = true;
     publish({ kind: 'system', text: `${agentName(fromId)} marked the work as done. Waiting for you.` });
@@ -579,10 +605,93 @@ function onTurnEnd(fromId, ev) {
     publishState();
     return;
   }
+  if (conv.routingMode === 'orchestrator' && fromId === orch) {
+    conv.batch = conv.batch || { pending: new Set(), results: [] };
+    for (const t of targets) conv.batch.pending.add(t);
+  }
   for (const to of targets) {
     relay.hops += 1;
     deliver(to, `[Message from ${agentName(fromId)}]\n${text}`, { from: fromId });
   }
+}
+
+// ---------- missing roles ----------
+const NEED_ROLE = /\[\[NEED_ROLE:\s*([\w-]+)\s*\]\]/i;
+
+/** Closest agent for a missing role: the role's fallback list, then the orchestrator. */
+function closestAgent(roleId) {
+  for (const fb of roles[roleId]?.fallback || []) {
+    const a = conv.team.find((x) => x.role === fb);
+    if (a) return a;
+  }
+  return conv.team.find((x) => x.id === orchestratorId());
+}
+
+/** Provider and model to suggest for a role: the first available model recommended for it. */
+function suggestFor(roleId) {
+  const role = roles[roleId];
+  for (const driver of ['claude', 'codex', 'opencode']) {
+    const models = driverModelCache[driver]?.models || [];
+    const m = models.find((x) => x.value !== 'default' && !x.disabled && isRecommended(role, x));
+    if (m && !providerBlocked(driver)) return { driver, model: m.value, modelLabel: m.label || m.value };
+  }
+  return { driver: 'claude', model: null, modelLabel: 'default model' };
+}
+
+/** The orchestrator asked for a role nobody has. Ask the user (default) or continue with the closest agent. */
+function handleNeedRole(fromId, text) {
+  const m = NEED_ROLE.exec(text);
+  if (!m) return false;
+  const roleId = m[1].toLowerCase();
+  const existing = conv.team.find((a) => a.role === roleId);
+  if (!roles[roleId] || existing) {
+    deliver(fromId, `[Message from Agent Bridge]\n${existing ? `@${existing.name} already has the ${roles[roleId].name} role; delegate to it.` : `"${roleId}" is not a role in this app. Roles: ${Object.keys(roles).join(', ')}.`}`, { from: 'user' });
+    return true;
+  }
+  const closest = closestAgent(roleId);
+  if (setting('missingRolePolicy') === 'closest') {
+    resolveMissingRole(roleId, 'closest');
+    return true;
+  }
+  relay.halted = true;
+  const sug = suggestFor(roleId);
+  const requestId = `role-${Date.now()}`;
+  conv.pendingRoleRequest = { requestId, roleId };
+  publish({
+    kind: 'needRole',
+    agent: fromId,
+    requestId,
+    role: roleId,
+    roleName: roles[roleId].name,
+    suggestion: { ...sug, driverLabel: DRIVERS[sug.driver].label },
+    closest: closest ? { id: closest.id, name: closest.name, roleName: roles[closest.role]?.name } : null,
+  });
+  publishState();
+  return true;
+}
+
+async function resolveMissingRole(roleId, action) {
+  const role = roles[roleId];
+  const orch = orchestratorId();
+  conv.pendingRoleRequest = null;
+  relay.halted = false;
+  relay.hops = 0;
+  if (action === 'add') {
+    const sug = suggestFor(roleId);
+    const spec = await addAgent({ driver: sug.driver, role: roleId, model: sug.model });
+    publish({ kind: 'system', text: `Added ${spec.name} for the missing ${role.name} role.` });
+    deliver(orch, `[Message from ${setting('userName')}]\nI added @${spec.name} as ${role.name}. Continue and delegate that work to it.`, { from: 'user' });
+  } else {
+    const closest = closestAgent(roleId);
+    publish({ kind: 'system', text: `No ${role.name} added: continuing with ${closest?.name || 'the orchestrator'} as the closest agent.` });
+    logError('bridge', `missing role ${roleId}: continued with ${closest?.name || 'orchestrator'}`);
+    deliver(
+      orch,
+      `[Message from ${setting('userName')}]\nNo ${role.name} will be added. ${closest && closest.id !== orch ? `Give that work to @${closest.name} (${roles[closest.role]?.name}), the closest role in the team.` : 'Handle that part yourself as far as your role allows, and tell me what is left.'}`,
+      { from: 'user' },
+    );
+  }
+  publishState();
 }
 
 /** Send a message to one agent, adding the team roster or a role note when they changed. */
@@ -608,17 +717,37 @@ function deliver(toId, text, { from }) {
     extras.push(rosterText(team, toId, conv.routingMode));
     conv.rosterSeen[toId] = conv.rosterVersion;
   }
+  // Roles with context "diff" (Reviewer) get the original request and the current changes, so they
+  // review what changed instead of reading the whole conversation.
+  const spec = conv.team.find((a) => a.id === toId);
+  if (roles[spec?.role]?.context === 'diff' && from !== 'user') {
+    extras.push(`[Original request from ${setting('userName')}]\n${conv.lastUserText || '(not available)'}`);
+    extras.push(diffContext(agent.cwd || conv.workDir));
+  }
   conv.lastSender[toId] = from;
   if (from !== 'user') publish({ kind: 'routed', from, to: toId, relayed: true, hop: relay.hops });
   agent.send(extras.length ? `${extras.join('\n\n')}\n\n${text}` : text);
 }
 
+/** git diff of the working tree (tracked changes + list of new files), trimmed to a reasonable size. */
+function diffContext(dir) {
+  const git = (args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 15000, maxBuffer: 20 * 1024 * 1024 });
+  const inside = git(['rev-parse', '--is-inside-work-tree']);
+  if (inside.status !== 0) return '[Current changes]\n(The project folder is not a git repository: read the files the coder reported as changed.)';
+  const diff = git(['diff', 'HEAD', '--no-color']).stdout || '';
+  const untracked = (git(['ls-files', '--others', '--exclude-standard']).stdout || '').trim();
+  const limit = 40000;
+  const body = diff.length > limit ? `${diff.slice(0, limit)}\n... (diff cut at ${limit} characters; run git diff for the rest)` : diff;
+  return `[Current changes (git diff HEAD)]\n${body.trim() ? `\`\`\`diff\n${body.trim()}\n\`\`\`` : '(no changes to tracked files)'}${untracked ? `\nNew files not in git yet:\n${untracked}` : ''}`;
+}
+
 function userSend(text, target) {
+  conv.lastUserText = text;
   let targets;
   if (target === 'all') targets = conv.team.map((a) => a.id);
   else if (!target || target === 'auto') {
     // Only @mentions at the very start pick the receiver; mentions inside the text are instructions.
-    const lead = (String(text).match(/^s*(?:@[w-]+[s,:]*)+/) || [''])[0];
+    const lead = (String(text).match(/^\s*(?:@[\w-]+[\s,:]*)+/) || [''])[0];
     const ment = mentions(lead, null);
     targets = ment.length ? ment : [conv.routingMode === 'orchestrator' ? orchestratorId() : conv.team[0]?.id];
   } else targets = [target];
@@ -776,7 +905,16 @@ async function api(action, body) {
       publish({ kind: 'system', text: `Routing: ${ROUTING_MODES[body.mode].label}. ${ROUTING_MODES[body.mode].rule}` });
       publishState();
       return { ok: true };
+    case 'resolveRole': {
+      if (!conv.pendingRoleRequest || conv.pendingRoleRequest.requestId !== body.requestId) throw new Error('this request is no longer pending');
+      const { requestId, roleId } = conv.pendingRoleRequest;
+      publish({ kind: 'needRoleClosed', requestId, action: body.action });
+      if (body.action === 'add' || body.action === 'closest') await resolveMissingRole(roleId, body.action);
+      else conv.pendingRoleRequest = null;
+      return { ok: true };
+    }
     case 'interrupt': {
+      if (conv.batch) conv.batch = null;
       relay.halted = true;
       const ids = body.agent ? [body.agent] : Object.keys(agents);
       await Promise.all(ids.map((id) => agents[id]?.interrupt()));
