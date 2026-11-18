@@ -10,11 +10,7 @@ import { fileURLToPath } from 'node:url';
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const SERVER = process.env.AGENT_BRIDGE_ENTRY
   ? path.resolve(APP_DIR, process.env.AGENT_BRIDGE_ENTRY)
-  : fs.existsSync(path.join(APP_DIR, 'src', 'cli', 'main.ts'))
-    ? path.join(APP_DIR, 'src', 'cli', 'main.ts')
-    : fs.existsSync(path.join(APP_DIR, 'src', 'cli', 'main.mjs'))
-      ? path.join(APP_DIR, 'src', 'cli', 'main.mjs')
-      : path.join(APP_DIR, 'src', 'server.mjs');
+  : path.join(APP_DIR, 'bin', 'agent-bridge.mjs');
 
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 

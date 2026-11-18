@@ -11,7 +11,7 @@ Set fso = CreateObject("Scripting.FileSystemObject")
 dir = fso.GetParentFolderName(WScript.ScriptFullName)
 
 If sh.Run("cmd /c where node >nul 2>nul", 0, True) <> 0 Then
-  MsgBox "Node.js 20 or newer is required." & vbCrLf & "Install it from https://nodejs.org and try again.", vbExclamation, "Agent Bridge"
+  MsgBox "Node.js 22.18 or newer is required." & vbCrLf & "Install it from https://nodejs.org and try again.", vbExclamation, "Agent Bridge"
   WScript.Quit 1
 End If
 
@@ -37,5 +37,5 @@ logDir = dir & "\logs"
 If Not fso.FolderExists(logDir) Then fso.CreateFolder logDir
 
 ' Run node directly (hidden). The server writes logs\server.log itself (--log-file).
-cmd = "node """ & dir & "\src\server.mjs""" & args & " --hidden --log-file """ & logDir & "\server.log"""
+cmd = "node """ & dir & "\bin\agent-bridge.mjs""" & args & " --hidden --log-file """ & logDir & "\server.log"""
 sh.Run cmd, 0, False

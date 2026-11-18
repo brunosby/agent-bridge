@@ -1,12 +1,12 @@
 import { EventEmitter } from 'node:events';
-import { spawnJsonl } from './proc.mjs';
+import { spawnJsonl } from './process.mjs';
 
 /**
  * Drives Claude Code in headless mode:
  *   claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages
  * One long-lived process receives user messages on stdin; each answer ends with a `result` event.
  *
- * Emits 'event' objects: { kind, ... } (see server.mjs for the list of kinds).
+ * Emits 'event' objects: { kind, ... } (see src/server/ for how they are used).
  */
 export class ClaudeAgent extends EventEmitter {
   constructor({

@@ -2,8 +2,8 @@ import { EventEmitter } from 'node:events';
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import net from 'node:net';
-import { killTree } from './proc.mjs';
-import { clip } from './claude-agent.mjs';
+import { killTree } from './process.mjs';
+import { clip } from './claude.mjs';
 
 /**
  * Drives OpenCode through its official HTTP server (`opencode serve`, https://opencode.ai/docs/server/).

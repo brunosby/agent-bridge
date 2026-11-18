@@ -1,0 +1,264 @@
+// Conversation lifecycle: open, close, restore, wire agent events, approvals timeout, token limit, settings.
+import { S } from './state.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { listConversations, loadConversation } from '../core/history.mjs';
+import { LOGS_DIR, SETTINGS, safeRegex, saveLocalConfig, setting } from '../config/settings.mjs';
+import { agentName, logError, publish, publishState, resetClients } from './events.mjs';
+import { ROUTING_MODES } from '../core/prompts.mjs';
+import { approvalTimers, cliCache, providerRuntime, relay } from './state.mjs';
+import { createAgent, defaultName, defaultTeam, driverModelCache, startAgent, uniqueName } from './team.mjs';
+import { DRIVERS } from '../providers/registry.mjs';
+import { onTurnEnd } from './routing.mjs';
+import { buildMatcher } from '../core/safety.mjs';
+export function openConversation({ workDir, restoreId, team, routingMode }) {
+  let saved = null;
+  if (restoreId) {
+    saved = loadConversation(LOGS_DIR, restoreId);
+    workDir = saved.workDir || workDir;
+    team = saved.team?.length ? saved.team : team;
+    routingMode = saved.routingMode || routingMode;
+  }
+  if (!fs.existsSync(workDir)) throw new Error(`Working directory does not exist: ${workDir}`);
+  const id = restoreId || new Date().toISOString().replace(/[:.]/g, '-');
+  const runDir = path.join(LOGS_DIR, id);
+  fs.mkdirSync(runDir, { recursive: true });
+
+  S.conv = {
+    id,
+    runDir,
+    transcript: fs.createWriteStream(path.join(runDir, 'transcript.jsonl'), { flags: 'a' }),
+    workDir,
+    routingMode: ROUTING_MODES[routingMode] ? routingMode : setting('routingMode'),
+    team: [],
+    agents: {},
+    nextAgent: 0,
+    rosterVersion: 1,
+    rosterSeen: {},
+    pendingRoleNote: {},
+    lastSender: {},
+  };
+  S.history = saved ? saved.events : [];
+  S.seq = Math.max(S.seq, saved?.lastSeq || 0);
+  relay.hops = 0;
+  relay.halted = Boolean(saved);
+
+  for (const t of team || defaultTeam()) {
+    const driver = DRIVERS[t.driver] ? t.driver : 'claude';
+    const role = S.roles[t.role] ? t.role : 'coder';
+    const spec = {
+      id: t.id && /^a\d+$/.test(t.id) ? t.id : `a${S.conv.nextAgent + 1}`,
+      name: uniqueName(t.name || defaultName(driver, role)),
+      driver,
+      role,
+      model: t.model && t.model !== 'default' ? t.model : null,
+      effort: t.effort && t.effort !== 'default' ? t.effort : null,
+      bypass: Boolean(t.bypass),
+      sessionId: saved ? t.sessionId || null : null,
+      cachedTokens: saved ? t.cachedTokens || 0 : 0,
+      tokens: saved ? t.tokens || 0 : 0,
+      cwd: t.cwd && t.worktree && fs.existsSync(t.cwd) ? t.cwd : undefined,
+      worktree: t.cwd && t.worktree && fs.existsSync(t.cwd) ? t.worktree : undefined,
+    };
+    S.conv.nextAgent = Math.max(S.conv.nextAgent, Number(spec.id.slice(1)));
+    S.conv.team.push(spec);
+    createAgent(spec);
+  }
+  return { saved };
+}
+
+export async function closeConversation() {
+  if (!S.conv) return;
+  const old = S.conv;
+  S.conv = null;
+  for (const t of approvalTimers.values()) clearTimeout(t);
+  approvalTimers.clear();
+  await Promise.all(Object.values(old.agents).map((a) => a.shutdown().catch(() => {})));
+  old.transcript.end();
+}
+
+export function startAgents() {
+  for (const a of Object.values(S.conv.agents)) startAgent(a);
+}
+
+export function wireAgent(owner, id, agent) {
+  agent.on('event', (ev) => {
+    if (S.conv !== owner || owner.agents[id] !== agent) return; // late events from a closed conversation or removed agent
+    if (ev.kind === 'stderr') {
+      owner.transcript.write(JSON.stringify({ at: Date.now(), ...ev }) + '\n');
+      if (/\b(error|panic|fatal|exception)\b/i.test(ev.text)) logError(agentName(id), `stderr: ${ev.text}`);
+      return;
+    }
+    if (ev.kind === 'models') {
+      const driver = owner.team.find((a) => a.id === id)?.driver;
+      if (driver) driverModelCache[driver] = { at: Date.now(), models: agent.models || [] };
+    }
+    if (ev.kind === 'status' || ev.kind === 'session' || ev.kind === 'models') {
+      publishState();
+      return;
+    }
+    if (ev.kind === 'usage') {
+      publishState();
+      checkTokenLimit();
+      return;
+    }
+    if (ev.kind === 'account') {
+      const driver = owner.team.find((a) => a.id === id)?.driver;
+      if (!driver) return;
+      const prev = providerRuntime[driver];
+      const changed = !prev || prev.state !== ev.state;
+      providerRuntime[driver] = { state: ev.state, detail: ev.detail || null, resetsAt: ev.resetsAt || null };
+      delete cliCache[driver];
+      if (changed && ev.state !== 'ok') {
+        logError(agentName(id), `account: ${ev.state} ${ev.detail || ''}`);
+        const when = ev.resetsAt ? ` until ${new Date(ev.resetsAt).toLocaleString()}` : '';
+        publish({
+          kind: 'error',
+          agent: id,
+          text: `${DRIVERS[driver].label}: ${ev.state === 'rate_limited' ? `usage limit reached${when}` : 'the account has no access (plan inactive, invalid key or no credit)'}. Its models are disabled; see Settings > Accounts.`,
+        });
+      }
+      if (changed) publishState();
+      return;
+    }
+    if (ev.kind === 'unavailable') {
+      logError(agentName(id), `unavailable: ${ev.reason}`);
+      publish({
+        kind: 'error',
+        agent: id,
+        text: `${agentName(id)} is unavailable: ${ev.reason} Its models are disabled until you press Retry.`,
+      });
+      publishState();
+      return;
+    }
+    if (ev.kind === 'approval') {
+      const spec = owner.team.find((a) => a.id === id);
+      const hit = agent.isDestructive({ command: ev.matchText, cwd: ev.cwd || agent.cwd, deletePaths: ev.deletePaths });
+      if (spec?.bypass && !hit) {
+        agent.respondApproval(ev.requestId, 'accept');
+        publish({ kind: 'autoApproved', agent: id, title: ev.title, detail: ev.detail });
+        return;
+      }
+      if (hit) ev.warning = hit;
+      ev.title = ev.title.replace(/^(Claude|Codex|OpenCode)\b/, agentName(id));
+      armApprovalTimeout(id, ev);
+    }
+    if (ev.kind === 'approvalClosed') clearTimeout(approvalTimers.get(ev.requestId));
+    publish(ev);
+    if (ev.kind === 'turnEnd') onTurnEnd(id, ev);
+  });
+}
+
+export function armApprovalTimeout(agentId, ev) {
+  const sec = Number(setting('approvalTimeoutSec'));
+  if (!(sec > 0)) return;
+  ev.expiresAt = Date.now() + sec * 1000;
+  const owner = S.conv;
+  const timer = setTimeout(() => {
+    approvalTimers.delete(ev.requestId);
+    if (S.conv !== owner || !S.conv.agents[agentId]) return;
+    if (
+      S.conv.agents[agentId].respondApproval(
+        ev.requestId,
+        'decline',
+        'No answer from the user in time, so this was declined automatically. Continue without it or ask the user.',
+      )
+    ) {
+      publish({ kind: 'approvalClosed', requestId: ev.requestId, decision: 'timeout' });
+      publishState();
+    }
+  }, sec * 1000);
+  approvalTimers.set(ev.requestId, timer);
+}
+
+export function totalTokens() {
+  return Object.values(S.conv.agents).reduce((s, a) => s + (a.tokens || 0), 0);
+}
+
+export function checkTokenLimit() {
+  const limit = Number(setting('tokenLimit'));
+  if (!(limit > 0) || relay.halted) return false;
+  if (totalTokens() < limit) return false;
+  relay.halted = true;
+  publish({
+    kind: 'system',
+    text: `Token limit reached (${totalTokens().toLocaleString()} of ${limit.toLocaleString()}). Hand-offs are paused; send a message or press Resume to continue.`,
+  });
+  publishState();
+  return true;
+}
+
+export async function restoreConversation(id) {
+  if (!listConversations(LOGS_DIR).some((c) => c.id === id)) throw new Error(`conversation ${id} not found`);
+  await closeConversation();
+  const { saved } = openConversation({ workDir: process.cwd(), restoreId: id });
+  resetClients();
+  const resumed = S.conv.team.filter((a) => a.sessionId).map((a) => a.name);
+  publish({
+    kind: 'system',
+    text: `Restored conversation from ${new Date(saved.startedAt).toLocaleString()} in ${S.conv.workDir} with ${S.conv.team.length} agent(s). ${resumed.length ? `${resumed.join(', ')} continue their sessions.` : 'No agent sessions were saved, so the agents start fresh.'} Relay is paused until you send a message.`,
+  });
+  startAgents();
+  publishState();
+}
+
+export async function newConversation(workDir) {
+  const dir = path.resolve(workDir || S.conv?.workDir || process.cwd());
+  if (!fs.existsSync(dir)) throw new Error(`Folder does not exist: ${dir}`);
+  await closeConversation();
+  openConversation({ workDir: dir });
+  resetClients();
+  publish({
+    kind: 'system',
+    text: `New conversation in ${dir}. Team: ${S.conv.team.map((a) => `${a.name} (${S.roles[a.role]?.name})`).join(', ')}.`,
+  });
+  startAgents();
+  publishState();
+}
+
+export function settingsView() {
+  return Object.fromEntries(Object.keys(SETTINGS).map((k) => [k, setting(k)]));
+}
+
+export function saveSettings(input) {
+  const next = {};
+  for (const [key, def] of Object.entries(SETTINGS)) {
+    if (!(key in input)) continue;
+    let v = input[key];
+    if (def.type === 'boolean') v = Boolean(v);
+    else if (def.type === 'number') {
+      v = Number(v);
+      if (!Number.isFinite(v) || v < (def.min ?? -Infinity))
+        throw new Error(`${key} must be a number${def.min !== undefined ? ` ≥ ${def.min}` : ''}`);
+    } else if (def.type === 'enum') {
+      if (!def.values.includes(v)) throw new Error(`${key} must be one of ${def.values.join(', ')}`);
+    } else if (def.type === 'list') {
+      v = (Array.isArray(v) ? v : String(v).split('\n')).map((s) => String(s).trim()).filter(Boolean);
+      for (const p of v) if (!safeRegex(p)) throw new Error(`invalid pattern in ${key}: ${p}`);
+    } else v = String(v);
+    next[key] = v;
+  }
+  if (input.saveTeamAsDefault && S.conv) {
+    next.defaultTeam = S.conv.team.map((a) => ({
+      driver: a.driver,
+      role: a.role,
+      name: a.name,
+      model: a.model || null,
+      effort: a.effort || null,
+      bypass: a.bypass,
+    }));
+  }
+  saveLocalConfig(next);
+  relay.auto = setting('autoRelay');
+  relay.maxHops = Number(setting('maxHops'));
+  if (S.conv) {
+    S.conv.routingMode = 'routingMode' in input ? setting('routingMode') : S.conv.routingMode;
+    for (const a of Object.values(S.conv.agents)) {
+      a.isDestructive = buildMatcher({
+        workDir: a.cwd,
+        destructive: setting('destructivePatterns'),
+        deletion: setting('deletionPatterns'),
+      });
+    }
+  }
+}

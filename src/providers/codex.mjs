@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
-import { spawnJsonl } from './proc.mjs';
-import { clip } from './claude-agent.mjs';
+import { spawnJsonl } from './process.mjs';
+import { clip } from './claude.mjs';
 
 /**
  * Drives Codex through `codex app-server` (JSON-RPC 2.0 without the "jsonrpc" field, JSONL over stdio).
