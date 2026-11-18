@@ -21,6 +21,8 @@ export interface ModelInfo {
   disabledReason?: string | null;
   recommended?: boolean;
   sensitive?: boolean;
+  /** Context window in tokens, when the provider reports it (OpenCode). */
+  contextWindow?: number | null;
 }
 
 /** Everything an agent reports goes through one event shape; `kind` says what it is. */
@@ -56,6 +58,8 @@ export interface AgentOptions {
   maxTurns?: number | null;
   profile?: 'full' | 'lean';
   skillsOff?: string[];
+  /** Allow-list mode (lean roles): only these skills may run; null = deny-list mode with skillsOff. */
+  skillsOnly?: string[] | null;
 }
 
 export interface ReconfigureOptions {
@@ -63,6 +67,7 @@ export interface ReconfigureOptions {
   maxTurns?: number | null;
   profile?: 'full' | 'lean';
   skillsOff?: string[];
+  skillsOnly?: string[] | null;
 }
 
 /** The contract every provider driver implements (Claude Code, Codex, OpenCode, fake). */
@@ -109,7 +114,10 @@ export interface Role {
   maxTurns: number | null;
   context: 'diff' | null;
   profile: 'full' | 'lean';
+  /** Full roles: skills switched off (names or patterns). */
   skillsOff: string[];
+  /** Lean roles: the only skills allowed; everything else is blocked. */
+  skillsOn?: string[];
 }
 
 export type RoleCatalog = Record<string, Role>;

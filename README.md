@@ -42,7 +42,8 @@ Use **Restart** and **Quit** at the top of the page to restart or close the app.
 - The orchestrator **sizes the team to the request**: one agent for small things, Coder then Reviewer for normal changes, the others only for large work.
 - **Review loop:** CHANGES REQUESTED goes back to the coder for up to 2 rounds; after that the orchestrator reports the open findings to you.
 - **Missing role:** if the task needs a role nobody has, the page asks whether to add it (with a recommended model) or continue with the closest agent.
-- **Profiles:** Orchestrator and Coder use your full setup (hooks, skills, plugins, CLAUDE.md). The other roles run lean, without hooks. **Settings > Roles** changes a role's profile and switches skills off per role (Claude and OpenCode agents).
+- **Profiles:** Orchestrator and Coder use your full setup (hooks, skills, plugins, CLAUDE.md). The other roles run lean: no hooks and no skills, except the ones you allow for the role in **Settings > Roles** (Claude and OpenCode agents). This keeps a support role from loading a workflow skill that conflicts with its job.
+- **Researcher** opens at most 3 pages per question, so long pages do not fill the model's context. Its card warns when the chosen model has a context window of 200k tokens or less.
 - Roles live in `roles/`, one JSON file each; copy one to create a new role.
 
 ## Providers

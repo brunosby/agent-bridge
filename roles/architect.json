@@ -11,5 +11,5 @@
   "fallback": ["orchestrator", "reviewer"],
   "maxTurns": 30,
   "profile": "lean",
-  "skillsOff": ["*:long-task", "*:completion-criteria", "*:loop-design", "*:create-skill", "*:handoff"]
+  "skillsOn": []
 }

@@ -147,7 +147,7 @@ export function createAgent(spec: AgentSpec): Agent {
       readOnly,
       tokens: spec.tokens || 0,
       cachedTokens: spec.cachedTokens || 0,
-      skillsOff: roleProfile(spec.role, true).skillsOff,
+      ...roleProfile(spec.role, true),
     });
   } else if (spec.driver === 'fake' && DRIVERS.fake) {
     agent = new FakeAgent({
@@ -306,14 +306,27 @@ export function installedSkills(): string[] {
 }
 
 /**
- * Profile of a role: "full" (the user's whole setup) or "lean" (no hooks), and the skills switched off.
- * Settings > Roles can override the role file (config.roleOverrides[roleId] = { profile, skillsOff }).
+ * Profile of a role: "full" (the user's whole setup) or "lean" (no hooks), and its skills.
+ * Full roles use a deny-list (skillsOff). Lean roles use an allow-list (skillsOnly): every skill is
+ * blocked except the ones ticked in Settings > Roles, so a support role cannot pull in a workflow
+ * skill that fights its job (for example a research skill that writes files in a read-only role).
+ * Settings > Roles can override the role file (config.roleOverrides[roleId] = { profile, skillsOff, skillsOn }).
  * With keepPatterns, the role's patterns are returned too (OpenCode accepts patterns directly).
  */
-export function roleProfile(roleId: string, keepPatterns = false): { profile: 'full' | 'lean'; skillsOff: string[] } {
+export function roleProfile(
+  roleId: string,
+  keepPatterns = false,
+): { profile: 'full' | 'lean'; skillsOff: string[]; skillsOnly: string[] | null } {
   const role = S.roles[roleId];
   const o = config.roleOverrides?.[roleId];
   const profile = o?.profile || role?.profile || 'full';
+  if (profile === 'lean') {
+    const allowed: string[] = Array.isArray(o?.skillsOn) ? o.skillsOn : role?.skillsOn || [];
+    const installed = installedSkills();
+    const skillsOnly = installed.filter((n) => allowed.some((p: string) => globMatch(p, n)));
+    if (keepPatterns) skillsOnly.push(...allowed.filter((p) => !skillsOnly.includes(p)));
+    return { profile, skillsOff: installed.filter((n) => !skillsOnly.includes(n)), skillsOnly };
+  }
   let skillsOff: string[];
   if (Array.isArray(o?.skillsOff)) skillsOff = o.skillsOff;
   else {
@@ -321,5 +334,5 @@ export function roleProfile(roleId: string, keepPatterns = false): { profile: 'f
     skillsOff = installedSkills().filter((n) => patterns.some((p: string) => globMatch(p, n)));
     if (keepPatterns) skillsOff = [...new Set([...skillsOff, ...patterns])];
   }
-  return { profile, skillsOff };
+  return { profile, skillsOff, skillsOnly: null };
 }

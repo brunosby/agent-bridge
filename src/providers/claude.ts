@@ -26,6 +26,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
   maxTurns: number | null;
   profile: 'full' | 'lean';
   skillsOff: string[];
+  skillsOnly: string[] | null;
   tokens: number;
   cachedTokens: number;
   available: boolean;
@@ -56,6 +57,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     maxTurns = null,
     profile = 'full',
     skillsOff = [],
+    skillsOnly = null,
   }: AgentOptions) {
     super();
     this.id = id;
@@ -65,6 +67,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     this.maxTurns = maxTurns;
     this.profile = profile;
     this.skillsOff = skillsOff;
+    this.skillsOnly = skillsOnly;
     this.tokens = tokens;
     this.cachedTokens = cachedTokens;
     this.available = true;
@@ -177,7 +180,9 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     if (this.maxTurns) args.push('--max-turns', String(this.maxTurns));
     if (c.permissionMode) args.push('--permission-mode', c.permissionMode);
     // Roles that must not edit files lose the file-editing tools; skills switched off for the role are denied.
-    const deny = [...(this.readOnly ? ['Edit', 'Write', 'NotebookEdit'] : []), ...this.skillsOff.map((s) => `Skill(${s})`)];
+    // Allow-list with nothing allowed: the Skill tool is removed altogether.
+    const skillDeny = this.skillsOnly && !this.skillsOnly.length ? ['Skill'] : this.skillsOff.map((s) => `Skill(${s})`);
+    const deny = [...(this.readOnly ? ['Edit', 'Write', 'NotebookEdit'] : []), ...skillDeny];
     if (deny.length) args.push('--disallowedTools', deny.join(','));
     // Lean profile: no hooks (plugins' hooks run on every turn and change how support agents behave).
     if (this.profile === 'lean') args.push('--settings', JSON.stringify({ disableAllHooks: true }));
@@ -248,11 +253,12 @@ export class ClaudeAgent extends EventEmitter implements Agent {
   }
 
   /** Role changed: apply read-only mode and new instructions by restarting on the same session. */
-  async reconfigure({ readOnly, maxTurns, profile, skillsOff }: ReconfigureOptions): Promise<void> {
+  async reconfigure({ readOnly, maxTurns, profile, skillsOff, skillsOnly }: ReconfigureOptions): Promise<void> {
     this.readOnly = Boolean(readOnly);
     this.maxTurns = maxTurns || null;
     if (profile) this.profile = profile;
     if (skillsOff) this.skillsOff = skillsOff;
+    if (skillsOnly !== undefined) this.skillsOnly = skillsOnly;
     if (this.busy) {
       this.restartWhenIdle = true;
       return;

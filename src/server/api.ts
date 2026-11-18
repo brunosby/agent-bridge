@@ -90,7 +90,12 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       if (!S.roles[body.role]) throw new Error('unknown role');
       const roleOverrides = { ...(config.roleOverrides || {}) };
       if (body.reset) delete roleOverrides[body.role];
-      else roleOverrides[body.role] = { profile: body.profile === 'lean' ? 'lean' : 'full', skillsOff: (body.skillsOff || []).map(String) };
+      else
+        roleOverrides[body.role] = {
+          profile: body.profile === 'lean' ? 'lean' : 'full',
+          skillsOff: (body.skillsOff || []).map(String),
+          skillsOn: (body.skillsOn || []).map(String),
+        };
       saveLocalConfig({ roleOverrides });
       // Apply to the agents that have this role (Claude restarts on the same session when idle).
       for (const spec of S.conv.team.filter((a) => a.role === body.role)) {
@@ -102,7 +107,13 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       }
       publish({
         kind: 'system',
-        text: `Profile for ${S.roles[body.role].name} saved: ${roleProfile(body.role).profile}, ${roleProfile(body.role).skillsOff.length} skill(s) off.`,
+        text: (() => {
+          const rp = roleProfile(body.role);
+          const skills = rp.skillsOnly
+            ? `${rp.skillsOnly.length} skill(s) allowed, the rest blocked`
+            : `${rp.skillsOff.length} skill(s) off`;
+          return `Profile for ${S.roles[body.role].name} saved: ${rp.profile}, ${skills}.`;
+        })(),
       });
       return { ok: true };
     }

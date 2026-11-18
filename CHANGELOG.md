@@ -10,6 +10,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - Tooling: ESLint (typescript-eslint), Prettier, EditorConfig, type checking, npm scripts (`check`, `lint`, `typecheck`, `test`, `format`).
 - Light theme (follows the system setting) and a responsive layout for phones and tablets.
 - `docs/architecture.md`.
+- `@mentions` of team members are highlighted, and lines that hand work to an agent are marked in its colour.
+- Researcher card warns when the model's context window is small for research.
 
 ### Changed
 
@@ -17,6 +19,13 @@ All notable changes to this project are documented here. The format follows [Kee
 - Page split into ES modules; CSS reorganised into cascade layers with design tokens and components.
 - Single entry point `bin/agent-bridge.mjs` for the launchers and `npm start`.
 - Personal settings are saved to `config.local.json`, which git ignores.
+- Lean roles block every skill except the ones allowed in Settings > Roles (OpenCode: the skill tool is removed); read-only limits take precedence over skill instructions.
+- Researcher opens at most a few pages per question.
+
+### Fixed
+
+- OpenCode agents showed the model's reasoning and OpenCode's own context summary as if they were answers; now only the answer is shown, with a notice when OpenCode summarises the context.
+- OpenCode skill rules missed skills named without the plugin prefix.
 
 ## [0.1.0]
 

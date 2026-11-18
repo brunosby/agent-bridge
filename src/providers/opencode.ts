@@ -31,6 +31,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
   tokens: number;
   cachedTokens: number;
   skillsOff: string[];
+  skillsOnly: string[] | null;
   sessionId: string | null;
   available: boolean;
   unavailableReason: string | null;
@@ -44,6 +45,12 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
   sse: AbortController | null;
   assistantMessages: Set<string>;
   toolsSeen: Set<string>;
+  /** Compaction summaries written by OpenCode itself (assistant messages with summary: true). */
+  summaryMessages = new Set<string>();
+  /** Part id -> part type and message, from message.part.updated. Deltas only say which part they belong to. */
+  partInfo = new Map<string, { type: string; messageID: string; synthetic: boolean }>();
+  /** Deltas that arrived before their part was known. */
+  pendingDeltas = new Map<string, string>();
   userParts = new Set<string>();
   password = '';
   base = '';
@@ -59,6 +66,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     tokens = 0,
     cachedTokens = 0,
     skillsOff = [],
+    skillsOnly = null,
   }: AgentOptions) {
     super();
     this.id = id;
@@ -71,6 +79,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     this.tokens = tokens;
     this.cachedTokens = cachedTokens;
     this.skillsOff = skillsOff;
+    this.skillsOnly = skillsOnly;
     this.sessionId = this.config.resumeSessionId || null;
     this.available = true;
     this.unavailableReason = null;
@@ -134,9 +143,40 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     this.instructions = text;
   }
 
-  async reconfigure({ readOnly, skillsOff }: ReconfigureOptions): Promise<void> {
+  async reconfigure({ readOnly, skillsOff, skillsOnly }: ReconfigureOptions): Promise<void> {
     this.readOnly = Boolean(readOnly);
-    if (skillsOff) this.skillsOff = skillsOff; // applies to the next OpenCode session
+    if (skillsOff) this.skillsOff = skillsOff;
+    if (skillsOnly !== undefined) this.skillsOnly = skillsOnly;
+    if (this.sessionId && this.proc) await this.applyPermissions();
+  }
+
+  /**
+   * Session permission rules. OpenCode applies the last matching rule, so "deny every skill" comes first
+   * and the allowed ones after it. Claude plugin skills are named "plugin:skill"; OpenCode lists the
+   * same skill as "skill", so both spellings are covered.
+   */
+  permissionRules(): { permission: string; pattern: string; action: 'ask' | 'deny' | 'allow' }[] {
+    const rules: { permission: string; pattern: string; action: 'ask' | 'deny' | 'allow' }[] = (
+      this.config.askFor || ['bash', 'edit', 'webfetch']
+    ).map((permission: string) => ({ permission, pattern: '*', action: 'ask' as const }));
+    const spellings = (names: string[]): string[] =>
+      [...new Set(names.flatMap((n) => [n, n.includes(':') ? n.slice(n.lastIndexOf(':') + 1) : n]))].filter((n) => n && n !== '*');
+    if (this.skillsOnly) {
+      rules.push({ permission: 'skill', pattern: '*', action: 'deny' });
+      for (const s of spellings(this.skillsOnly)) rules.push({ permission: 'skill', pattern: s, action: 'allow' });
+    } else {
+      for (const s of spellings(this.skillsOff || [])) rules.push({ permission: 'skill', pattern: s, action: 'deny' });
+    }
+    return rules;
+  }
+
+  /** Re-apply the rules to an existing session (restored conversation or a role change). */
+  async applyPermissions(): Promise<void> {
+    try {
+      await this.http('PATCH', `/session/${encodeURIComponent(this.sessionId || '')}`, { permission: this.permissionRules() });
+    } catch (err) {
+      this.emitEvent('info', { text: `Could not update the OpenCode session permissions: ${errorText(err)}` });
+    }
   }
 
   // ---------- server ----------
@@ -200,21 +240,16 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     if (this.sessionId) {
       try {
         await this.http('GET', `/session/${encodeURIComponent(this.sessionId || '')}`);
+        await this.applyPermissions();
       } catch {
         this.emitEvent('info', { text: 'Could not find the earlier OpenCode session; starting a new one.' });
         this.sessionId = null;
       }
     }
     if (!this.sessionId) {
-      // Ask before shell commands, edits and web fetches so requests reach the approval panel (and bypass rules).
-      const ask = (this.config.askFor || ['bash', 'edit', 'webfetch']).map((permission: string) => ({
-        permission,
-        pattern: '*',
-        action: 'ask',
-      }));
-      // Skills switched off for the role are denied for this session.
-      for (const s of this.skillsOff || []) ask.push({ permission: 'skill', pattern: s, action: 'deny' });
-      const s = await this.http('POST', '/session', { title: `Agent Bridge · ${this.name}`, permission: ask });
+      // Ask before shell commands, edits and web fetches so requests reach the approval panel (and bypass
+      // rules); skills follow the role (see permissionRules).
+      const s = await this.http('POST', '/session', { title: `Agent Bridge · ${this.name}`, permission: this.permissionRules() });
       if (!s?.id) throw new Error('POST /session returned no id (API changed?)');
       this.sessionId = s.id;
     }
@@ -256,6 +291,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
           value: `${prov.id}/${modelId}`,
           label: `${prov.name || prov.id}: ${m.name || modelId}${free ? ' (free)' : ''}`,
           description: free ? 'Free model.' : `Paid: ${m.cost?.input ?? '?'} / ${m.cost?.output ?? '?'} per 1M tokens (input/output).`,
+          contextWindow: Number(m.limit?.context) || null,
           disabled: blocked,
           disabledReason: blocked ? 'Paid model: only free models are enabled (opencode.freeOnly in config.json).' : null,
         });
@@ -323,14 +359,27 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     const sid = p.sessionID || p.part?.sessionID || p.info?.sessionID;
     if (sid && sid !== this.sessionId) return;
     if (type === 'message.part.delta') {
-      // Streaming text of the assistant: { messageID, partID, field: "text", delta }
-      if (p.field === 'text' && p.partID) this.emitEvent('delta', { key: p.partID, text: p.delta || '' });
+      // Streaming text: { messageID, partID, field: "text", delta }. Reasoning parts stream the same way,
+      // so the part type decides whether it is shown.
+      if (p.field !== 'text' || !p.partID) return;
+      const show = this.isAnswerPart(p.partID);
+      if (show === true) this.emitEvent('delta', { key: p.partID, text: p.delta || '' });
+      else if (show === undefined) this.pendingDeltas.set(p.partID, (this.pendingDeltas.get(p.partID) || '') + (p.delta || ''));
       return;
     }
     if (type === 'message.part.updated' && p.part) {
       const part = p.part;
-      if (part.type === 'text' && this.assistantMessages.has(part.messageID)) {
-        this.emitEvent('text', { key: part.id, text: part.text || '' });
+      this.partInfo.set(part.id, { type: part.type, messageID: part.messageID, synthetic: !!part.synthetic });
+      this.flushPending(part.id);
+      if (part.type === 'compaction') {
+        if (!this.toolsSeen.has(part.id)) {
+          this.toolsSeen.add(part.id);
+          this.emitEvent('info', {
+            text: `${this.name}: OpenCode summarised the conversation to free context${part.overflow ? ' (the context was full)' : ''}. Earlier details may be lost.`,
+          });
+        }
+      } else if (part.type === 'text') {
+        if (this.isAnswerPart(part.id)) this.emitEvent('text', { key: part.id, text: part.text || '' });
       } else if (part.type === 'tool') {
         const st = part.state || {};
         // The first update ("pending") has no input yet; announce the tool once its input is known.
@@ -352,6 +401,8 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
       }
     } else if (type === 'message.updated' && p.info?.role === 'assistant') {
       this.assistantMessages.add(p.info.id);
+      if (p.info.summary || p.info.mode === 'compaction' || p.info.agent === 'compaction') this.summaryMessages.add(p.info.id);
+      for (const [partID, info] of this.partInfo) if (info.messageID === p.info.id) this.flushPending(partID);
     } else if (type === 'permission.asked') {
       // { id, sessionID, permission: "bash" | "edit" | ..., patterns[], metadata: { command, filepath, ... }, always[] }
       const key = `oc${this.id}-${p.id}`;
@@ -387,6 +438,27 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
       else if (/rate limit|quota|too many requests/i.test(msg))
         this.emitEvent('account', { state: 'rate_limited', detail: clip(msg, 200) });
     }
+  }
+
+  /**
+   * true: answer text to show; false: reasoning, a compaction summary, synthetic or user text;
+   * undefined: not known yet (the part or its message has not been announced).
+   */
+  isAnswerPart(partID: string): boolean | undefined {
+    const info = this.partInfo.get(partID);
+    if (!info) return undefined;
+    if (info.type !== 'text' || info.synthetic) return false;
+    if (this.summaryMessages.has(info.messageID)) return false;
+    return this.assistantMessages.has(info.messageID) ? true : undefined;
+  }
+
+  flushPending(partID: string): void {
+    const text = this.pendingDeltas.get(partID);
+    if (text === undefined) return;
+    const show = this.isAnswerPart(partID);
+    if (show === undefined) return;
+    this.pendingDeltas.delete(partID);
+    if (show) this.emitEvent('delta', { key: partID, text });
   }
 
   respondApproval(requestId: string, decision: string): boolean {

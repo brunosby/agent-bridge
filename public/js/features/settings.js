@@ -161,7 +161,7 @@ export async function renderRoles() {
   }
   list.textContent = '';
   for (const r of store.catalog.roles) {
-    const prof = info.roles[r.id] || { profile: r.profile || 'full', skillsOff: [] };
+    const prof = info.roles[r.id] || { profile: r.profile || 'full', skillsOff: [], skillsOnly: null };
     const row = h('div', 'account');
     const head = h('div', 'acc-head');
     head.append(
@@ -177,31 +177,53 @@ export async function renderRoles() {
     const ps = h('select');
     ps.append(
       new Option('Full (all your hooks, skills and plugins)', 'full'),
-      new Option('Lean (no hooks; skills still available)', 'lean'),
+      new Option('Lean (no hooks; only the skills you tick)', 'lean'),
     );
     ps.value = prof.profile;
     pl.appendChild(ps);
     row.appendChild(pl);
 
+    // Full roles: tick the skills to switch off. Lean roles: everything is blocked, tick the ones to allow.
     const skillBox = h('div', 'skills');
     const boxes = [];
-    if (info.installed.length) {
+    const lists = {
+      full: new Set(prof.skillsOnly ? [] : prof.skillsOff),
+      lean: new Set(prof.skillsOnly || []),
+    };
+    let shown = ps.value;
+    const renderSkills = () => {
+      skillBox.textContent = '';
+      boxes.length = 0;
+      if (!info.installed.length) {
+        skillBox.appendChild(h('div', 'hint', 'No installed skills found yet (the list fills in once a Claude agent has started).'));
+        return;
+      }
       skillBox.appendChild(
-        h('div', 'hint', 'Skills switched off for this role (Claude and OpenCode agents; Codex has no per-session switch):'),
+        h(
+          'div',
+          'hint',
+          shown === 'lean'
+            ? 'Skills allowed for this role. Every other skill is blocked (Claude and OpenCode agents; Codex has no per-session switch):'
+            : 'Skills switched off for this role (Claude and OpenCode agents; Codex has no per-session switch):',
+        ),
       );
       for (const name of info.installed) {
         const l = h('label', 'check');
         const cb = h('input');
         cb.type = 'checkbox';
         cb.value = name;
-        cb.checked = prof.skillsOff.includes(name);
+        cb.checked = lists[shown].has(name);
+        cb.onchange = () => (cb.checked ? lists[shown].add(name) : lists[shown].delete(name));
         l.append(cb, document.createTextNode(` ${name}`));
         skillBox.appendChild(l);
         boxes.push(cb);
       }
-    } else {
-      skillBox.appendChild(h('div', 'hint', 'No installed skills found yet (the list fills in once a Claude agent has started).'));
-    }
+    };
+    ps.onchange = () => {
+      shown = ps.value;
+      renderSkills();
+    };
+    renderSkills();
     row.appendChild(skillBox);
 
     const actions = h('div', 'actions');
@@ -209,7 +231,7 @@ export async function renderRoles() {
     const save = h('button', 'primary', 'Save');
     save.onclick = async () => {
       try {
-        await api('roleProfile', { role: r.id, profile: ps.value, skillsOff: boxes.filter((b) => b.checked).map((b) => b.value) });
+        await api('roleProfile', { role: r.id, profile: ps.value, skillsOff: [...lists.full], skillsOn: [...lists.lean] });
         msg.textContent = 'Saved. Agents with this role pick it up (Claude restarts on the same session).';
       } catch (e) {
         msg.textContent = `Not saved: ${e.message}`;

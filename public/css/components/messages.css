@@ -57,6 +57,24 @@
   white-space: pre-wrap;
 }
 
+/* @mentions of team members and the lines that hand work to them */
+.body .mention {
+  padding: 0 0.3em;
+  border-radius: var(--radius-sm, 4px);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: color-mix(in srgb, var(--accent) 70%, currentColor);
+  font-weight: 600;
+}
+
+.body .delegation {
+  display: block;
+  margin: 0.15em 0;
+  padding: 0.15em 0.5em;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-sm, 4px) var(--radius-sm, 4px) 0;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
 .body pre {
   margin: var(--space-2) 0;
   padding: var(--space-2) var(--space-3);

@@ -12,5 +12,5 @@
   "maxTurns": 25,
   "context": "diff",
   "profile": "lean",
-  "skillsOff": ["*:long-task", "*:completion-criteria", "*:loop-design", "*:create-skill", "*:claude-md", "*:handoff"]
+  "skillsOn": []
 }

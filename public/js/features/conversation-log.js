@@ -3,6 +3,14 @@ import { agentOf, approvals, bubbles, driverOf, label, roleOf, store, tools } fr
 import { $, append, h, keepScrolled, log, renderMarkdown, time } from '../core/dom.js';
 import { renderApproval, renderFinalReview, renderNeedRole, updatePending } from './approvals.js';
 import { renderState } from './agents.js';
+/** Team member by @name (case-insensitive), for highlighting mentions; "all" stands for everyone. */
+export function findAgent(name) {
+  const n = name.toLowerCase();
+  if (n === 'all' || n === 'everyone') return { name: 'everyone', driver: 'all', role: null };
+  const a = (store.state?.team || []).find((x) => x.name.toLowerCase() === n);
+  return a ? { name: a.name, driver: a.driver, role: roleOf(a.role)?.name || null } : null;
+}
+
 export function bubble(agent, key, at) {
   const id = `${agent}|${key}`;
   let b = bubbles.get(id);
@@ -44,7 +52,7 @@ export function handle(ev) {
       const head = h('div', 'head');
       head.append(h('span', 'who', 'You'), h('span', null, `→ ${(ev.to || []).map(label).join(' + ')} · ${time(ev.at)}`));
       const body = h('div', 'body');
-      renderMarkdown(body, ev.text);
+      renderMarkdown(body, ev.text, findAgent);
       el.append(head, body);
       append(el);
       break;
@@ -55,13 +63,13 @@ export function handle(ev) {
     case 'delta': {
       const b = bubble(ev.agent, ev.key, ev.at);
       b.text += ev.text;
-      keepScrolled(() => renderMarkdown(b.body, b.text));
+      keepScrolled(() => renderMarkdown(b.body, b.text, findAgent));
       break;
     }
     case 'text': {
       const b = bubble(ev.agent, ev.key, ev.at);
       b.text = ev.text;
-      keepScrolled(() => renderMarkdown(b.body, b.text));
+      keepScrolled(() => renderMarkdown(b.body, b.text, findAgent));
       if (ev.final) b.el.classList.remove('streaming');
       break;
     }

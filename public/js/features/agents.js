@@ -248,6 +248,11 @@ export function renderCard(a) {
     warnings.push(
       `⚠ ${current.label || current.value} is a free/stealth model: your prompts may be used for training. Avoid sensitive code${a.role === 'orchestrator' ? ', and remember the orchestrator sees the whole task' : ''}.`,
     );
+  // Research reads long pages; a smaller window fills up and OpenCode then summarises the conversation.
+  if (a.role === 'researcher' && current?.contextWindow && current.contextWindow <= 200000)
+    warnings.push(
+      `Context window of ${Math.round(current.contextWindow / 1000)}k tokens: long pages can fill it and make the agent lose earlier findings. A model with a larger window suits research better.`,
+    );
   c.warn.textContent = warnings.join(' ');
   c.warn.hidden = !warnings.length;
 }
