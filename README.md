@@ -41,7 +41,7 @@ Each agent has a card at the top of the page with:
 - **Effort**, with only the levels the model supports (Claude `--effort`, Codex `effort`);
 - **Bypass** (below), tokens used, **Stop**, **Retry** (when unavailable) and **✕** to remove it.
 
-**+ Add agent** adds more agents, including several from the same provider. Adding a third agent, or a second one on the same provider, shows a reminder that each agent spends its own tokens and shares its provider's quota. Optionally an agent gets its **own git worktree** (a branch next to the repository, `<repo>-agent-worktrees/...`), so coders never edit the same files; nothing is merged or deleted automatically.
+**+ Add agent** adds more agents, including several from the same provider. The form fills the name as `Provider-Role`, lists the provider's models and effort levels, and marks recommendations both ways: ★ models for the chosen role, ★ roles for the chosen model. If no agent in the team can edit code, a warning appears at the top and the agents are told to plan and review only. Adding a third agent, or a second one on the same provider, shows a reminder that each agent spends its own tokens and shares its provider's quota. Optionally an agent gets its **own git worktree** (a branch next to the repository, `<repo>-agent-worktrees/...`), so coders never edit the same files; nothing is merged or deleted automatically.
 
 The default team for new conversations is Claude as Orchestrator and Codex as Coder; change it with **Settings > General > Save the current team as the default**.
 
