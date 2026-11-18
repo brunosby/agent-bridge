@@ -31,6 +31,12 @@
     "command": "opencode",
     "model": null,
     "extraArgs": [],
-    "instructions": null
+    "instructions": null,
+    "freeOnly": true,
+    "askFor": [
+      "bash",
+      "edit",
+      "webfetch"
+    ]
   }
 }

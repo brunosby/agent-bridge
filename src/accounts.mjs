@@ -70,7 +70,9 @@ export async function cliStatus(driver, cfg = {}) {
     const r = await run(command, ['auth', 'list']);
     const text = r.out.replace(/\x1b\[[0-9;]*m/g, '');
     const none = /no credentials|0 credentials/i.test(text) || !text.trim();
-    return { state: none ? 'logged_out' : 'ok', version: inst.version, detail: text.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 6).join(' · ').slice(0, 300) || 'No providers connected.' };
+    // OpenCode's built-in provider serves its free models without any sign-in, so "no credentials" is still usable.
+    if (none) return { state: 'ok', version: inst.version, detail: 'Free OpenCode models work without signing in. Use "Switch account" (opencode auth login) to connect other providers.' };
+    return { state: 'ok', version: inst.version, detail: text.split('\n').map((l) => l.replace(/^[^\w]+/, '').trim()).filter(Boolean).slice(0, 6).join(' · ').slice(0, 300) };
   }
   return { state: 'unknown', version: inst.version };
 }

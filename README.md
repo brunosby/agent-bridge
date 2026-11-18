@@ -4,7 +4,7 @@ A team of AI coding agents from different providers working on the same task, in
 
 - **Claude** runs as Claude Code in headless mode (`claude -p --input-format stream-json --output-format stream-json`), one long-lived process per agent ([headless docs](https://code.claude.com/docs/en/headless), [CLI reference](https://code.claude.com/docs/en/cli-reference)).
 - **Codex** runs as `codex app-server`, driven over its JSON-RPC protocol ([app-server docs](https://learn.chatgpt.com/docs/app-server)).
-- **OpenCode** runs as `opencode serve` and gives access to its providers (OpenCode Zen, OpenRouter, DeepSeek, ...) ([server docs](https://opencode.ai/docs/server/)). *This driver is written but not yet tested; see [Status](#status).*
+- **OpenCode** runs as `opencode serve` (one server per agent, random password, `127.0.0.1` only) and gives access to its providers ([server docs](https://opencode.ai/docs/server/)). Its free models (Big Pickle, DeepSeek V4.1 Flash Free and others) work without signing in.
 
 No dependencies: Node.js 20+ and the CLIs of the providers you use. The page listens on `127.0.0.1` only, and every API call needs a random token created at start.
 
@@ -94,7 +94,9 @@ No access and usage limits are also detected while agents work (Claude `rate_lim
 
 ## Providers through OpenCode
 
-OpenCode adds any provider it supports, signed in with `opencode auth login` (a login or an API key, kept by OpenCode):
+Only **connected** providers are listed. Out of the box that is OpenCode's own provider with its free models; nothing to sign in. With `opencode.freeOnly` (default `true` in `config.json`) only free models are enabled; paid ones are listed but greyed out. Every OpenCode session is created with "ask" rules for `bash`, `edit` and `webfetch` (`opencode.askFor`), so its requests reach the approval panel and the bypass rules like the other agents.
+
+More providers can be connected with `opencode auth login` (a login or an API key, kept by OpenCode):
 
 - **OpenCode Zen**, including the free `big-pickle` model (free for a limited time; prompts may be used to improve it, hence the ⚠).
 - **DeepSeek** (`deepseek-flash`, `deepseek-v4-pro`) with an API key. DeepSeek also documents using it from Claude Code with `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`.
@@ -135,6 +137,6 @@ dev-notes/CHECKPOINT.md development status
 
 ## Status
 
-- Tested end to end: Claude and Codex agents, teams of three, routing, approvals, bypass, effort, token counting, restore, worktree, settings and accounts status.
-- Not tested yet: the OpenCode driver. It follows the OpenCode V1 server docs; once OpenCode is installed (`npm install -g --allow-scripts=opencode-ai opencode-ai`), its event names should be checked against the server's OpenAPI spec (`GET /doc`).
+- Tested end to end: Claude, Codex and OpenCode agents (OpenCode 1.19.6 with Big Pickle and DeepSeek V4.1 Flash Free), teams of three, routing, approvals, bypass, effort, token counting, restore, worktree, settings and accounts status.
+- The OpenCode driver uses the events checked against the server's OpenAPI spec (`GET /doc`): `message.part.delta` (live text), `message.part.updated` (tools), `permission.asked` / `permission.replied`, `session.error`. If OpenCode changes them, the agent is shown as unavailable.
 - `codex app-server` is experimental; if its protocol changes, the Codex agent is shown as unavailable instead of breaking the app. `codex app-server generate-ts --out <dir>` prints the current protocol types.

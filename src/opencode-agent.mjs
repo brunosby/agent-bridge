@@ -156,7 +156,9 @@ export class OpenCodeAgent extends EventEmitter {
       }
     }
     if (!this.sessionId) {
-      const s = await this.http('POST', '/session', { title: `Agent Bridge · ${this.name}` });
+      // Ask before shell commands, edits and web fetches so requests reach the approval panel (and bypass rules).
+      const ask = (this.config.askFor || ['bash', 'edit', 'webfetch']).map((permission) => ({ permission, pattern: '*', action: 'ask' }));
+      const s = await this.http('POST', '/session', { title: `Agent Bridge · ${this.name}`, permission: ask });
       if (!s?.id) throw new Error('POST /session returned no id (API changed?)');
       this.sessionId = s.id;
     }
@@ -182,26 +184,35 @@ export class OpenCodeAgent extends EventEmitter {
   async loadModels() {
     const p = await this.http('GET', '/provider');
     if (!p || !Array.isArray(p.all)) throw new Error('GET /provider did not return { all, connected } (API changed?)');
+    // OpenCode knows hundreds of providers; only the connected ones are listed. With freeOnly (default),
+    // models that cost anything are listed but disabled.
     const connected = new Set(p.connected || []);
+    const freeOnly = this.config.freeOnly !== false;
     const out = [];
-    for (const prov of p.all) {
+    for (const prov of p.all.filter((x) => connected.has(x.id))) {
       const models = Array.isArray(prov.models) ? prov.models : Object.values(prov.models || {});
       for (const m of models) {
         const modelId = m.id || m.modelID;
         if (!modelId) continue;
-        const ok = connected.has(prov.id);
+        const free = Number(m.cost?.input || 0) === 0 && Number(m.cost?.output || 0) === 0;
+        const blocked = freeOnly && !free;
         out.push({
           value: `${prov.id}/${modelId}`,
-          label: `${prov.name || prov.id}: ${m.name || modelId}`,
-          disabled: !ok,
-          disabledReason: ok ? null : `${prov.name || prov.id} is not connected (run "opencode auth login").`,
+          label: `${prov.name || prov.id}: ${m.name || modelId}${free ? ' (free)' : ''}`,
+          description: free ? 'Free model.' : `Paid: ${m.cost?.input ?? '?'} / ${m.cost?.output ?? '?'} per 1M tokens (input/output).`,
+          disabled: blocked,
+          disabledReason: blocked ? 'Paid model: only free models are enabled (opencode.freeOnly in config.json).' : null,
         });
       }
     }
     out.sort((a, b) => Number(a.disabled) - Number(b.disabled) || a.label.localeCompare(b.label));
+    // The account default may be a paid model; mark the first enabled model as the default instead.
+    const def = p.default?.opencode ? `opencode/${p.default.opencode}` : null;
+    const defEntry = out.find((m) => m.value === def && !m.disabled) || out.find((m) => !m.disabled);
+    if (defEntry) defEntry.isDefault = true;
     this.models = out;
-    const def = p.default ? Object.entries(p.default)[0] : null;
-    if (!this.config.model && def) this.resolvedModel = `${def[0]}/${def[1]}`;
+    if (!this.config.model && defEntry) this.config.model = defEntry.value;
+    this.resolvedModel = this.config.model || null;
     this.emitEvent('models', {});
   }
 
@@ -250,13 +261,19 @@ export class OpenCodeAgent extends EventEmitter {
     const p = ev.properties || {};
     const sid = p.sessionID || p.part?.sessionID || p.info?.sessionID;
     if (sid && sid !== this.sessionId) return;
+    if (type === 'message.part.delta') {
+      // Streaming text of the assistant: { messageID, partID, field: "text", delta }
+      if (p.field === 'text' && p.partID) this.emitEvent('delta', { key: p.partID, text: p.delta || '' });
+      return;
+    }
     if (type === 'message.part.updated' && p.part) {
       const part = p.part;
       if (part.type === 'text' && this.assistantMessages.has(part.messageID)) {
         this.emitEvent('text', { key: part.id, text: part.text || '' });
       } else if (part.type === 'tool') {
         const st = part.state || {};
-        if (!this.toolsSeen.has(part.id)) {
+        // The first update ("pending") has no input yet; announce the tool once its input is known.
+        if (!this.toolsSeen.has(part.id) && st.status !== 'pending') {
           this.toolsSeen.add(part.id);
           this.emitEvent('tool', { key: part.id, title: part.tool || 'tool', detail: clip(st.input?.command || st.input?.filePath || st.title || JSON.stringify(st.input || {}), 300) });
         }
@@ -266,23 +283,27 @@ export class OpenCodeAgent extends EventEmitter {
       }
     } else if (type === 'message.updated' && p.info?.role === 'assistant') {
       this.assistantMessages.add(p.info.id);
-    } else if (type === 'permission.updated' || type === 'permission.asked') {
-      const perm = p.id ? p : p.permission || p;
-      const key = `oc${this.id}-${perm.id}`;
+    } else if (type === 'permission.asked') {
+      // { id, sessionID, permission: "bash" | "edit" | ..., patterns[], metadata: { command, filepath, ... }, always[] }
+      const key = `oc${this.id}-${p.id}`;
       if (this.approvals.has(key)) return;
-      this.approvals.set(key, { permissionId: perm.id });
-      const what = perm.title || perm.type || perm.permission || 'an action';
-      const pattern = Array.isArray(perm.pattern) ? perm.pattern.join(' ') : perm.pattern || perm.patterns?.join?.(' ') || '';
+      this.approvals.set(key, { permissionId: p.id });
+      const what = p.permission || 'an action';
+      const patterns = (p.patterns || []).join(' ');
+      const command = p.metadata?.command;
+      const file = p.metadata?.filepath || p.metadata?.filePath;
       this.emitEvent('approval', {
         requestId: key,
-        title: `OpenCode wants to ${what}`,
-        matchText: `${perm.metadata?.command || pattern || what}`,
-        detail: [pattern, perm.metadata?.command].filter(Boolean).join('\n'),
+        title: `OpenCode wants to use ${what}`,
+        matchText: what === 'bash' ? command || patterns : `${what} ${file || patterns}`,
+        detail: [command && `$ ${command}`, file, !command && !file ? patterns : null, p.always?.length ? `"Allow for session" covers: ${p.always.join(', ')}` : null]
+          .filter(Boolean)
+          .join('\n'),
         decisions: ['accept', 'acceptForSession', 'decline'],
       });
       this.emitEvent('status', { busy: this.busy });
     } else if (type === 'permission.replied') {
-      const key = `oc${this.id}-${p.permissionID || p.id}`;
+      const key = `oc${this.id}-${p.requestID || p.permissionID || p.id}`;
       if (this.approvals.delete(key)) this.emitEvent('approvalClosed', { requestId: key });
     } else if (type === 'session.error') {
       const msg = p.error?.data?.message || p.error?.message || p.error?.name || 'unknown error';
