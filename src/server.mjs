@@ -64,6 +64,44 @@ function defaultTeam() {
 
 /** What agents reported about their account while running: { driver: { state, detail, resetsAt } }. */
 const providerRuntime = {};
+
+/** Model lists per provider, for the "Add agent" form: { driver: { at, models } }. */
+const driverModelCache = {};
+
+/**
+ * Models of a provider before any agent of it exists: start a short-lived instance of its driver,
+ * wait for its model list, and close it.
+ */
+async function listDriverModels(driver) {
+  const cached = driverModelCache[driver];
+  if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.models;
+  const live = conv && Object.entries(conv.agents).find(([id]) => conv.team.find((a) => a.id === id)?.driver === driver)?.[1];
+  if (live?.models?.length) return live.models;
+  const { Agent } = DRIVERS[driver];
+  const probe = new Agent({ id: `probe-${driver}`, name: 'probe', cwd: conv?.workDir || process.cwd(), config: { ...(config[driver] || {}) }, instructions: '' });
+  try {
+    const models = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('no model list after 45 s')), 45000);
+      probe.on('event', (ev) => {
+        if (ev.kind === 'models') {
+          clearTimeout(timer);
+          resolve(probe.models || []);
+        } else if (ev.kind === 'unavailable') {
+          clearTimeout(timer);
+          reject(new Error(ev.reason));
+        }
+      });
+      Promise.resolve(probe.start()).catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    driverModelCache[driver] = { at: Date.now(), models };
+    return models;
+  } finally {
+    probe.shutdown().catch(() => {});
+  }
+}
 const cliCache = {};
 
 function providerBlocked(driver) {
@@ -218,7 +256,7 @@ function createAgent(spec) {
   return agent;
 }
 
-async function addAgent({ driver, role, name, model, bypass, worktree }) {
+async function addAgent({ driver, role, name, model, effort, bypass, worktree }) {
   if (!DRIVERS[driver]) throw new Error(`unknown provider ${driver}`);
   if (!roles[role]) throw new Error(`unknown role ${role}`);
   const spec = {
@@ -226,7 +264,8 @@ async function addAgent({ driver, role, name, model, bypass, worktree }) {
     name: uniqueName(name || defaultName(driver, role)),
     driver,
     role,
-    model: model || null,
+    model: model && model !== 'default' ? model : null,
+    effort: effort && effort !== 'default' ? effort : null,
     bypass: bypass ?? Boolean(setting('bypassNewAgents')),
   };
   if (worktree) {
@@ -372,6 +411,10 @@ function wireAgent(owner, id, agent) {
       owner.transcript.write(JSON.stringify({ at: Date.now(), ...ev }) + '\n');
       if (/\b(error|panic|fatal|exception)\b/i.test(ev.text)) logError(agentName(id), `stderr: ${ev.text}`);
       return;
+    }
+    if (ev.kind === 'models') {
+      const driver = owner.team.find((a) => a.id === id)?.driver;
+      if (driver) driverModelCache[driver] = { at: Date.now(), models: agent.models || [] };
     }
     if (ev.kind === 'status' || ev.kind === 'session' || ev.kind === 'models') {
       publishState();
@@ -543,7 +586,7 @@ function deliver(toId, text, { from }) {
     delete conv.pendingRoleNote[toId];
   }
   if ((conv.rosterSeen[toId] || 0) < conv.rosterVersion) {
-    const team = conv.team.map((a) => ({ id: a.id, name: a.name, roleName: roles[a.role]?.name || a.role, model: conv.agents[a.id]?.resolvedModel || conv.agents[a.id]?.model }));
+    const team = conv.team.map((a) => ({ id: a.id, name: a.name, roleName: roles[a.role]?.name || a.role, canEdit: roles[a.role]?.canEdit || 'all', model: conv.agents[a.id]?.resolvedModel || conv.agents[a.id]?.model }));
     extras.push(rosterText(team, toId, conv.routingMode));
     conv.rosterSeen[toId] = conv.rosterVersion;
   }
@@ -780,6 +823,18 @@ async function api(action, body) {
       approvalTimers.delete(body.requestId);
       publish({ kind: 'approvalClosed', requestId: body.requestId, decision: body.decision });
       return { ok: true };
+    }
+    case 'driverModels': {
+      if (!DRIVERS[body.driver]) throw new Error('unknown provider');
+      const sensitive = setting('sensitiveModelPatterns').map((p) => safeRegex(p)).filter(Boolean);
+      const blocked = providerBlocked(body.driver);
+      const models = (await listDriverModels(body.driver)).map((m) => ({
+        ...m,
+        sensitive: sensitive.some((r) => r.test(`${m.value} ${m.label || ''}`)),
+        disabled: Boolean(m.disabled) || Boolean(blocked),
+        disabledReason: m.disabledReason || (blocked ? blocked.detail || blocked.state : null),
+      }));
+      return { models };
     }
     case 'addAgent':
       return { ok: true, agent: await addAgent(body) };

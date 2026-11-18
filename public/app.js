@@ -279,6 +279,17 @@ function renderState() {
   const pill = $('relayState');
   pill.textContent = r.halted ? `paused · ${r.hops}/${r.maxHops}` : `hops ${r.hops}/${r.maxHops}`;
   pill.classList.toggle('halted', r.halted);
+  // Nobody can edit files: say so before the user asks for a change.
+  const editors = state.team.filter((a) => roleOf(a.role)?.canEdit === 'all');
+  let noEd = $('noEditor');
+  if (!noEd) {
+    noEd = h('div', 'warning-box');
+    noEd.id = 'noEditor';
+    $('agents').after(noEd);
+  }
+  noEd.textContent = 'No agent in this team can edit code (all roles are read-only or tests-only). Agents will only plan and review; add a Coder for changes.';
+  noEd.hidden = editors.length > 0 || !catalog.roles.length;
+
   const tok = $('tokens');
   tok.textContent = `${fmtTokens(state.totalTokens)} tokens${state.tokenLimit ? ` / ${fmtTokens(state.tokenLimit)}` : ''}`;
   tok.classList.toggle('halted', Boolean(state.tokenLimit && state.totalTokens >= state.tokenLimit));
@@ -451,11 +462,132 @@ function openAddDialog() {
   r.textContent = '';
   for (const role of catalog.roles) r.appendChild(new Option(role.name, role.id));
   r.value = 'coder';
-  $('addName').value = '';
+  nameEdited = false;
+  modelChosen = false;
   $('addBypass').checked = Boolean(catalog.settings.bypassNewAgents);
   $('addWorktree').checked = false;
   updateAddHints();
+  refreshName();
+  loadAddModels();
   $('addDialog').showModal();
+}
+
+// ----- name: "Provider-Role" by default, until the user types their own -----
+let nameEdited = false;
+const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
+
+function suggestName() {
+  const base = `${PROVIDER_NAMES[$('addDriver').value] || 'Agent'}-${roleOf($('addRole').value)?.name || 'Agent'}`;
+  const taken = new Set(state.team.map((a) => a.name.toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let i = 2; ; i++) if (!taken.has(`${base}${i}`.toLowerCase())) return `${base}${i}`;
+}
+
+function refreshName() {
+  if (!nameEdited) $('addName').value = suggestName();
+}
+
+$('addName').addEventListener('input', () => {
+  nameEdited = $('addName').value.trim() !== '';
+  if (!nameEdited) refreshName();
+});
+
+// ----- model and effort: list from the provider, ★ for the chosen role -----
+let addModels = [];
+let modelChosen = false; // true once the user picks a model by hand
+let addModelsReq = 0;
+
+async function loadAddModels() {
+  const req = ++addModelsReq;
+  const sel = $('addModel');
+  sel.textContent = '';
+  sel.appendChild(new Option('Loading models…', 'default'));
+  sel.disabled = true;
+  renderAddEffort();
+  try {
+    const { models } = await api('driverModels', { driver: $('addDriver').value });
+    if (req !== addModelsReq) return; // provider changed meanwhile
+    addModels = models;
+  } catch (e) {
+    if (req !== addModelsReq) return;
+    addModels = [];
+    $('addModelHint').textContent = `Could not load the models: ${e.message}. The agent will use the provider's default model.`;
+  }
+  renderAddModels();
+}
+
+function matchesRole(role, m) {
+  const text = `${m.value} ${m.label || ''} ${m.resolved || ''}`;
+  return (role?.recommended?.patterns || []).some((p) => {
+    try {
+      return new RegExp(p, 'i').test(text);
+    } catch {
+      return false;
+    }
+  });
+}
+
+function renderAddModels() {
+  const sel = $('addModel');
+  const prev = sel.value;
+  const role = roleOf($('addRole').value);
+  sel.textContent = '';
+  const def = addModels.find((m) => m.value === 'default' || m.isDefault);
+  const defName = def ? def.resolved || def.label || def.value : '';
+  sel.appendChild(new Option(`Default${defName ? ` (${defName})` : ''}`, 'default'));
+  const list = addModels
+    .filter((m) => m.value !== 'default')
+    .map((m) => ({ ...m, recommended: matchesRole(role, m) }))
+    .sort((x, y) => Number(x.disabled) - Number(y.disabled) || Number(y.recommended) - Number(x.recommended));
+  for (const m of list) {
+    const name = m.label && m.label !== m.value ? `${m.label} · ${m.value}` : m.value;
+    const o = new Option(`${m.recommended ? '★ ' : ''}${m.sensitive ? '⚠ ' : ''}${name}${m.disabled ? ' (unavailable)' : ''}`, m.value);
+    o.disabled = Boolean(m.disabled);
+    o.title = [m.description, m.disabledReason].filter(Boolean).join('\n');
+    sel.appendChild(o);
+  }
+  // Keep the user's choice; otherwise pick the first recommended model that is available.
+  const keep = modelChosen && [...sel.options].find((o) => o.value === prev && !o.disabled);
+  const firstRec = list.find((m) => m.recommended && !m.disabled);
+  sel.value = keep ? prev : firstRec ? firstRec.value : 'default';
+  sel.disabled = false;
+  renderAddEffort();
+  renderAddRoles();
+}
+
+function renderAddEffort() {
+  const sel = $('addEffort');
+  const chosen = addModels.find((m) => m.value === $('addModel').value) || addModels.find((m) => m.value === 'default' || m.isDefault);
+  const levels = chosen?.efforts || [];
+  const prev = sel.value;
+  sel.textContent = '';
+  sel.appendChild(new Option(levels.length ? `Default${chosen?.defaultEffort ? ` (${chosen.defaultEffort})` : ''}` : 'Not available for this model', 'default'));
+  for (const l of levels) sel.appendChild(new Option(l, l));
+  sel.value = levels.includes(prev) ? prev : 'default';
+  sel.disabled = !levels.length;
+  const m = addModels.find((x) => x.value === $('addModel').value);
+  $('addModelHint').textContent = `★ in the model menu = recommended for the chosen role; ★ in the role menu = roles that recommend the chosen model.${m?.sensitive ? ' ⚠ Free/stealth model: your prompts may be used for training. Avoid sensitive code.' : ''}`;
+}
+
+$('addModel').onchange = () => {
+  modelChosen = true;
+  renderAddEffort();
+  renderAddRoles();
+};
+
+/** Role menu: ★ marks the roles that recommend the selected model (the reverse of the ★ in the model menu). */
+function renderAddRoles() {
+  const sel = $('addRole');
+  const value = sel.value;
+  const chosen = addModels.find((m) => m.value === $('addModel').value) || addModels.find((m) => m.value === 'default' || m.isDefault);
+  for (const o of sel.options) {
+    const role = roleOf(o.value);
+    const rec = chosen && matchesRole(role, chosen);
+    o.textContent = `${rec ? '★ ' : ''}${role?.name || o.value}`;
+    o.title = `${role?.summary || ''}${role?.recommended?.label ? `
+Recommended models: ${role.recommended.label}` : ''}`;
+  }
+  sel.value = value;
 }
 
 function updateAddHints() {
@@ -473,8 +605,16 @@ function updateAddHints() {
   w.hidden = !msgs.length;
 }
 
-$('addDriver').onchange = updateAddHints;
-$('addRole').onchange = updateAddHints;
+$('addDriver').onchange = () => {
+  updateAddHints();
+  refreshName();
+  loadAddModels();
+};
+$('addRole').onchange = () => {
+  updateAddHints();
+  refreshName();
+  renderAddModels();
+};
 $('addConfirm').onclick = async () => {
   const b = $('addConfirm');
   b.disabled = true;
@@ -483,6 +623,8 @@ $('addConfirm').onclick = async () => {
       driver: $('addDriver').value,
       role: $('addRole').value,
       name: $('addName').value.trim() || undefined,
+      model: $('addModel').value,
+      effort: $('addEffort').value,
       bypass: $('addBypass').checked,
       worktree: $('addWorktree').checked,
     });
