@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
 import { spawnJsonl, type JsonlProcess } from './process.ts';
 import type { Agent, AgentOptions, DriverConfig, ModelInfo, ReconfigureOptions } from '../core/types.ts';
 import { clip } from './claude.ts';
@@ -128,6 +129,8 @@ export class CodexAgent extends EventEmitter implements Agent {
     const c = this.config;
     let res;
     if (this.threadId || c.resumeThreadId) {
+      // Threads are archived when a conversation closes (see shutdown); bring it back before resuming.
+      await this.request('thread/unarchive', { threadId: this.threadId || c.resumeThreadId }).catch(() => {});
       try {
         res = await this.request('thread/resume', { threadId: this.threadId || c.resumeThreadId });
       } catch (err) {
@@ -149,6 +152,11 @@ export class CodexAgent extends EventEmitter implements Agent {
     }
     this.threadId = res.thread.id;
     this.resolvedModel = res.model || null;
+    // A readable title in Codex's thread list (and the ChatGPT app) instead of the first relayed message.
+    if (!res.thread.name)
+      this.request('thread/name/set', { threadId: this.threadId, name: `Agent Bridge · ${path.basename(this.cwd)} · ${this.name}` }).catch(
+        () => {},
+      );
     this.emitEvent('session', { sessionId: this.threadId, model: res.model });
     this.loadModels().catch((err) => this.emitEvent('info', { text: `model/list failed: ${errorText(err)}` }));
     this.emitEvent('status', { busy: this.busy });
@@ -281,7 +289,18 @@ export class CodexAgent extends EventEmitter implements Agent {
     return true;
   }
 
+  /**
+   * Conversation closed: archive the thread so it leaves Codex's thread list (and the ChatGPT app's
+   * history). Agent Bridge keeps its own history, and restoring unarchives the thread before resuming it.
+   * Set codex.archiveOnClose to false in config.json to keep the threads listed.
+   */
   async shutdown() {
+    if (this.threadId && this.proc && this.config.archiveOnClose !== false) {
+      const archive = this.request('thread/archive', { threadId: this.threadId }).catch((err) =>
+        this.emitEvent('info', { text: `Could not archive the Codex thread: ${errorText(err)}` }),
+      );
+      await Promise.race([archive, new Promise((r) => setTimeout(r, 3000))]);
+    }
     this.stopping = true;
     await this.proc?.kill();
   }

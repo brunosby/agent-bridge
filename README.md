@@ -60,6 +60,8 @@ Models are listed from your own account. Unavailable ones are greyed out: a prov
 
 [9router](https://github.com/decolua/9router), a local router that reuses subscription logins of other tools, can be added to OpenCode as an OpenAI-compatible provider. Agent Bridge does not set it up, because reusing subscriptions that way may go against those providers' terms of use.
 
+**Codex history.** Codex threads opened by Agent Bridge are named `Agent Bridge · <folder> · <agent>` and archived when the conversation closes, so they leave the thread list of Codex and the ChatGPT app; restoring the conversation brings them back. Set `codex.archiveOnClose` to `false` in `config.json` to keep them listed.
+
 Effort levels follow the selected model (Claude and Codex). The per-role step limit applies to Claude agents only.
 
 ## Security and privacy

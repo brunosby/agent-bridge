@@ -128,3 +128,33 @@ test('opencode: lean roles block every skill except the allowed ones', () => {
   const off = full.permissionRules().filter((/** @type {any} */ r) => r.permission === 'skill');
   assert.deepEqual(off.map((/** @type {any} */ r) => r.pattern).sort(), ['long-task', 'p:long-task']);
 });
+
+test('opencode: the final answer passed on skips compaction summaries and synthetic text', async () => {
+  const run = async (/** @type {any} */ reply) => {
+    const agent = new OpenCodeAgent({ id: 'o4', name: 'OC', cwd: '.', config: {}, instructions: '' });
+    agent.sessionId = 's1';
+    agent.http = async () => reply;
+    /** @type {any[]} */
+    const events = [];
+    agent.on('event', (/** @type {any} */ e) => events.push(e));
+    agent.queue.push('hi');
+    await agent.pump();
+    return { end: events.find((e) => e.kind === 'turnEnd'), shown: events.filter((e) => e.kind === 'text').map((e) => e.text) };
+  };
+  const normal = await run({
+    info: { id: 'm1', role: 'assistant' },
+    parts: [
+      { id: 'a', type: 'text', text: 'The answer.' },
+      { id: 'b', type: 'text', text: 'Continue if you have next steps', synthetic: true },
+      { id: 'c', type: 'reasoning', text: 'thinking' },
+    ],
+  });
+  assert.equal(normal.end.text, 'The answer.');
+  assert.deepEqual(normal.shown, ['The answer.']);
+  const summary = await run({
+    info: { id: 'm2', role: 'assistant', summary: true },
+    parts: [{ id: 'd', type: 'text', text: '## Objective' }],
+  });
+  assert.equal(summary.end.text, '');
+  assert.deepEqual(summary.shown, []);
+});

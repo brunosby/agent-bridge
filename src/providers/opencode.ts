@@ -369,7 +369,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     }
     if (type === 'message.part.updated' && p.part) {
       const part = p.part;
-      this.partInfo.set(part.id, { type: part.type, messageID: part.messageID, synthetic: !!part.synthetic });
+      this.partInfo.set(part.id, { type: part.type, messageID: part.messageID, synthetic: !!(part.synthetic || part.ignored) });
       this.flushPending(part.id);
       if (part.type === 'compaction') {
         if (!this.toolsSeen.has(part.id)) {
@@ -401,7 +401,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
       }
     } else if (type === 'message.updated' && p.info?.role === 'assistant') {
       this.assistantMessages.add(p.info.id);
-      if (p.info.summary || p.info.mode === 'compaction' || p.info.agent === 'compaction') this.summaryMessages.add(p.info.id);
+      if (OpenCodeAgent.isSummaryMessage(p.info)) this.summaryMessages.add(p.info.id);
       for (const [partID, info] of this.partInfo) if (info.messageID === p.info.id) this.flushPending(partID);
     } else if (type === 'permission.asked') {
       // { id, sessionID, permission: "bash" | "edit" | ..., patterns[], metadata: { command, filepath, ... }, always[] }
@@ -438,6 +438,16 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
       else if (/rate limit|quota|too many requests/i.test(msg))
         this.emitEvent('account', { state: 'rate_limited', detail: clip(msg, 200) });
     }
+  }
+
+  /** A compaction summary written by OpenCode itself, not an answer. */
+  static isSummaryMessage(info: any): boolean {
+    return Boolean(info && (info.summary || info.mode === 'compaction' || info.agent === 'compaction'));
+  }
+
+  /** A text part that is part of the answer (OpenCode marks text it adds itself as synthetic or ignored). */
+  static isAnswerText(part: any): boolean {
+    return Boolean(part && part.type === 'text' && !part.synthetic && !part.ignored);
   }
 
   /**
@@ -510,14 +520,20 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     try {
       const res = await this.http('POST', `/session/${encodeURIComponent(this.sessionId || '')}/message`, body);
       const info = res?.info || {};
-      const parts = res?.parts || [];
-      const answer = parts
-        .filter((x: any) => x.type === 'text')
+      // Only the answer goes to the chat and to the other agents: not a compaction summary, and not
+      // synthetic or ignored text that OpenCode adds itself.
+      const summary = OpenCodeAgent.isSummaryMessage(info);
+      if (summary && info.id) this.summaryMessages.add(info.id);
+      const answerParts = summary ? [] : (res?.parts || []).filter((x: any) => OpenCodeAgent.isAnswerText(x));
+      const answer = answerParts
         .map((x: any) => x.text || '')
         .join('\n')
         .trim();
-      for (const x of parts.filter((x: any) => x.type === 'text'))
-        this.emitEvent('text', { key: x.id || `${info.id}-text`, text: x.text || '', final: true });
+      for (const x of answerParts) this.emitEvent('text', { key: x.id || `${info.id}-text`, text: x.text || '', final: true });
+      if (summary)
+        this.emitEvent('info', {
+          text: `${this.name} ended its turn with OpenCode's context summary instead of an answer; nothing was passed on. Send it a message to continue.`,
+        });
       const t = info.tokens || {};
       const used = (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (t.cache?.write || 0);
       this.cachedTokens += t.cache?.read || 0;
