@@ -69,7 +69,10 @@ server.listen(port, '127.0.0.1', () => {
   if (!argv['no-open'] && setting('openBrowser') !== false) openBrowser(address);
 });
 
+let shuttingDown = false;
 export async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log('\nShutting down agents...');
   // Stop accepting requests first, so the page sees the app as closed right away.
   server.close();
@@ -84,7 +87,7 @@ export async function shutdown() {
  */
 export async function restartServer() {
   const keep = [];
-  const skip = new Set(['resume', 'port', 'cwd', 'no-open', 'main']);
+  const skip = new Set(['resume', 'port', 'cwd', 'no-open', 'main', 'exit-with-parent', 'max-lifetime']);
   for (const [k, v] of Object.entries(argv)) if (!skip.has(k)) keep.push(`--${k}`, ...(v === true ? [] : [String(v)]));
   const childArgs = [
     path.join(APP_DIR, 'bin', 'agent-bridge.mjs'),
@@ -117,6 +120,17 @@ export async function restartServer() {
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+// For test harnesses, so a killed test run never leaves a server behind:
+// --exit-with-parent ends the server when its stdin pipe closes, which the OS does when the parent dies,
+// even on a forced kill; --max-lifetime <seconds> ends it after that time whatever happens.
+if (argv['exit-with-parent']) {
+  process.stdin.on('end', () => void shutdown());
+  process.stdin.on('error', () => void shutdown());
+  process.stdin.resume();
+}
+const maxLifetime = Number(argv['max-lifetime']);
+if (maxLifetime > 0) setTimeout(() => void shutdown(), maxLifetime * 1000).unref();
 
 export function openBrowser(url: string): void {
   if (process.platform === 'win32') execFile('cmd', ['/c', 'start', '', url]);

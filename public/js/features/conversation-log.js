@@ -3,11 +3,19 @@ import { agentOf, approvals, bubbles, driverOf, label, roleOf, store, tools } fr
 import { $, append, h, keepScrolled, log, renderMarkdown, time } from '../core/dom.js';
 import { renderApproval, renderFinalReview, renderNeedRole, updatePending } from './approvals.js';
 import { renderState } from './agents.js';
-/** Team member by @name (case-insensitive), for highlighting mentions; "all" stands for everyone. */
-export function findAgent(name) {
+/**
+ * Team member by name (case-insensitive), for highlighting mentions; "all" stands for everyone.
+ * With loose (a line addressed by plain name), "Codex" also finds "Codex-Coder" when only one agent fits.
+ */
+export function findAgent(name, loose = false) {
   const n = name.toLowerCase();
   if (n === 'all' || n === 'everyone') return { name: 'everyone', driver: 'all', role: null };
-  const a = (store.state?.team || []).find((x) => x.name.toLowerCase() === n);
+  const team = store.state?.team || [];
+  let a = team.find((x) => x.name.toLowerCase() === n);
+  if (!a && loose) {
+    const fits = team.filter((x) => x.name.toLowerCase().startsWith(`${n}-`));
+    if (fits.length === 1) a = fits[0];
+  }
   return a ? { name: a.name, driver: a.driver, role: roleOf(a.role)?.name || null } : null;
 }
 

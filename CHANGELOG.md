@@ -26,6 +26,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - OpenCode agents showed the model's reasoning and OpenCode's own context summary as if they were answers; now only the answer is shown, with a notice when OpenCode summarises the context.
 - OpenCode skill rules missed skills named without the plugin prefix.
+- A line that addresses an agent by plain name ("Codex, please review...") is highlighted like an @mention.
+- Test servers end with the test run (`--exit-with-parent`, `--max-lifetime`), so a killed run no longer leaves servers behind.
 
 ## [0.1.0]
 

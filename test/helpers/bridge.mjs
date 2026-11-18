@@ -14,6 +14,12 @@ export const SERVER = process.env.AGENT_BRIDGE_ENTRY
 
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Servers started by this test run; stopped on any exit (the servers also watch their stdin, see below). */
+const running = new Set();
+process.on('exit', () => {
+  for (const c of running) c.kill();
+});
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
@@ -44,10 +50,26 @@ export async function startBridge({ team, rules, settings = {}, resume, dir }) {
     ),
   );
   const port = await freePort();
-  const args = [SERVER, '--config', configPath, '--logs', logs, '--port', String(port), '--no-open'];
+  // --exit-with-parent: the server ends when this process dies, even if the test run is killed.
+  // --max-lifetime: a last safety net in case the pipe is inherited by something that lives on.
+  const args = [
+    SERVER,
+    '--config',
+    configPath,
+    '--logs',
+    logs,
+    '--port',
+    String(port),
+    '--no-open',
+    '--exit-with-parent',
+    '--max-lifetime',
+    '600',
+  ];
   if (resume) args.push('--resume', ...(resume === true ? [] : [String(resume)]));
   else args.push('--cwd', work);
-  const child = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const child = spawn(process.execPath, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  running.add(child);
+  child.on('exit', () => running.delete(child));
   let output = '';
   child.stdout.on('data', (d) => (output += d));
   child.stderr.on('data', (d) => (output += d));

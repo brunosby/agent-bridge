@@ -36,6 +36,7 @@ export function closeDialog(id) {
  * Minimal, safe markdown: fenced code, inline code, bold. Everything else is plain text.
  * With findAgent (name -> { name, driver, role } or null), @mentions of team members become coloured
  * chips, and each line that mentions one is highlighted, so hand-offs stand out ("who got which task").
+ * A line that opens by addressing an agent by name ("Codex, please review...") is highlighted too.
  */
 export function renderMarkdown(container, text, findAgent = null) {
   container.textContent = '';
@@ -59,7 +60,8 @@ export function renderMarkdown(container, text, findAgent = null) {
         const block = h('span', 'delegation');
         block.style.setProperty('--accent', `var(--color-${first.driver}, var(--color-text-muted))`);
         block.title = `For ${first.name}${first.role ? ` (${first.role})` : ''}`;
-        appendInline(block, line, findAgent);
+        const lead = first.addressed ? { word: first.addressed, agent: first, done: false } : null;
+        appendInline(block, line, findAgent, lead);
         p.appendChild(block);
       } else {
         appendInline(p, line, findAgent);
@@ -74,27 +76,56 @@ export function renderMarkdown(container, text, findAgent = null) {
 
 const MENTION = /(@[\p{L}\p{N}_.-]*[\p{L}\p{N}_])/u;
 
+// "Codex, ..." / "**Codex-Coder:** ..." / "- Codex, ...": a line that opens by addressing someone.
+const ADDRESS = /^\s*(?:[-*]\s+|\d+[.)]\s+)?(?:\*\*)?([\p{L}\p{N}_.-]*[\p{L}\p{N}_])(?:\*\*)?\s*[,:]/u;
+
 function firstMention(line, findAgent) {
   for (const seg of line.split(MENTION)) if (seg.startsWith('@') && findAgent(seg.slice(1))) return findAgent(seg.slice(1));
-  return null;
+  const m = ADDRESS.exec(line);
+  const agent = m ? findAgent(m[1], true) : null;
+  return agent ? { ...agent, addressed: m[1] } : null;
 }
 
-function appendInline(parent, text, findAgent) {
+function appendInline(parent, text, findAgent, lead = null) {
   for (const seg of text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/)) {
     if (!seg) continue;
     if (seg.startsWith('`') && seg.endsWith('`') && seg.length > 1) parent.appendChild(h('code', null, seg.slice(1, -1)));
     else if (seg.startsWith('**') && seg.endsWith('**') && seg.length > 3) {
       const strong = h('strong');
-      appendMentions(strong, seg.slice(2, -2), findAgent);
+      appendMentions(strong, seg.slice(2, -2), findAgent, lead);
       parent.appendChild(strong);
-    } else appendMentions(parent, seg, findAgent);
+    } else appendMentions(parent, seg, findAgent, lead);
   }
 }
 
-function appendMentions(parent, text, findAgent) {
+function chipFor(text, agent) {
+  const chip = h('span', 'mention', text);
+  chip.style.setProperty('--accent', `var(--color-${agent.driver}, var(--color-text-muted))`);
+  chip.title = `${agent.name}${agent.role ? ` (${agent.role})` : ''}`;
+  return chip;
+}
+
+function appendMentions(parent, text, findAgent, lead = null) {
   if (!findAgent) {
     parent.appendChild(document.createTextNode(text));
     return;
+  }
+  if (lead && !lead.done) {
+    // The addressed name at the start of the line becomes a chip (once), without an @.
+    const i = text.indexOf(lead.word);
+    if (
+      i >= 0 &&
+      !text
+        .slice(0, i)
+        .trim()
+        .replace(/^([-*]|\d+[.)])$/, '')
+    ) {
+      lead.done = true;
+      if (i) parent.appendChild(document.createTextNode(text.slice(0, i)));
+      parent.appendChild(chipFor(lead.word, lead.agent));
+      appendMentions(parent, text.slice(i + lead.word.length), findAgent);
+      return;
+    }
   }
   for (const seg of text.split(MENTION)) {
     if (!seg) continue;
@@ -103,9 +134,6 @@ function appendMentions(parent, text, findAgent) {
       parent.appendChild(document.createTextNode(seg));
       continue;
     }
-    const chip = h('span', 'mention', seg);
-    chip.style.setProperty('--accent', `var(--color-${agent.driver}, var(--color-text-muted))`);
-    chip.title = `${agent.name}${agent.role ? ` (${agent.role})` : ''}`;
-    parent.appendChild(chip);
+    parent.appendChild(chipFor(seg, agent));
   }
 }
