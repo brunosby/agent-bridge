@@ -5,25 +5,26 @@ import { openAddDialog } from './add-agent.js';
 import { updatePending } from './approvals.js';
 import { api } from '../core/api.js';
 import { addSys } from './conversation-log.js';
+const detailsDialog = $('agentDetails');
+
+$('addAgent').onclick = openAddDialog;
+
 export function renderState() {
   const box = $('agents');
   const ids = store.state.team.map((a) => a.id);
   for (const id of Object.keys(cards)) {
     if (!ids.includes(id)) {
+      if (detailsDialog.open && detailsDialog.dataset.agent === id) detailsDialog.close();
       cards[id].el.remove();
       delete cards[id];
     }
   }
   for (const a of store.state.team) renderCard(a);
-  // keep card order and the add button last
-  for (const id of ids) box.appendChild(cards[id].el);
-  let add = $('addAgent');
-  if (!add) {
-    add = h('button', 'add-agent', '+ Add agent');
-    add.id = 'addAgent';
-    add.onclick = openAddDialog;
+  // Preserve focus and horizontal scroll when state updates without changing team order.
+  for (const [index, id] of ids.entries()) {
+    const card = cards[id].el;
+    if (box.children[index] !== card) box.insertBefore(card, box.children[index] || null);
   }
-  box.appendChild(add);
 
   const r = store.state.relay;
   $('auto').checked = r.auto;
@@ -37,7 +38,7 @@ export function renderState() {
   if (!noEd) {
     noEd = h('div', 'warning-box');
     noEd.id = 'noEditor';
-    $('agents').after(noEd);
+    $('agents').parentElement.after(noEd);
   }
   noEd.textContent =
     'No agent in this team can edit code (all roles are read-only or tests-only). Agents will only plan and review; add a Coder for changes.';
@@ -67,43 +68,42 @@ export function renderTargets() {
   t.appendChild(new Option(autoLabel, 'auto'));
   for (const a of store.state.team) t.appendChild(new Option(a.name, a.id));
   t.appendChild(new Option('All agents', 'all'));
-  t.title = mode ? `Routing: ${mode.label}. @Name in the message also picks the agent.` : '';
+  t.title = mode ? `Routing: ${mode.label}. Start the message with @Name to pick an agent.` : '';
   t.value = [...t.options].some((o) => o.value === prev) ? prev : 'auto';
 }
 
 export function renderCard(a) {
   let c = cards[a.id];
   if (!c) {
-    const el = h('div', 'card');
-    const top = h('div', 'card-top');
-    const dot = h('span', 'dot');
-    const name = h('button', 'name');
-    name.type = 'button';
-    name.title = 'Show or hide the settings of this agent (small screens)';
-    name.setAttribute('aria-expanded', 'false');
-    name.onclick = () => name.setAttribute('aria-expanded', String(el.classList.toggle('is-open')));
+    const el = h('button', 'card');
+    el.type = 'button';
+    el.setAttribute('aria-haspopup', 'dialog');
+    const name = h('span', 'name');
+    const roleName = h('span', 'card-role');
     const drv = h('span', 'badge');
     const status = h('span', 'status');
     const tokens = h('span', 'tok');
-    const stop = h('button', 'mini', 'Stop');
+    const stop = h('button', 'btn', 'Stop');
     stop.onclick = () => api('interrupt', { agent: a.id }).catch((e) => addSys(e.message, true));
-    const retry = h('button', 'mini', 'Retry');
+    const retry = h('button', 'btn', 'Retry');
     retry.onclick = () => api('retry', { agent: a.id }).catch((e) => addSys(e.message, true));
-    const remove = h('button', 'mini danger', '✕');
+    const remove = h('button', 'btn btn--danger', 'Remove agent');
     remove.title = 'Remove this agent from the conversation';
     remove.onclick = () => {
       if (confirm(`Remove ${a.name} from the conversation?`)) api('removeAgent', { agent: a.id }).catch((e) => alert(e.message));
     };
-    top.append(dot, name, drv, status, tokens, stop, retry, remove);
+    el.append(name, roleName, status);
 
     const row = h('div', 'card-row');
     const role = h('select', 'role');
+    role.setAttribute('aria-label', 'Role');
     role.title = 'Role of this agent';
     role.onchange = () =>
       api('role', { agent: a.id, role: role.value })
         .then(() => role.blur())
         .catch((e) => addSys(e.message, true));
     const model = h('select', 'model');
+    model.setAttribute('aria-label', 'Model');
     model.title = 'Model (list from your account). ★ recommended for the role · ⚠ may use your data';
     model.onchange = () =>
       api('model', { agent: a.id, model: model.value })
@@ -114,6 +114,7 @@ export function renderCard(a) {
           renderCard(agentOf(a.id));
         });
     const effort = h('select', 'effort');
+    effort.setAttribute('aria-label', 'Reasoning effort');
     effort.title = 'Reasoning effort (only the levels this model supports)';
     effort.onchange = () =>
       api('effort', { agent: a.id, effort: effort.value })
@@ -133,14 +134,28 @@ export function renderCard(a) {
 
     const rec = h('div', 'rec');
     const warn = h('div', 'card-warn');
-    el.append(top, row, rec, warn);
-    c = cards[a.id] = { el, dot, name, drv, status, tokens, stop, retry, role, model, effort, bypass, rec, warn };
+    const details = h('div', 'agent-details');
+    const meta = h('div', 'agent-details__meta');
+    meta.append(drv, tokens);
+    const actions = h('div', 'agent-details__actions');
+    actions.append(stop, retry, remove);
+    details.append(meta, warn, row, rec, actions);
+
+    el.onclick = () => {
+      detailsDialog.dataset.agent = a.id;
+      $('agentDetailsTitle').textContent = name.textContent;
+      $('agentDetailsBody').replaceChildren(details);
+      detailsDialog.showModal();
+    };
+    c = cards[a.id] = { el, name, roleName, details, drv, status, tokens, stop, retry, role, model, effort, bypass, rec, warn };
   }
-  const isOpen = c.el.classList.contains('is-open');
-  c.el.className = `card${isOpen ? ' is-open' : ''} drv-${a.driver}${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${a.bypass ? ' bypass-on' : ''}${!a.available || a.account ? ' unavailable' : ''}`;
+  c.el.className = `card drv-${a.driver}${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${!a.available || a.account ? ' unavailable' : ''}`;
+  c.details.classList.toggle('bypass-on', a.bypass);
   c.name.textContent = a.name;
+  c.roleName.textContent = roleOf(a.role)?.name || a.role;
+  if (detailsDialog.open && detailsDialog.dataset.agent === a.id) $('agentDetailsTitle').textContent = a.name;
   c.drv.textContent = a.driverLabel;
-  c.el.title = `${a.sessionId ? `Session: ${a.sessionId}` : 'No session yet'}${a.worktree ? `\nWorktree: ${a.cwd} (branch ${a.worktree.branch})` : ''}`;
+  c.details.title = `${a.sessionId ? `Session: ${a.sessionId}` : 'No session yet'}${a.worktree ? `\nWorktree: ${a.cwd} (branch ${a.worktree.branch})` : ''}`;
   c.status.textContent = !a.available
     ? 'unavailable'
     : a.account

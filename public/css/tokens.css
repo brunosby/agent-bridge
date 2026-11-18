@@ -55,7 +55,6 @@
 
   /* sizes */
   --content-max: 920px;
-  --indent-peer: 2.5rem;
 }
 
 @media (prefers-color-scheme: light) {

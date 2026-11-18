@@ -44,18 +44,65 @@
   display: none;
 }
 
-/* Agent cards scroll sideways on phones and wrap on larger screens. */
+.app-actions {
+  position: relative;
+}
+
+.app-actions summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.app-actions summary::-webkit-details-marker {
+  display: none;
+}
+
+.app-actions__options {
+  position: absolute;
+  z-index: 2;
+  inset-inline-end: 0;
+  inset-block-start: calc(100% + var(--space-1));
+  display: grid;
+  gap: var(--space-1);
+  min-width: 8rem;
+  padding: var(--space-1);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-dialog);
+}
+
+.team-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.add-agent {
+  flex: none;
+  border-style: dashed;
+  font-size: var(--text-sm);
+}
+
 .agents {
   display: flex;
+  flex: 1;
+  min-width: 0;
   gap: var(--space-2);
   overflow-x: auto;
   scroll-snap-type: x proximity;
-  padding-bottom: var(--space-1);
+  padding: var(--space-1);
 }
 
 .log {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overflow-wrap: anywhere;
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
@@ -75,7 +122,7 @@
 
 .composer {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
     'target target'
     'input send';
@@ -87,6 +134,18 @@
 
 .composer__target {
   grid-area: target;
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.composer__target select {
+  min-width: 0;
+  width: 100%;
+  font-weight: 400;
 }
 
 .composer__input {
@@ -117,18 +176,9 @@
   }
 
   .composer {
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: minmax(0, min(28%, 14rem)) minmax(0, 1fr) auto;
     grid-template-areas: 'target input send';
     align-items: end;
-  }
-
-  .composer__target {
-    max-width: 14rem;
-  }
-
-  .agents {
-    flex-wrap: wrap;
-    overflow-x: visible;
   }
 }
 

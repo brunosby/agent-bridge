@@ -1,15 +1,18 @@
-/* Agent card in the header: name, provider, status, tokens, role/model/effort menus, bypass and warnings. */
+/* Compact team rail and the settings shown in the agent details dialog. */
 .card {
   --accent: var(--color-text-muted);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  flex: 0 0 min(85vw, 22rem);
+  display: grid;
+  flex: none;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 var(--space-2);
+  min-height: 2.75rem;
+  max-width: min(22rem, 100%);
+  padding: var(--space-1) var(--space-2);
   scroll-snap-align: start;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-lg);
+  scroll-margin-inline: var(--space-1);
+  text-align: start;
+  border-inline-start: 3px solid var(--accent);
   background: var(--color-surface-2);
 }
 
@@ -29,103 +32,69 @@
   --accent: var(--color-fake);
 }
 
-.card.waiting {
-  border-color: var(--color-warning);
+.card .name,
+.card .card-role {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.card.unavailable {
-  border-color: var(--color-danger);
-  opacity: 0.9;
-}
-
-.card-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1) var(--space-2);
+.card .name {
   font-size: var(--text-sm);
-}
-
-/* The name is a button: on phones it folds the card open or closed. */
-.card-top .name {
-  min-height: auto;
-  padding: 0;
-  border: none;
-  background: none;
   font-weight: 600;
-  cursor: pointer;
 }
 
-.card-top .name::after {
-  content: ' ▾';
+.card .card-role,
+.card .status {
   color: var(--color-text-muted);
   font-size: var(--text-xs);
 }
 
-.card.is-open .card-top .name::after {
-  content: ' ▴';
+.card .status {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
 }
 
-/* Phones: cards show only their top line until opened. */
-@media (max-width: 639px) {
-  .card:not(.is-open) .card-row,
-  .card:not(.is-open) .rec {
-    display: none;
-  }
-
-  .card {
-    flex-basis: min(80vw, 20rem);
-  }
-}
-
-@media (min-width: 640px) {
-  .card-top .name {
-    cursor: default;
-  }
-
-  .card-top .name::after {
-    content: none;
-  }
-}
-
-.card-top .badge {
-  padding: 0 var(--space-1);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-}
-
-.card-top .status {
-  flex: 1;
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
+.card.busy .status {
+  color: var(--color-text);
 }
 
 .card.waiting .status {
   color: var(--color-warning);
+  background: var(--color-warning-bg);
+  font-weight: 600;
 }
 
 .card.unavailable .status {
   color: var(--color-danger);
+  border: 1px solid var(--color-danger-border);
+  font-weight: 600;
 }
 
-.card-top .tok {
+.agent-details {
+  display: grid;
+  gap: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.agent-details__meta,
+.agent-details__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.agent-details__meta {
   color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
 }
 
-.card .dot {
-  flex: none;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-
-.card.busy .dot {
-  animation: pulse 1s infinite;
+.agent-details__actions {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
 }
 
 .card-row {
@@ -145,7 +114,7 @@
   flex-basis: 12rem;
 }
 
-.card label.bypass {
+.agent-details label.bypass {
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -153,30 +122,17 @@
   font-size: var(--text-xs);
 }
 
-.card.bypass-on label.bypass {
+.agent-details.bypass-on label.bypass {
   color: var(--color-warning);
   font-weight: 600;
 }
 
-.card .rec {
+.agent-details .rec {
   color: var(--color-text-muted);
   font-size: var(--text-xs);
 }
 
-.card .card-warn {
+.agent-details .card-warn {
   color: var(--color-alert);
   font-size: var(--text-xs);
-}
-
-.add-agent {
-  flex: none;
-  align-self: center;
-  border-style: dashed;
-}
-
-@media (min-width: 640px) {
-  .card {
-    flex: 1 1 20rem;
-    max-width: 30rem;
-  }
 }

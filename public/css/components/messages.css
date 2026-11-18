@@ -1,7 +1,8 @@
 /* Conversation entries: message bubbles, tool lines, hand-offs, system lines and turn ends. */
 .msg {
   --accent: var(--color-text-muted);
-  max-width: var(--content-max);
+  align-self: flex-start;
+  width: min(100%, var(--content-max));
   border: 1px solid var(--color-border);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-lg);
@@ -24,7 +25,7 @@
 }
 
 .msg .body {
-  padding: var(--space-1) var(--space-3) var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-3);
   overflow-wrap: anywhere;
 }
 
@@ -43,6 +44,10 @@
 .msg.user {
   --accent: var(--color-success);
   align-self: flex-end;
+  width: fit-content;
+  max-width: min(92%, var(--content-max));
+  border-inline-width: 1px 3px;
+  border-inline-color: var(--color-border) var(--accent);
   background: var(--color-success-bg);
 }
 
@@ -57,22 +62,13 @@
   white-space: pre-wrap;
 }
 
-/* @mentions of team members and the lines that hand work to them */
+/* Recognized @mentions in message text. */
 .body .mention {
   padding: 0 0.3em;
   border-radius: var(--radius-sm, 4px);
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: color-mix(in srgb, var(--accent) 70%, currentColor);
   font-weight: 600;
-}
-
-.body .delegation {
-  display: block;
-  margin: 0.15em 0;
-  padding: 0.15em 0.5em;
-  border-left: 3px solid var(--accent);
-  border-radius: 0 var(--radius-sm, 4px) var(--radius-sm, 4px) 0;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 .body pre {
@@ -83,6 +79,8 @@
   overflow-x: auto;
   font-size: var(--text-sm);
   line-height: 1.45;
+  white-space: pre;
+  overflow-wrap: normal;
 }
 
 .body pre code {
@@ -101,7 +99,7 @@
 
 .tool {
   --accent: var(--color-text-muted);
-  border-left: 2px solid var(--accent);
+  border-left: 2px solid color-mix(in srgb, var(--accent) 35%, var(--color-border));
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   white-space: pre-wrap;
@@ -128,6 +126,10 @@
   color: var(--color-success);
 }
 
+.tool.fail {
+  border-left-color: var(--color-danger);
+}
+
 .tool.fail .status {
   color: var(--color-danger);
 }
@@ -142,29 +144,17 @@
 }
 
 .route {
-  text-align: center;
-  font-style: italic;
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
 }
 
 .turn-end {
-  padding: 0 var(--space-3) var(--space-2);
+  padding: 0 var(--space-3);
+  overflow-wrap: anywhere;
   color: var(--color-text-muted);
   font-size: var(--text-xs);
 }
 
 .turn-end.fail {
   color: var(--color-danger);
-}
-
-/* From tablets up, peers are indented so the hand-offs read like a thread. */
-@media (min-width: 640px) {
-  .msg.drv-codex,
-  .tool.drv-codex {
-    margin-left: var(--indent-peer);
-  }
-
-  .msg.drv-opencode,
-  .tool.drv-opencode {
-    margin-left: calc(var(--indent-peer) / 2);
-  }
 }

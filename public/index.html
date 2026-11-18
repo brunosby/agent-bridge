@@ -15,13 +15,16 @@
         <div class="toolbar">
           <h1 class="brand">Agent Bridge</h1>
           <button id="toggleControls" class="btn toolbar__toggle" aria-expanded="false" aria-controls="relayControls">Controls</button>
-          <nav class="toolbar__group" aria-label="App">
+          <nav class="toolbar__group" aria-label="Workspace">
             <button id="openConversations" class="btn" title="Restore an earlier conversation or start a new one">Conversations</button>
             <button id="openSettings" class="btn" title="General settings, accounts and roles">Settings</button>
-            <button id="restartApp" class="btn" title="Restart Agent Bridge (stops the agents, then resumes this conversation)">
-              Restart
-            </button>
-            <button id="quitApp" class="btn btn--danger" title="Close Agent Bridge and all agents">Quit</button>
+            <details id="appActions" class="app-actions">
+              <summary class="btn">App <span aria-hidden="true">▾</span></summary>
+              <div class="app-actions__options">
+                <button id="restartApp" class="btn" title="Stop the agents, then resume this conversation">Restart</button>
+                <button id="quitApp" class="btn btn--danger" title="Close Agent Bridge and all agents">Quit</button>
+              </div>
+            </details>
           </nav>
           <div id="relayControls" class="toolbar__group toolbar__group--end controls" role="group" aria-label="Relay">
             <label class="field-inline" title="How replies move between agents">
@@ -41,7 +44,10 @@
             <button id="stopAll" class="btn btn--danger" title="Interrupt every agent and pause the relay">Stop all</button>
           </div>
         </div>
-        <section id="agents" class="agents" aria-label="Agents"></section>
+        <div class="team-bar">
+          <section id="agents" class="agents" aria-label="Agents"></section>
+          <button id="addAgent" class="btn add-agent">+ Add agent</button>
+        </div>
       </header>
 
       <main id="log" class="log" aria-live="polite" aria-label="Conversation"></main>
@@ -49,8 +55,10 @@
       <section id="pending" class="pending" aria-live="assertive" aria-label="Waiting for you" hidden></section>
 
       <footer class="composer">
-        <label class="visually-hidden" for="target">Send to</label>
-        <select id="target" class="composer__target" title="Who receives your message"></select>
+        <label class="composer__target" for="target">
+          Send to
+          <select id="target" title="Who receives your message"></select>
+        </label>
         <label class="visually-hidden" for="input">Message</label>
         <textarea
           id="input"
@@ -61,6 +69,14 @@
         <button id="send" class="btn btn--primary composer__send">Send</button>
       </footer>
     </div>
+
+    <dialog id="agentDetails" class="dialog dialog--narrow" aria-labelledby="agentDetailsTitle">
+      <div class="dialog__head">
+        <h2 id="agentDetailsTitle" class="dialog__title"></h2>
+        <button class="btn close" data-close="agentDetails" autofocus>Close</button>
+      </div>
+      <div id="agentDetailsBody" class="dialog__body"></div>
+    </dialog>
 
     <dialog id="convDialog" class="dialog" aria-labelledby="convTitle">
       <div class="dialog__head">

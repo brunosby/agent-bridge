@@ -36,12 +36,30 @@ $('pause').onclick = () => api('relay', { pause: true });
 $('stopAll').onclick = () => api('interrupt', {});
 for (const b of document.querySelectorAll('[data-close]')) b.onclick = () => closeDialog(b.dataset.close);
 
+const appActions = $('appActions');
+document.addEventListener('click', (event) => {
+  if (appActions.open && !appActions.contains(event.target)) appActions.open = false;
+});
+appActions.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && appActions.open) {
+    event.preventDefault();
+    appActions.open = false;
+    appActions.querySelector('summary').focus();
+  }
+});
+
+function closeAppActions() {
+  appActions.open = false;
+  appActions.querySelector('summary').focus();
+}
+
 // ---------- restart / quit (there is no console window to close) ----------
 export function busyConfirm(what) {
   return !(store.state && store.state.team.some((a) => a.busy)) || confirm(`An agent is still working. ${what} anyway?`);
 }
 
 $('restartApp').onclick = async () => {
+  closeAppActions();
   if (!busyConfirm('Restart')) return;
   try {
     await api('restart');
@@ -64,6 +82,7 @@ $('restartApp').onclick = async () => {
 };
 
 $('quitApp').onclick = async () => {
+  closeAppActions();
   if (!busyConfirm('Quit') || !confirm('Close Agent Bridge and all agents?')) return;
   await api('quit').catch(() => {});
   document.body.innerHTML =
