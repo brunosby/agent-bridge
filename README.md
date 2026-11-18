@@ -1,15 +1,12 @@
 # Agent Bridge
 
-Let Claude Code and Codex talk to each other on the same task while you watch the conversation live and can step in at any time.
+A team of AI coding agents from different providers working on the same task, in a local web page where you watch everything live and step in at any time.
 
-- **Claude** runs as Claude Code in headless mode, kept alive as one process:
-  `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages`
-  ([headless docs](https://code.claude.com/docs/en/headless), [CLI reference](https://code.claude.com/docs/en/cli-reference)).
-- **Codex** runs as `codex app-server`, driven over its JSON-RPC protocol on stdio
-  ([app-server docs](https://learn.chatgpt.com/docs/app-server)). `codex mcp-server` no longer exists, so MCP is not used.
-- A small local web page (served on `127.0.0.1` only) shows both agents' text as it streams, their tool calls, and Codex approval requests, with a box to message the main agent, the peer, or both.
+- **Claude** runs as Claude Code in headless mode (`claude -p --input-format stream-json --output-format stream-json`), one long-lived process per agent ([headless docs](https://code.claude.com/docs/en/headless), [CLI reference](https://code.claude.com/docs/en/cli-reference)).
+- **Codex** runs as `codex app-server`, driven over its JSON-RPC protocol ([app-server docs](https://learn.chatgpt.com/docs/app-server)).
+- **OpenCode** runs as `opencode serve` and gives access to its providers (OpenCode Zen, OpenRouter, DeepSeek, ...) ([server docs](https://opencode.ai/docs/server/)). *This driver is written but not yet tested; see [Status](#status).*
 
-No dependencies: only Node.js 20+ and the two CLIs, each already logged in.
+No dependencies: Node.js 20+ and the CLIs of the providers you use. The page listens on `127.0.0.1` only, and every API call needs a random token created at start.
 
 ## Start
 
@@ -19,109 +16,125 @@ Double-click `agent-bridge.cmd` and type the project folder, or run:
 agent-bridge.cmd --cwd C:\path\to\project
 ```
 
-Options:
-
 | Flag | Meaning |
 | --- | --- |
-| `--cwd <dir>` | Folder both agents work in (default: current folder). |
-| `--main claude\|codex` | Which agent leads (default from `config.json`, `claude`). |
+| `--cwd <dir>` | Project folder (default: current folder). |
+| `--resume [id]` | Reopen the last conversation, or the one with this id. |
 | `--port <n>` | Fixed port (default: a free one). |
 | `--no-open` | Do not open the browser. |
 | `--config <file>` | Use another config file. |
-| `--resume [id]` | Reopen the last conversation, or the one with this id (see below). |
+| `--logs <dir>` | Keep conversations in another folder (useful for tests). |
+| `--main claude\|codex` | Old option: which agent is the orchestrator when no default team is saved. |
 
-Stop with `Ctrl+C` in the console window; both agent processes are closed.
+Stop with `Ctrl+C` in the console window; all agent processes are closed. If the page says the app "was updated after this window started", close the console and start it again.
 
-## How the conversation flows
+First time? Open **Settings > Accounts** to see which CLIs are installed and signed in.
 
-1. You write to the **main** agent (or the peer, or both) from the box at the bottom. `Ctrl+Enter` sends.
-2. When an agent finishes a turn, its final message is forwarded to the other one as `[Message from Claude]` / `[Message from Codex]`.
-3. The relay stops when an agent ends a message with a line containing only `[[DONE]]`, when the hop limit is reached, or when you press **Pause** / **Stop all**.
-4. Any message you send resets the hop counter and resumes the relay. **Resume** does the same without sending anything.
+## The team
 
-Each agent gets short instructions (see `src/prompts.mjs`) explaining its role, the relay, and the `[[DONE]]` marker. Claude receives them through `--append-system-prompt-file`; Codex through `developerInstructions` on `thread/start`.
+Each agent has a card at the top of the page with:
 
-You can message an agent while it is working: Claude queues the message for its next turn, and Codex adds it to the running turn.
+- **Role** (see below) and the models recommended for it;
+- **Model**, listed from your account. ★ = recommended for the role, ⚠ = free/stealth model that may use your prompts for training (avoid sensitive code; the warning also shows for orchestrators), greyed out = not available (provider not connected, no access, usage limit, or the CLI is broken);
+- **Effort**, with only the levels the model supports (Claude `--effort`, Codex `effort`);
+- **Bypass** (below), tokens used, **Stop**, **Retry** (when unavailable) and **✕** to remove it.
 
-## Permissions
+**+ Add agent** adds more agents, including several from the same provider. Adding a third agent, or a second one on the same provider, shows a reminder that each agent spends its own tokens and shares its provider's quota. Optionally an agent gets its **own git worktree** (a branch next to the repository, `<repo>-agent-worktrees/...`), so coders never edit the same files; nothing is merged or deleted automatically.
 
-Both agents' permission requests appear in a yellow panel pinned above the message box, with **Allow once**, **Allow for session** (when offered) and **Decline**. The agent's chip shows "waiting for your approval" and the tab title shows the number of pending requests.
+The default team for new conversations is Claude as Orchestrator and Codex as Coder; change it with **Settings > General > Save the current team as the default**.
 
-- **Claude** runs with `--permission-prompt-tool stdio`, so each prompt arrives as a `can_use_tool` control request (the channel behind the Agent SDK's `canUseTool`). Its base mode is `permissionMode` (default `acceptEdits`); `allowedTools` adds rules such as `"Bash(npm test *)"`. **Allow for session** keeps the suggested rule in memory for this session only; nothing is written to the project's settings. `AskUserQuestion` is declined with a note telling Claude to ask in its message instead. Set `claude.permissionPrompts` to `false` to go back to plain headless behaviour (prompts are denied).
-- **Codex** uses `approvalPolicy` (default `on-request`) and `sandbox` (default `workspace-write`); its requests come from the app-server.
+## Roles
 
-**Unanswered requests.** Agents wait for an answer with no time limit, so the bridge declines a request after `approvalTimeoutSec` seconds (default 120, `0` = wait forever). The agent receives the refusal and carries on.
+Roles live in `roles/`, one JSON file each (`id`, `name`, `summary`, `canEdit`, `recommended`, `instructions`). Copy a file to create a new one.
 
-### Bypass mode
+| Role | Does | Edits files | Recommended |
+| --- | --- | --- | --- |
+| Orchestrator | Plans, delegates with @mentions, checks results, answers you | No | Opus 5.5, GPT-6.2-Sol, Fable 5.2 |
+| Architect | Designs the solution before coding | No | Opus 5.5, Fable 5.2, GPT-6.2-Astra |
+| Coder | Implements tasks and runs tests | Yes | GPT-6.2-Sol, Sonnet 5.5, DeepSeek |
+| Reviewer | Reviews plans and diffs, approves or requests changes | No | Opus 5.5, Sonnet 5.5, GPT-6.2-Sol |
+| Tester | Writes and runs tests | Tests only | Sonnet 5.5, GPT-6.1-Sol, Haiku 5.5 |
+| Researcher | Looks up docs and sources | No | Haiku 5.5, GPT-6-Luna, Big Pickle |
 
-Tick **Bypass** on an agent's chip (or set `bypass.claude` / `bypass.codex` in `config.json`) to accept its requests automatically. The page still asks you for:
+The names follow common multi-agent setups (Anthropic's orchestrator-workers, Magentic-One, CrewAI, MetaGPT, Aider's architect/editor). "Edits files: No" is enforced: Claude runs without its edit tools, Codex in a read-only sandbox, OpenCode with its `plan` agent.
 
-- destructive actions: forced git push, `git reset --hard`, `git clean -f`, branch deletion, database drops, disk tools, shutdown, publishing, and similar (`destructivePatterns`);
-- deletions (`rm`, `del`, `Remove-Item`, `rmdir`, ... in `deletionPatterns`) that are recursive, that follow a `cd`, that use variables such as `$HOME`, or whose paths fall outside the project folder. Deleting single files inside the project folder is accepted.
+## Routing
 
-Requests that were accepted this way are listed in the conversation as "auto-approved (bypass)". Both pattern lists are case-insensitive regular expressions and can be replaced in `config.json`; the defaults are in `src/safety.mjs`. This is a pattern check, not a sandbox: an unusual command can slip past it, so keep bypass for projects under version control.
+The header's **Routing** menu (default in Settings):
 
-## Models
-
-Each agent chip in the header has a model menu filled with the models your account can use:
-
-- **Claude:** the list comes from Claude Code's `initialize` control message on the stream-json channel (the same data the Agent SDK exposes as `supportedModels()` / `initializationResult()`). Changing it restarts the Claude process with `--model <value> --resume <session>`, so the conversation continues. If Claude is working, the switch waits until the turn ends.
-- **Codex:** the list comes from the app-server `model/list` method (hidden models are left out). The chosen model is sent with every `turn/start`, so it applies from the next turn.
-
-**Default** means each CLI's own default (shown in brackets). `config.json` sets the model at start; changes made in the page last until the bridge is closed.
-
-## Stop buttons
-
-- **Stop** on Codex sends `turn/interrupt`.
-- **Stop** on Claude ends the process; the next message restarts it with `--resume <session id>`, so the conversation continues.
-- **Stop all** stops both and pauses the relay.
-
-## Configuration (`config.json`)
-
-| Key | Meaning |
+| Mode | Who gets an agent's reply |
 | --- | --- |
-| `mainAgent` | `claude` or `codex`. |
-| `userName` | How the agents refer to you. |
-| `autoRelay`, `maxHops` | Initial relay settings (both can be changed in the page). |
-| `claude.model`, `codex.model` | Model at start; `null` uses each CLI's default. Can be changed in the page. |
-| `claude.permissionMode`, `claude.allowedTools` | Claude permissions. |
-| `codex.approvalPolicy`, `codex.sandbox` | Codex permissions. |
-| `approvalTimeoutSec` | Seconds before an unanswered approval is declined (0 = never). |
-| `bypass.claude`, `bypass.codex` | Start with bypass mode on. |
-| `destructivePatterns`, `deletionPatterns` | Replace the default safety patterns. |
-| `claude.permissionPrompts` | Send Claude's permission prompts to the page (default `true`). |
-| `*.instructions` | Extra text appended to that agent's instructions. |
-| `*.extraArgs` | Extra CLI arguments. |
-| `claude.resumeSessionId`, `codex.resumeThreadId` | Continue an earlier session. |
+| **Orchestrator + mentions** (default) | The orchestrator delegates with `@Name`; every other agent answers the orchestrator; an orchestrator message without mentions is for you. A worker's `[[DONE]]` still goes to the orchestrator. |
+| Free mentions | Whoever is mentioned; without a mention, back to whoever sent the last message. |
+| Fixed pipeline | The next agent in the list; the last one answers you. |
+| Round robin | The next agent in the list, in a loop. |
 
-## Conversations: restore and start new
+Your messages go to the box's target: **Auto** (the orchestrator, or the first agent), a specific agent, or all. A message that *starts* with `@Name` goes to that agent. Each agent sees the team list (names, roles, models) whenever it changes.
 
-Every conversation is saved in `logs/<timestamp>/transcript.jsonl` (all events, including CLI stderr). Session ids are shown when you hover over each agent in the header.
+The relay stops when an orchestrator (or, in other modes, any agent) ends with a line containing only `[[DONE]]`, when the hand-off limit or the **token limit** is reached, or when you press **Pause** / **Stop all**. Sending a message or **Resume** continues.
 
-- **Closing the browser tab** loses nothing: reopen the address and the page replays the conversation.
-- **Conversations** (header button) lists earlier conversations with their first message, folder and date. **Restore** shows the old messages again and continues both agents' sessions (Claude with `--resume <session id>`, Codex with `thread/resume`), in the same project folder and with the same models. The relay stays paused until you send a message. **New conversation** starts fresh, optionally in another folder. **Remove** takes a conversation off the list by moving its folder to `logs/.removed` (nothing is deleted). Logs that continue the same agent sessions are shown once, as the most recent.
-- **`agent-bridge.cmd --resume`** opens the most recent conversation directly; `--resume <timestamp>` opens a specific one (the folder name under `logs`).
+## Approvals and bypass
 
-Restoring needs the agents' own session files (kept by Claude Code and Codex on this machine). If an agent had not received any message in that conversation, it starts a fresh session.
+Permission requests from every agent appear in a yellow panel pinned above the message box (**Allow once**, **Allow for session**, **Decline**). Unanswered requests are declined after `approvalTimeoutSec` (default 120 s) and the agent carries on.
 
-If the page shows "Agent Bridge was updated after this window started", the code on disk changed while the app was running: close the console window and start it again.
+- Claude runs with `--permission-prompt-tool stdio` (the channel behind the Agent SDK's `canUseTool`); "Allow for session" is kept in memory only.
+- Codex approvals come from the app-server; OpenCode's from its permission endpoint.
+
+**Bypass** (per agent) approves automatically, except destructive actions (forced push, `git reset --hard`, database drops, disk tools, publishing...) and deletions that are recursive, follow a `cd`, use variables like `$HOME`, or touch anything outside the project folder. Patterns are in `src/safety.mjs` and editable in Settings. It is a pattern check, not a sandbox: use it on projects under version control.
+
+## Settings and accounts
+
+**Settings > General** (saved to `config.json`): your name, default routing, auto-relay, hand-off limit, token limit, approval timeout, bypass for new agents, token warning, data-warning model patterns, safety patterns, opening the browser.
+
+**Settings > Accounts** checks each CLI with its own commands and shows one of: *Not installed*, *Installed, not signed in*, *Signed in, no access* (plan inactive, invalid key, no credit), *Usage limit reached* (with the reset time when the provider reports it), or *Ready*, plus the next step: the install command, or **Sign in**, which opens a terminal running the CLI's own login (`claude auth login`, `codex login`, `opencode auth login`). Agent Bridge never sees or stores credentials.
+
+No access and usage limits are also detected while agents work (Claude `rate_limit_event` and error codes, Codex `account/rateLimits/updated` and `unauthorized`, OpenCode session errors); that provider's models are disabled until it works again.
+
+**Settings > Roles** lists the catalog.
+
+## Providers through OpenCode
+
+OpenCode adds any provider it supports, signed in with `opencode auth login` (a login or an API key, kept by OpenCode):
+
+- **OpenCode Zen**, including the free `big-pickle` model (free for a limited time; prompts may be used to improve it, hence the ⚠).
+- **DeepSeek** (`deepseek-flash`, `deepseek-v4-pro`) with an API key. DeepSeek also documents using it from Claude Code with `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`.
+- **OpenRouter** and other providers from the models.dev catalog.
+
+**9router (optional, off by default).** [9router](https://github.com/decolua/9router) is a local router with an OpenAI-compatible endpoint at `http://localhost:20128/v1`. It can sit *behind* OpenCode as a custom OpenAI-compatible provider in `opencode.jsonc`. It also reuses subscription logins of other tools, which may go against those providers' terms of use, so Agent Bridge does not configure it; add it to OpenCode yourself if you accept that risk.
+
+## Conversations and logs
+
+Each conversation is saved in `logs/<timestamp>/`:
+
+- `transcript.jsonl`: every event;
+- `errors.log`: errors, unavailable agents, account problems and error-like CLI output, one line each, for finding causes;
+- the instruction files given to Claude agents.
+
+**Conversations** (header) lists them: **Restore** shows the old messages and brings back the whole team (agents, roles, models, effort, bypass, sessions, tokens); **Remove** moves a log to `logs/.removed`; **New conversation** starts fresh. `--resume` reopens the last one from the command line. Closing only the browser tab loses nothing.
 
 ## Files
 
 ```
 agent-bridge.cmd        launcher
 config.json             settings
-src/server.mjs          HTTP + SSE server and relay logic
+roles/                  role catalog
+src/server.mjs          HTTP + SSE server, team, routing, settings
 src/claude-agent.mjs    Claude Code headless driver
 src/codex-agent.mjs     Codex app-server driver
-src/prompts.mjs         instructions given to each agent
-src/safety.mjs          bypass-mode rules (destructive actions, deletions)
-src/history.mjs         reads saved conversations for the Conversations list and restore
+src/opencode-agent.mjs  OpenCode server driver
+src/accounts.mjs        CLI install/sign-in status and login terminal
+src/prompts.mjs         agent instructions and routing modes
+src/roles.mjs           role catalog loader
+src/safety.mjs          bypass rules
+src/history.mjs         saved conversations
+src/worktree.mjs        optional git worktree per agent
 src/proc.mjs            process helpers
 public/                 web page
+dev-notes/CHECKPOINT.md development status
 ```
 
-## Limits
+## Status
 
-- `codex app-server` is marked experimental by OpenAI; protocol changes may need updates in `src/codex-agent.mjs`. `codex app-server generate-ts --out <dir>` prints the current protocol types.
-- The page has no login: it listens only on `127.0.0.1` and every API call needs a random token created at start.
+- Tested end to end: Claude and Codex agents, teams of three, routing, approvals, bypass, effort, token counting, restore, worktree, settings and accounts status.
+- Not tested yet: the OpenCode driver. It follows the OpenCode V1 server docs; once OpenCode is installed (`npm install -g --allow-scripts=opencode-ai opencode-ai`), its event names should be checked against the server's OpenAPI spec (`GET /doc`).
+- `codex app-server` is experimental; if its protocol changes, the Codex agent is shown as unavailable instead of breaking the app. `codex app-server generate-ts --out <dir>` prints the current protocol types.

@@ -64,6 +64,14 @@ header { background: var(--panel); border-bottom: 1px solid var(--border); paddi
 .add-agent { align-self: center; border-style: dashed; }
 @keyframes pulse { 50% { opacity: 0.25; } }
 
+/* Narrow windows: controls go under the title and cards take the full width. */
+@media (max-width: 1000px) {
+  .controls { margin-left: 0; gap: 6px; }
+  .controls label { font-size: 12px; }
+  .card { min-width: 0; max-width: none; flex: 1 1 100%; }
+  .msg.drv-codex, .tool.drv-codex { margin-left: 16px; }
+}
+
 button, select, input, textarea {
   font: inherit; color: var(--text); background: var(--panel-2);
   border: 1px solid var(--border); border-radius: 6px;
