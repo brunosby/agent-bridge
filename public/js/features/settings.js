@@ -36,6 +36,7 @@ export const SETTING_LABELS = {
   destructivePatterns: ['Destructive actions (always ask)', 'One regex per line. Bypass never approves these.'],
   deletionPatterns: ['Deletion commands', 'One regex per line. Bypass approves them only for single files inside the project folder.'],
   recommendRoles: ['Recommend roles', 'Let the orchestrator suggest additions to the team for substantial work.'],
+  milestoneCommitMode: ['Commit at milestones', 'Ask before each commit or commit automatically after the approved checks.'],
   openBrowser: ['Open the browser at start', ''],
 };
 
@@ -43,6 +44,7 @@ export function renderSettingsForm() {
   const form = $('settingsForm');
   form.textContent = '';
   for (const [key, def] of Object.entries(store.catalog.settingsSchema)) {
+    if (key === 'milestoneCommitMode' && !store.state?.milestoneCommitAvailable) continue;
     const [title, hint] = SETTING_LABELS[key] || [key, ''];
     const value = store.catalog.settings[key];
     let input;
@@ -59,7 +61,7 @@ export function renderSettingsForm() {
         input = h('select');
         for (const v of def.values) {
           const m = store.catalog.routingModes.find((x) => x.id === v);
-          const names = { ask: 'Ask me', closest: 'Continue with the closest agent', off: 'Off' };
+          const names = { ask: 'Ask me', closest: 'Continue with the closest agent', off: 'Off', automatic: 'Automatic' };
           input.appendChild(new Option(m ? m.label : names[v] || v, v));
         }
         input.value = value;

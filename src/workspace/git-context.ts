@@ -31,7 +31,8 @@ function gitAsync(cwd: string, args: string[], patchExit = false): Promise<strin
   });
 }
 
-export async function reviewChanges(cwd: string, excluded: unknown, onlyPath?: string) {
+export async function reviewChanges(cwd: string, excluded: unknown, options?: { onlyPath?: string; metadataOnly?: boolean }) {
+  const onlyPath = options?.onlyPath;
   // Git resolves junctions and alternate path spellings before reporting its root and prefix.
   const [rootOutput, prefixOutput] = await Promise.all([
     gitAsync(cwd, ['rev-parse', '--show-toplevel']),
@@ -77,6 +78,7 @@ export async function reviewChanges(cwd: string, excluded: unknown, onlyPath?: s
       names: file.names.filter(withinScope).map((name) => name.slice(prefix.length)),
     }));
   const omittedPaths = [...denied].filter(withinScope).map((name) => name.slice(prefix.length));
+  if (options?.metadataOnly) return { patch: null, files: visible, omitted: denied.size > 0, omittedPaths };
   const configured = Array.isArray(excluded) ? excluded.filter((item): item is string => typeof item === 'string') : [];
   const safeBasenames = configured.map((name) => name.trim()).filter((name) => /^[\w.*-]+$/.test(name));
   const common = [...sensitiveNames, ...safeBasenames].map((name) => ':(exclude,icase,glob)**/' + name);

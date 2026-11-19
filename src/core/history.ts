@@ -169,19 +169,23 @@ export function loadConversation(logsDir: string, id: string): ConversationSumma
       openApprovals.add(e.requestId);
     if (e.kind === 'needRoleClosed' || e.kind === 'finalReviewClosed' || e.kind === 'recommendRolesClosed')
       openApprovals.delete(e.requestId);
-    if (e.kind === 'approvalClosed') openApprovals.delete(e.requestId);
+    if (e.kind === 'milestonePlanProposed' || e.kind === 'milestoneCommitProposed') openApprovals.add(e.requestId);
+    if (e.kind === 'approvalClosed' || e.kind === 'milestoneDecisionClosed') openApprovals.delete(e.requestId);
     if (['delta', 'text', 'tool'].includes(e.kind) && e.agent) openTurn[e.agent] = true;
     if (e.kind === 'turnEnd') openTurn[e.agent] = false;
   }
   for (const requestId of openApprovals) {
     const id = String(requestId);
-    const kind = id.startsWith('recommend-')
-      ? 'recommendRolesClosed'
-      : id.startsWith('role-')
-        ? 'needRoleClosed'
-        : id.startsWith('final-')
-          ? 'finalReviewClosed'
-          : 'approvalClosed';
+    const kind =
+      id.startsWith('milestones-') || id.startsWith('milestone-commit-')
+        ? 'milestoneDecisionClosed'
+        : id.startsWith('recommend-')
+          ? 'recommendRolesClosed'
+          : id.startsWith('role-')
+            ? 'needRoleClosed'
+            : id.startsWith('final-')
+              ? 'finalReviewClosed'
+              : 'approvalClosed';
     events.push({ seq: ++lastSeq, at: lastAt, kind, requestId, decision: 'cancelled', action: 'cancelled' });
   }
   for (const [agent, open] of Object.entries(openTurn)) {

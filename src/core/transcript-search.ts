@@ -1,3 +1,4 @@
+import { parseMilestoneMarkers } from '../../public/js/core/milestone-markers.js';
 import { parseRoleMarkers } from '../../public/js/core/role-markers.js';
 import { open, realpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -116,7 +117,9 @@ export async function searchSavedTranscript(
     const results: (Omit<Message, 'text'> & { excerpt: string })[] = [];
     for (let index = cursor.index; index < messages.length; index += 1) {
       const { text, ...message } = messages[index];
-      const normalized = (message.author === 'You' ? text : parseRoleMarkers(text).text).replace(/\s+/g, ' ').trim();
+      const normalized = (message.author === 'You' ? text : parseRoleMarkers(parseMilestoneMarkers(text).text).text)
+        .replace(/\s+/g, ' ')
+        .trim();
       const match = normalized.toLowerCase().indexOf(query);
       if (match < 0) continue;
       if (results.length === limit) return { results, cursor: { ...cursor, index } };

@@ -1,3 +1,4 @@
+import { cancelMilestoneDecision, hasActiveMilestones, milestoneInstructions } from './milestones.ts';
 // Routing: who receives each message, review rounds, missing roles, delivery to agents.
 import type { AgentSpec, BatchEvent, Conversation, RoleDecisionEvent, RoleRecommendation, TurnEnded } from '../core/types.ts';
 import { S } from './state.ts';
@@ -15,7 +16,7 @@ import { isRecommended } from '../core/roles.ts';
 import { randomUUID } from 'node:crypto';
 import { resolveRecipients } from '../core/recipients.ts';
 import { changeFingerprint } from '../workspace/git-context.ts';
-import { summarizeProject } from './project.ts';
+import { publishFinalReview } from './final-review.ts';
 export function orchestratorId() {
   return (S.conv.team.find((a) => a.role === 'orchestrator') || S.conv.team[0])?.id;
 }
@@ -131,6 +132,10 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
 
   // In orchestrator mode only the orchestrator closes the work; a worker's [[DONE]] still goes back to it.
   const closes = S.conv.routingMode !== 'orchestrator' || fromId === orch;
+  if (DONE_MARKER.test(text) && closes && hasActiveMilestones(owner)) {
+    publish({ kind: 'info', agent: fromId, text: 'Approved milestones are still pending. Finish them before closing the work.' });
+    return;
+  }
   if (DONE_MARKER.test(text) && closes) {
     S.conv.relay.halted = true;
     publish({ kind: 'system', text: `${agentName(fromId)} marked the work as done. Waiting for you.` });
@@ -421,17 +426,7 @@ async function offerFinalReview(fromId: string, text: string): Promise<void> {
     publish({ kind: 'system', text: 'No files changed, so there is nothing to approve.' });
     return;
   }
-  const requestId = `final-${Date.now()}`;
-  S.conv.pendingFinal = requestId;
-  publish({
-    kind: 'finalReview',
-    agent: fromId,
-    requestId,
-    summary: text.replace(DONE_MARKER, '').trim(),
-    project: summarizeProject(S.conv),
-    tests: [...S.conv.testResults],
-  });
-  publishState();
+  publishFinalReview(conv, fromId, text);
 }
 
 export function userTargets(target?: string, prefix?: string) {
@@ -450,6 +445,7 @@ export async function userSend(text: string, target?: string): Promise<void> {
       const targets = userTargets(target, text);
       if (!targets.length) throw new Error('no agent to receive this message');
       clearRoleDecisions(owner, 'new message');
+      cancelMilestoneDecision(owner, 'new message');
       owner.relay.userPaused = false;
       const checkFiles = setting('finalConfirmation') && owner.routingMode === 'orchestrator';
       const mark = checkFiles ? await captureChangeMark(owner) : null;
@@ -461,7 +457,9 @@ export async function userSend(text: string, target?: string): Promise<void> {
       const source = publish({ kind: 'user', text, to: targets });
       const note = targets.length > 1 ? ' (sent to ' + targets.length + ' agents)' : '';
       for (const to of targets) {
-        deliver(to, '[Message from ' + setting('userName') + ']' + note + '\n' + text, { from: 'user', sourceSeq: source.seq });
+        const instructions = to === orchestratorId() ? milestoneInstructions(owner) : '';
+        const message = '[Message from ' + setting('userName') + ']' + note + '\n' + text;
+        deliver(to, instructions ? instructions + '\n\n' + message : message, { from: 'user', sourceSeq: source.seq });
       }
       publishState();
     });

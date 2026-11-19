@@ -203,6 +203,38 @@ export type RoleDecisionEvent =
   | { kind: 'recommendRoles'; agent: string; requestId: string; roles: RoleRecommendation[] }
   | { kind: 'recommendRolesClosed' | 'needRoleClosed'; requestId: string; action: string };
 
+export interface MilestoneDefinition {
+  title: string;
+  criterion: string;
+}
+
+export interface MilestoneView extends MilestoneDefinition {
+  number: number;
+  status: 'pending' | 'working' | 'checking' | 'waiting_for_commit' | 'blocked' | 'committed';
+  detail?: string;
+  commits: { workspace: string; head: string }[];
+}
+
+export type MilestoneEvent =
+  | {
+      kind: 'milestonePlanProposed';
+      agent: string;
+      requestId: string;
+      milestones: MilestoneDefinition[];
+      command: string;
+      commandSaved: boolean;
+    }
+  | {
+      kind: 'milestoneCommitProposed';
+      agent: string;
+      requestId: string;
+      milestone: MilestoneView;
+      message: string;
+      files: { workspace: string; paths: string[] }[];
+    }
+  | { kind: 'milestoneDecisionClosed'; requestId: string; action: string }
+  | { kind: 'milestoneProgress'; milestones: MilestoneView[] };
+
 export interface Conversation {
   id: string;
   runDir: string;

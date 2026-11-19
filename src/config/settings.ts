@@ -50,6 +50,7 @@ export const SETTINGS: Record<string, SettingDef> = {
   reviewDiffMaxChars: { type: 'number', min: 0, default: 40000 },
   maxReviewRounds: { type: 'number', min: 0, default: 2 },
   finalConfirmation: { type: 'boolean', default: true },
+  milestoneCommitMode: { type: 'enum', values: ['ask', 'automatic'], default: 'ask' },
   sensitiveModelPatterns: { type: 'list', default: ['big-pickle', 'stealth', ':free', '-free'] },
   destructivePatterns: { type: 'list', default: DEFAULT_DESTRUCTIVE_PATTERNS },
   deletionPatterns: { type: 'list', default: DEFAULT_DELETION_PATTERNS },

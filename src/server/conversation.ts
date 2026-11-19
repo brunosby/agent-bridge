@@ -1,3 +1,11 @@
+import { parseMilestoneMarkers } from '../../public/js/core/milestone-markers.js';
+import {
+  cancelMilestoneDecision,
+  finishMilestone,
+  observeMilestoneReview,
+  offerMilestonePlan,
+  restoreMilestoneViews,
+} from './milestones.ts';
 import { isTaskLifecycleKind, readAgentTaskEvent } from '../core/task-events.ts';
 // Conversation lifecycle: open, close, restore, wire agent events, approvals timeout, token limit, settings.
 import type { Agent, AgentEvent, AgentSpec, Conversation, RoutingMode } from '../core/types.ts';
@@ -93,12 +101,14 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
   S.conv.project = Object.fromEntries(Object.entries(S.conv.project).filter(([cwd]) => activePaths.has(cwd)));
   for (const cwd of activePaths) captureProject(S.conv, cwd, !saved);
   if (!saved) publish({ kind: 'projectBaseline', project: S.conv.project });
+  else restoreMilestoneViews(S.conv, saved.events.findLast((event) => event.kind === 'milestoneProgress')?.milestones);
   return { saved };
 }
 
 export async function closeConversation() {
   if (!S.conv) return;
   const old = S.conv;
+  cancelMilestoneDecision(old, 'closed');
   S.conv = null as unknown as Conversation;
   for (const t of approvalTimers.values()) clearTimeout(t);
   approvalTimers.clear();
@@ -195,6 +205,13 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       publish({ kind: 'info', agent: id, text: 'Ignored a malformed provider task event.' });
       return;
     }
+    const finishedTasks =
+      lifecycle?.kind === 'turnEnd'
+        ? lifecycle.taskIds.flatMap((taskId) => {
+            const task = owner.tasks.get(taskId);
+            return task?.agent === id ? [task] : [];
+          })
+        : [];
     if (lifecycle) {
       for (const taskId of lifecycle.taskIds) {
         const task = owner.tasks.get(taskId);
@@ -239,7 +256,8 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       owner.testResults = [...owner.testResults.slice(-39), result];
       publish({ kind: 'observedTest', result });
     }
-    const markers = (ev.kind === 'text' || ev.kind === 'turnEnd') && typeof ev.text === 'string' ? parseRoleMarkers(ev.text) : null;
+    const milestone = (ev.kind === 'text' || ev.kind === 'turnEnd') && typeof ev.text === 'string' ? parseMilestoneMarkers(ev.text) : null;
+    const markers = milestone ? parseRoleMarkers(milestone.text) : null;
     const clean = markers ? { ...ev, text: markers.text } : ev;
     const published = publish(clean);
     if (ev.kind === 'text' && ev.final && published.seq) owner.lastAnswerSeq[id] = published.seq;
@@ -248,6 +266,24 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       delete owner.lastAnswerSeq[id];
       if (markers?.incomplete) publish({ kind: 'info', agent: id, text: 'Incomplete role recommendation ignored.' });
       if (markers?.roles.length && offerRecommendedRoles(owner, id, markers.roles)) return;
+      const role = owner.team.find((member) => member.id === id)?.role;
+      const delegatedReview =
+        role === 'reviewer' &&
+        finishedTasks.some(({ from }) => owner.team.some((member) => member.id === from && member.role === 'orchestrator'));
+      if (delegatedReview) observeMilestoneReview(owner, lifecycle.ok ? lifecycle.text : 'CHANGES REQUESTED');
+      if (milestone && owner.routingMode === 'orchestrator' && role === 'orchestrator' && finishedTasks.length && lifecycle.ok) {
+        if (milestone.invalid) publish({ kind: 'info', agent: id, text: 'Ignored a malformed milestone declaration.' });
+        else if (milestone.proposed) {
+          try {
+            if (offerMilestonePlan(owner, id, milestone.proposed)) return;
+          } catch (error) {
+            publish({ kind: 'info', agent: id, text: error instanceof Error ? error.message : 'Invalid milestone plan.' });
+          }
+        } else if (milestone.number !== null) {
+          void finishMilestone(owner, id, milestone.number, markers?.text.trim() || '');
+          return;
+        }
+      }
       onTurnEnd(id, { ...lifecycle, text: markers?.text ?? lifecycle.text, seq: published.seq, sourceSeq });
     }
     if (lifecycle?.kind === 'tasksCancelled') cancelBatchPart(owner, id, 'cancelled: provider interrupted the task', lifecycle.taskIds);

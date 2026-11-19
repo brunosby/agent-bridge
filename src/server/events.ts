@@ -1,3 +1,4 @@
+import { milestoneCommitAvailable, milestoneViews } from './milestones.ts';
 // Event bus: everything the page shows goes through publish() and the state snapshot.
 import type { Agent, AgentSpec, BridgeEvent, ModelInfo } from '../core/types.ts';
 import type { ServerResponse } from 'node:http';
@@ -15,7 +16,8 @@ export function publish(ev: BridgeEvent): BridgeEvent {
   const full: BridgeEvent = { seq: ++S.seq, at: Date.now(), ...ev };
   S.history.push(full);
   if (S.history.length > 20000) S.history.splice(0, S.history.length - 20000);
-  S.conv?.transcript.write(JSON.stringify(full) + '\n');
+  const saved = full.kind === 'milestonePlanProposed' ? { ...full, command: '', commandSaved: false } : full;
+  S.conv?.transcript.write(JSON.stringify(saved) + '\n');
   if (full.kind === 'error') logError(full.agent ? agentName(full.agent) : 'bridge', full.text);
   const line = `data: ${JSON.stringify(full)}\n\n`;
   if (full.kind !== 'projectBaseline') for (const res of clients) res.write(line);
@@ -86,6 +88,8 @@ export function stateEvent() {
     kind: 'state',
     tasks: [...S.conv.tasks.values()],
     project: projectLabel(S.conv),
+    milestones: milestoneViews(S.conv),
+    milestoneCommitAvailable: milestoneCommitAvailable(S.conv),
     conversationId: S.conv.id,
     workDir: S.conv.workDir,
     routingMode: S.conv.routingMode,

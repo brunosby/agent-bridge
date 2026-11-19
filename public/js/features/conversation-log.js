@@ -1,3 +1,5 @@
+import { parseMilestoneMarkers } from '../core/milestone-markers.js';
+import { milestoneCommitCard, milestonePlanCard, renderMilestoneProgress } from './milestones.js';
 // Convert incoming events to transcript entries and update their views in frame-sized batches.
 import { agentOf, approvals, driverOf, label, roleOf, store } from '../core/store.js';
 import { $, h, log, renderMarkdown, time } from '../core/dom.js';
@@ -137,7 +139,7 @@ function message(ev) {
   if (user) transcript.update(entry, ev.text);
   else {
     entry.rawMessage = ev.kind === 'delta' ? (entry.rawMessage || '') + ev.text : ev.text;
-    transcript.update(entry, parseRoleMarkers(entry.rawMessage).text);
+    transcript.update(entry, parseRoleMarkers(parseMilestoneMarkers(entry.rawMessage).text).text);
   }
   dirty.add(entry);
   if (isNew && !replaying && !follow && transcript.matches(entry, ...filterOptions())) unread += 1;
@@ -286,6 +288,7 @@ export function handle(ev) {
       previousScroll = scrollPosition();
       resetResults();
       approvals.clear();
+      renderMilestoneProgress();
       updatePending();
       showUnread();
       break;
@@ -304,6 +307,7 @@ export function handle(ev) {
       break;
     case 'state':
       store.state = ev;
+      renderMilestoneProgress(ev.milestones);
       renderState();
       updateComposer();
       break;
@@ -363,6 +367,14 @@ export function handle(ev) {
       renderNeedRole(ev);
       addLine(ev, 'approval', 'sys', label(ev.agent) + ' asked for ' + ev.roleName, [ev.agent]);
       break;
+    case 'milestonePlanProposed':
+    case 'milestoneCommitProposed': {
+      const card = ev.kind === 'milestonePlanProposed' ? milestonePlanCard(ev) : milestoneCommitCard(ev);
+      approvals.set(ev.requestId, card);
+      $('pending').append(card);
+      updatePending();
+      break;
+    }
     case 'recommendRoles':
       renderRoleRecommendation(ev);
       addLine(ev, 'approval', 'sys', label(ev.agent) + ' suggested additional roles', [ev.agent]);
@@ -374,6 +386,7 @@ export function handle(ev) {
     case 'finalReviewClosed':
     case 'needRoleClosed':
     case 'recommendRolesClosed':
+    case 'milestoneDecisionClosed':
     case 'approvalClosed': {
       const el = approvals.get(ev.requestId);
       if (!el) break;

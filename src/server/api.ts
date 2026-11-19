@@ -1,3 +1,4 @@
+import { cancelMilestoneDecision, resolveMilestoneCommit, resolveMilestonePlan } from './milestones.ts';
 // API actions called by the page.
 import type { Agent, RoutingMode } from '../core/types.ts';
 import { S } from './state.ts';
@@ -95,6 +96,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       if (Number.isFinite(body.maxHops) && body.maxHops >= 0) relay.maxHops = body.maxHops;
       if (body.resume) {
         clearRoleDecisions(S.conv, 'resume');
+        cancelMilestoneDecision(S.conv, 'resume');
         S.conv.relay.halted = S.conv.relay.userPaused = false;
         S.conv.relay.hops = 0;
       }
@@ -104,6 +106,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
     case 'routing': {
       if (typeof body.mode !== 'string' || !Object.hasOwn(ROUTING_MODES, body.mode)) throw new Error('unknown routing mode');
       const mode = ROUTING_MODES[body.mode as RoutingMode];
+      if (S.conv.routingMode !== body.mode) cancelMilestoneDecision(S.conv, 'routing changed');
       S.conv.routingMode = body.mode as RoutingMode;
       S.conv.rosterVersion++;
       publish({ kind: 'system', text: `Routing: ${mode.label}. ${mode.rule}` });
@@ -185,6 +188,15 @@ export async function api(action: string, body: Record<string, any>): Promise<un
         throw new Error('invalid recommendation decision');
       return resolveRecommendedRoles(requestId, selected);
     }
+    case 'resolveMilestonePlan':
+    case 'resolveMilestoneCommit': {
+      const { requestId, action: decision } = body;
+      if (typeof requestId !== 'string' || (decision !== 'approve' && decision !== 'dismiss'))
+        throw new Error('Invalid milestone decision.');
+      if (action === 'resolveMilestonePlan') await resolveMilestonePlan(S.conv, requestId, decision, body.milestones, body.command);
+      else await resolveMilestoneCommit(S.conv, requestId, decision);
+      return { ok: true };
+    }
     case 'interrupt': {
       textField(body.agent, 'agent ID', true);
       const owner = S.conv;
@@ -192,6 +204,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       if (!body.agent) {
         owner.batch = null;
         owner.relay.halted = owner.relay.userPaused = true;
+        cancelMilestoneDecision(owner, 'stop');
       } else cancelBatchPart(owner, body.agent, 'cancelled: stopped by the user');
       await Promise.all(ids.map((id) => agents[id]?.interrupt()));
       if (S.conv === owner) {

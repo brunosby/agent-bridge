@@ -84,7 +84,7 @@ async function readPatch(client: Client, args: unknown, current: () => boolean) 
   if (review.omitted.has(path) || isReviewExcluded(path, config.reviewDiffExcludePatterns))
     return toolText('Omitted because this path may contain sensitive data.', true);
   if (!review.files.has(path)) return toolText('File is outside the review list.', true);
-  const changes = await reviewChanges(review.dir, config.reviewDiffExcludePatterns, path);
+  const changes = await reviewChanges(review.dir, config.reviewDiffExcludePatterns, { onlyPath: path });
   if (!current() || client.review !== review) return toolText('Review closed or unavailable.', true);
   if (changes?.omittedPaths.includes(path)) return toolText('Omitted because this path may contain sensitive data.', true);
   const patch = changes?.patch;

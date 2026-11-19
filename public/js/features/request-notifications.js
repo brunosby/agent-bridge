@@ -8,8 +8,10 @@ const NOTICES = {
   needRole: ['needs another role', 'Choose how to continue in Agent Bridge.'],
   recommendRoles: ['recommends adding roles', 'Review the suggested team in Agent Bridge.'],
   finalReview: ['requests final confirmation', 'Review the result in Agent Bridge.'],
+  milestonePlanProposed: ['requests milestone plan approval', 'Review the proposed milestones in Agent Bridge.'],
+  milestoneCommitProposed: ['requests milestone commit approval', 'Review the selected files in Agent Bridge.'],
 };
-const CLOSED = new Set(['approvalClosed', 'needRoleClosed', 'recommendRolesClosed', 'finalReviewClosed']);
+const CLOSED = new Set(['approvalClosed', 'needRoleClosed', 'recommendRolesClosed', 'finalReviewClosed', 'milestoneDecisionClosed']);
 let notifier;
 
 function read(browser, key) {
