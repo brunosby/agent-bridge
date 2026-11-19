@@ -6,7 +6,7 @@ You talk to an orchestrator; it hands tasks to the other agents by role (coder, 
 
 ## Quick start
 
-1. **Requirements:** Windows, [Node.js](https://nodejs.org) 22.18+, and the CLI of at least one provider: [Claude Code](https://code.claude.com/docs/en/setup), [Codex](https://developers.openai.com/codex/cli) or [OpenCode](https://opencode.ai/docs/). No `npm install` needed to use it.
+1. **Requirements:** Windows, Node.js 22.18+, and the CLI of at least one provider: Claude Code, Codex or OpenCode (**Settings > Accounts** shows the install command for each). No `npm install` needed to use it.
 2. **Open:** double-click `Agent Bridge.vbs` and choose the project folder. The page opens in your browser; there is no console window.
 3. **Check your accounts:** **Settings > Accounts** shows, per provider, whether the CLI is installed and signed in, with the next step (install command or a **Sign in** button that opens the CLI's own login).
 4. **Write your request** in the box at the bottom and press `Ctrl+Enter`.
@@ -61,8 +61,6 @@ Use **Restart** and **Quit** at the top of the page to restart or close the app.
 Models are listed from your own account. Unavailable ones are greyed out: a provider that is not connected, no access, a usage limit, or a broken CLI.
 
 **OpenCode free models** (Big Pickle, DeepSeek V4.1 Flash Free and others) work without any account. Only free models are enabled by default (`opencode.freeOnly` in `config.json`). They show ⚠ because the provider may use prompts to improve them, so avoid sensitive code with them. Other providers can be connected through OpenCode with a login or an API key, for example DeepSeek or OpenRouter.
-
-[9router](https://github.com/decolua/9router), a local router that reuses subscription logins of other tools, can be added to OpenCode as an OpenAI-compatible provider. Agent Bridge does not set it up, because reusing subscriptions that way may go against those providers' terms of use.
 
 **Codex history.** Codex threads opened by Agent Bridge are named `Agent Bridge · <folder> · <agent>` and archived when the conversation closes, so they leave the thread list of Codex and the ChatGPT app; restoring the conversation brings them back. Set `codex.archiveOnClose` to `false` in `config.json` to keep them listed.
 

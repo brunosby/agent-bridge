@@ -7,7 +7,7 @@ rem   agent-bridge.cmd --resume                (reopen the last conversation)
 
 where node >nul 2>nul
 if errorlevel 1 (
-  echo Node.js 22.18+ is required: https://nodejs.org
+  echo Node.js 22.18+ is required.
   pause
   exit /b 1
 )

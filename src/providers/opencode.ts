@@ -8,7 +8,7 @@ import type { Agent, AgentInput, AgentOptions, DriverConfig, ModelInfo, Reconfig
 import { clip } from './claude.ts';
 
 /**
- * Drives OpenCode through its official HTTP server (`opencode serve`, https://opencode.ai/docs/server/).
+ * Drives OpenCode through its official HTTP server (`opencode serve`).
  * One server per agent, bound to 127.0.0.1 with a random password (OPENCODE_SERVER_PASSWORD).
  *
  * - Models: GET /provider -> { all, default, connected }. Models of providers that are not connected
