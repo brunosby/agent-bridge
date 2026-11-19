@@ -1,5 +1,4 @@
 import { execFile, spawnSync } from 'node:child_process';
-import path from 'node:path';
 import type { GitSnapshot } from '../core/types.ts';
 import { globMatch } from '../core/roles.ts';
 
@@ -30,11 +29,15 @@ function gitAsync(cwd: string, args: string[]): Promise<string | null> {
 }
 
 export async function reviewChanges(cwd: string, excluded: unknown) {
-  const root = (await gitAsync(cwd, ['rev-parse', '--show-toplevel']))?.trim();
-  if (!root) return null;
-  const relative = path.relative(root, cwd).split(path.sep).join('/');
-  if (relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) return null;
-  const prefix = relative ? relative + '/' : '';
+  // Git resolves junctions and alternate path spellings before reporting its root and prefix.
+  const [rootOutput, prefixOutput] = await Promise.all([
+    gitAsync(cwd, ['rev-parse', '--show-toplevel']),
+    gitAsync(cwd, ['rev-parse', '--show-prefix']),
+  ]);
+  const root = rootOutput?.replace(/\r?\n$/, '');
+  if (!root || prefixOutput === null) return null;
+  const prefix = prefixOutput.replace(/\r?\n$/, '');
+  const relative = prefix.replace(/\/$/, '');
   const withinScope = (name: string) => name.startsWith(prefix);
   const excludedPath = (name: string) =>
     isReviewExcluded(name, excluded) || (prefix && withinScope(name) && isReviewExcluded(name.slice(prefix.length), excluded));

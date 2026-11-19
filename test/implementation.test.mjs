@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { startBridge } from './helpers/bridge.mjs';
-import { isReviewExcluded } from '../src/workspace/git-context.ts';
+import { isReviewExcluded, reviewChanges } from '../src/workspace/git-context.ts';
 import { resolveRecipients } from '../src/core/recipients.ts';
 import { Transcript } from '../public/js/core/transcript.js';
 
@@ -203,4 +203,30 @@ test('large reviewer patches fall back to filtered metadata at a configurable li
   } finally {
     await b.stop();
   }
+});
+
+test('review diff resolves Git scope when the working directory is a junction or symlink', async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-review-scope-'));
+  const real = path.join(fixture, 'repo');
+  const alias = path.join(fixture, 'alias');
+  fs.mkdirSync(path.join(real, 'nested'), { recursive: true });
+  const git = (...args) => execFileSync('git', args, { cwd: real, stdio: 'ignore' });
+  git('init');
+  fs.writeFileSync(path.join(real, 'outside.txt'), 'base outside');
+  fs.writeFileSync(path.join(real, 'nested', 'inside.txt'), 'base inside');
+  git('add', '.');
+  git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Fixture');
+  fs.writeFileSync(path.join(real, 'outside.txt'), 'outside content');
+  fs.writeFileSync(path.join(real, 'nested', 'inside.txt'), 'inside content');
+  fs.symlinkSync(real, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const atRoot = await reviewChanges(alias, []);
+  assert.match(atRoot?.patch || '', /outside content/);
+  assert.match(atRoot?.patch || '', /inside content/);
+  const nested = await reviewChanges(path.join(alias, 'nested'), []);
+  assert.match(nested?.patch || '', /inside content/);
+  assert.doesNotMatch(nested?.patch || '', /outside content/);
+  assert.deepEqual(
+    nested?.files.map((file) => file.names),
+    [['inside.txt']],
+  );
 });
