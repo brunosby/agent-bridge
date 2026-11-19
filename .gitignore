@@ -2,3 +2,4 @@
 config.local.json
 logs/
 node_modules/
+/dev-notes/
