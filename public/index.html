@@ -97,11 +97,17 @@
               <option value="error">Errors</option>
               <option value="approval">Decisions and requests</option>
             </select>
-            <input id="logSearch" type="search" aria-label="Search loaded conversation" placeholder="Search loaded entries" />
+            <input id="logSearch" type="search" aria-label="Search conversation" placeholder="Search conversation" />
             <button id="searchPrev" aria-label="Previous result">↑</button>
             <button id="searchNext" aria-label="Next result">↓</button>
             <output id="searchPosition" aria-live="polite"></output>
+            <button id="searchSavedHistory" class="btn" aria-controls="savedSearchResults" disabled>Search saved history</button>
           </div>
+          <section id="savedSearchResults" class="saved-search" aria-label="Saved history results" hidden>
+            <output id="savedSearchStatus" class="hint" aria-live="polite"></output>
+            <ol id="savedSearchMatches" class="saved-search__matches"></ol>
+            <button id="savedSearchMore" class="btn" hidden>More results</button>
+          </section>
         </details>
         <main id="log" class="log" aria-live="polite" aria-label="Conversation" tabindex="0"></main>
         <button id="returnToEnd" class="btn" hidden>Back to end</button>

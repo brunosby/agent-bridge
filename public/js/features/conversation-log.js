@@ -5,6 +5,7 @@ import { Transcript } from '../core/transcript.js';
 import { renderApproval, renderFinalReview, renderNeedRole, updatePending } from './approvals.js';
 import { renderState } from './agents.js';
 import { updateComposer } from './controls.js';
+import { bindSavedSearch } from './transcript-search.js';
 
 const transcript = new Transcript();
 const views = new Map();
@@ -20,6 +21,7 @@ let previousScroll = scrollPosition();
 let results = null;
 let resultIndex = -1;
 let selected = null;
+const resetSavedSearch = bindSavedSearch({ isLoaded: (seq) => transcript.bySequence.has(seq), open: jumpToSequence });
 
 function filterOptions() {
   return [$('logSearch').value.trim().toLowerCase(), $('logMode').value, $('logAgent').value, $('logCategory').value];
@@ -270,6 +272,7 @@ export function handle(ev) {
       allAgents.value = '';
       $('logAgent').replaceChildren(allAgents);
       $('logSearch').value = '';
+      resetSavedSearch();
       $('logCategory').value = '';
       unread = 0;
       replaying = true;

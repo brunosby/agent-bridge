@@ -21,6 +21,7 @@ import {
 import { loadRoles } from '../core/roles.ts';
 import { PROVIDERS, cliStatus, mergeStatus, nextStep, openLoginTerminal } from '../providers/accounts.ts';
 import { listConversations, removeConversation } from '../core/history.ts';
+import { searchSavedTranscript } from '../core/transcript-search.ts';
 import { restartServer, shutdown } from '../cli/main.ts';
 import { codeChanged } from './http.ts';
 /** Handle one API call from the page. Returns the JSON answer; throws to send an error. */
@@ -266,6 +267,13 @@ export async function api(action: string, body: Record<string, any>): Promise<un
         text: `Opened a terminal running "${command}". Finish the sign-in there, then press Check again in Settings > Accounts.`,
       });
       return { ok: true };
+    }
+    case 'searchTranscript': {
+      const owner = S.conv;
+      if (!owner) throw new Error('no conversation is open');
+      const result = await searchSavedTranscript(LOGS_DIR, owner, body);
+      if (S.conv !== owner) throw new Error('conversation changed during search');
+      return result;
     }
     case 'conversations':
       return { current: S.conv?.id || null, conversations: listConversations(LOGS_DIR) };
