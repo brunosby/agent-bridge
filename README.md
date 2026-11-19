@@ -15,21 +15,35 @@ Use **Restart** and **Quit** at the top of the page to restart or close the app.
 
 ## Using it
 
-**The team.** Each agent has a card at the top with its role, model, effort level, bypass switch, tokens used, **Stop** and **✕**. The default team is Claude as Orchestrator and Codex as Coder. **+ Add agent** adds more (several from the same provider are fine); the form suggests a name (`Provider-Role`), lists the models of that provider and marks recommendations both ways: ★ models for the chosen role, ★ roles for the chosen model.
+**The team.** The **Workspace** sidebar shows each agent with its role, model and status. Select a card for details and controls. Drag the sidebar edge to resize it on wide screens, or open it with **Workspace** on narrow screens. The default team is Claude as Orchestrator and Codex as Coder. **+ Add agent** adds more agents, including several from the same provider. The form suggests a name (`Provider-Role`) and marks recommended models for the selected role and recommended roles for the selected model.
 
-**Messages.** Your message goes to the orchestrator by default. Pick another agent in the box's menu, start the message with `@Name`, or send it to all.
+**Messages.** The message box starts at one line and grows as you type. Use **Send to** to choose an agent or the whole team. **Auto** routes to the orchestrator by default and follows leading `@Name` mentions. The preview highlights changes to the expected recipient and routing problems before you send. Agent messages align left and your messages align right. Press `Shift+Enter` for a new line or `Ctrl+Enter` (`Cmd+Enter` on macOS) to send while mention suggestions are open.
 
-**Routing.** By default the orchestrator delegates with `@Name`, every other agent answers the orchestrator, and the results of parallel tasks reach it together in one message. Other modes are in the header's **Routing** menu: free mentions, fixed pipeline and round robin.
+**Routing.** By default the orchestrator delegates with `@Name`, every other agent answers the orchestrator, and the results of parallel tasks reach it together in one message. The **Routing** section in **Workspace** also offers free mentions, fixed pipeline and round robin.
 
 **Approvals.** Permission requests from any agent appear in a yellow panel above the message box (**Allow once**, **Allow for session**, **Decline**). Unanswered requests are declined after 2 minutes and the agent carries on. **Bypass** on a card approves automatically, except destructive actions and deletions outside the project folder.
 
-**Finishing.** When the work is done, a card shows the orchestrator's summary with **Approve** and **Ask for changes**. Hand-offs also stop at the hand-off limit, at the token limit, or when you press **Pause** / **Stop all**; send a message or press **Resume** to continue.
+**Notifications.** In **Settings > General**, **Enable browser notifications** lets your browser alert you to pending approvals, role decisions, milestone decisions and final review while the page is hidden or unfocused. Keep an app tab open to receive them. A single tab sends each notification once.
+
+**Finishing.** With final confirmation enabled, an **Approve** / **Ask for changes** card appears when Git detects file changes since your last message. In folders without Git, a reported successful edit can trigger the card. Restored work without an earlier snapshot can still need your approval. Hand-offs also stop at the hand-off limit, at the token limit, or when you press **Pause** or **Stop all**. Send a message or press **Resume** to continue.
 
 **Conversations.** Everything is saved. **Conversations** lists earlier conversations: **Restore** brings back the messages and the whole team with its sessions; **New conversation** starts fresh, optionally in another folder.
 
-**Conversation history.** The filter panel can show messages or all activity and search the entries loaded in the current conversation. Successful tool calls are grouped, while failures stay visible. The recipient preview uses the same rule as Send. Drafts are kept per conversation in the current browser tab.
+**Conversation history.** The chat opens at the end. Scrolling up while an agent writes keeps your position, and **Back to end** shows how many messages arrived. The filter panel searches loaded messages or activity. **Search saved history** also finds older messages and shows an excerpt for results outside the loaded chat. Successful tool calls are grouped and failures stay visible. Drafts are kept per conversation in the current browser tab.
 
-**Reviewer context.** The Bridge excludes common secret paths before requesting the reviewer patch. Add repository-relative globs or filename patterns to the `reviewDiffExcludePatterns` array in `config.local.json` for project-specific exclusions. The final review shows observed Git paths and status separately from the agent summary, without including file content.
+**Reviewer context.** The Bridge excludes common secret paths before requesting the reviewer patch. Add repository-relative globs or filename patterns to the `reviewDiffExcludePatterns` array in `config.local.json` for project-specific exclusions. The final review shows observed Git paths and status separately from the agent summary, without including file content. When the diff is over the size limit, the Reviewer can read one listed file at a time through the Bridge's `bridge_diff` tool, with the same exclusions. The tool was verified with Claude Code, Codex and OpenCode. A client without access to the tool still receives the file list.
+
+## Milestones
+
+In orchestrator mode, substantial Git work can be split into milestones with a completion criterion for each one. Review and edit the proposed plan before approving it. The **Milestones** panel shows progress and commit IDs. Creating commits requires a Git workspace on a branch with an existing commit.
+
+When approving the plan, you can choose a verification command. Agent Bridge suggests one for recognised projects and remembers your choice per project in `config.local.json`. If set, the command runs in each workspace with files eligible for the milestone. The commit also requires that pending tasks and approvals are resolved and that the Reviewer has approved the milestone when one is on the team.
+
+In **Settings > General > Commit at milestones**, **Ask me** is the default. **Automatic** commits after the required checks pass. If the plan has no verification command and the team has no Reviewer, each commit still requires your approval.
+
+Milestone commits include eligible changes made since the milestone began. Agent Bridge preserves pre-existing changes and staged work, excludes secret paths using the reviewer exclusion rules, and prevents Git hooks from expanding the approved set of paths. It uses your Git identity and commits on each affected Git workspace's branch. Commits stay local.
+
+The last milestone opens the final review. Restoring a conversation shows its recorded milestone progress. Approve a new plan to resume unfinished milestone work.
 
 ## Roles
 
@@ -46,6 +60,8 @@ Use **Restart** and **Quit** at the top of the page to restart or close the app.
 - The orchestrator **sizes the team to the request**: one agent for small things, Coder then Reviewer for normal changes, the others only for large work.
 - **Review loop:** CHANGES REQUESTED goes back to the coder for up to 2 rounds; after that the orchestrator reports the open findings to you.
 - **Missing role:** if the task needs a role nobody has, the page asks whether to add it (with a recommended model) or continue with the closest agent.
+- **Recommended roles:** for substantial work, the orchestrator can suggest up to three roles with a reason each. You choose which to add; nothing is added on its own (**Settings > General > Recommend roles**).
+- **Unavailable agents** (failed to start, signed out, no access, usage limit) stay visible with the reason and **Retry**, but the orchestrator does not delegate to them until they are ready.
 - **Profiles:** Orchestrator and Coder use your full setup (hooks, skills, plugins, CLAUDE.md). The other roles run lean: no hooks and no skills, except the ones you allow for the role in **Settings > Roles** (Claude and OpenCode agents). This keeps a support role from loading a workflow skill that conflicts with its job.
 - **Researcher** opens at most 3 pages per question, so long pages do not fill the model's context. Its card warns when the chosen model has a context window of 200k tokens or less.
 - Roles live in `roles/`, one JSON file each; copy one to create a new role.
@@ -76,7 +92,7 @@ Effort levels follow the selected model (Claude and Codex). The per-role step li
 
 ## Configuration
 
-**Settings > General** (saved to `config.json`): your name, default routing, auto-relay, hand-off limit, token limit (counts new tokens; cached tokens are shown apart because they cost much less), review rounds, final confirmation, missing-role behaviour, approval timeout, bypass for new agents, and the safety patterns. **Save the current team as the default** sets the team for new conversations.
+**Settings > General** saves local settings to `config.local.json`. You can set your name, the default routing, auto-relay, the hand-off and new-token limits, review rounds, final confirmation, role recommendations, missing-role behaviour, milestone commit approval, the approval timeout, bypass for new agents, and safety patterns. **Save the current team as the default** sets the team for new conversations.
 
 Launcher options (`wscript "Agent Bridge.vbs" ...` or `agent-bridge.cmd ...`, which keeps a console window):
 
