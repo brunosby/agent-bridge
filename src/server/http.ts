@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { APP_DIR, PUBLIC_DIR } from '../config/settings.ts';
 import { logError, publish, publishState, replayHistory, snapshotLine } from './events.ts';
-import { clients } from './state.ts';
+import { clients, S } from './state.ts';
+import { serveReviewMcp } from './review-mcp.ts';
 import { api } from './api.ts';
 export const token = crypto.randomBytes(18).toString('hex');
 export const SRC_DIR = path.join(APP_DIR, 'src');
@@ -44,6 +45,13 @@ export const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
     pathname = url.pathname;
+    if (pathname === '/mcp/review')
+      return await serveReviewMcp(
+        req,
+        res,
+        () => S.conv,
+        () => readJson(req),
+      );
     if (req.method === 'GET' && url.pathname === '/events') {
       if (url.searchParams.get('token') !== token) return send(res, 403, 'forbidden');
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });

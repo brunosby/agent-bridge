@@ -11,6 +11,7 @@ import { closeConversation, openConversation, startAgents } from '../server/conv
 import { logError, publish, publishState } from '../server/events.ts';
 import { clients } from '../server/state.ts';
 import { server } from '../server/http.ts';
+import { setReviewMcpPort } from '../server/review-mcp.ts';
 import { ROUTING_MODES } from '../core/prompts.ts';
 setupLogFile();
 
@@ -53,6 +54,7 @@ server.on('error', (err: NodeJS.ErrnoException) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
+  setReviewMcpPort(listeningPort());
   const address = `http://127.0.0.1:${listeningPort()}/`;
   console.log(`Agent Bridge running at ${address}`);
   console.log(`Working directory: ${S.conv.workDir}`);

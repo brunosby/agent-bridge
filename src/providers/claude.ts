@@ -33,7 +33,6 @@ export class ClaudeAgent extends EventEmitter implements Agent {
   available: boolean;
   unavailableReason: string | null;
   stderrTail: string;
-  gotOutput: boolean;
   sessionId: string | null;
   unconfirmed = new Map<string, string | undefined>();
   activeBatch: { uuid: string; taskIds: string[] } | null = null;
@@ -75,7 +74,6 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     this.available = true;
     this.unavailableReason = null;
     this.stderrTail = '';
-    this.gotOutput = false;
     this.cwd = cwd;
     this.config = config || {};
     this.systemPromptFile = systemPromptFile;
@@ -172,7 +170,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     this.emit('event', { agent: this.id, kind, ...data });
   }
 
-  buildArgs(): string[] {
+  buildArgs(reviewUrl?: string): string[] {
     const c = this.config;
     const args = [
       '-p',
@@ -196,9 +194,19 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     if (deny.length) args.push('--disallowedTools', deny.join(','));
     // Lean profile: no hooks (plugins' hooks run on every turn and change how support agents behave).
     if (this.profile === 'lean') args.push('--settings', JSON.stringify({ disableAllHooks: true }));
-    if (Array.isArray(c.allowedTools) && c.allowedTools.length) {
-      args.push('--allowedTools', c.allowedTools.join(','));
+    const allowed = Array.isArray(c.allowedTools) ? [...c.allowedTools] : [];
+    if (reviewUrl) {
+      allowed.push('mcp__bridge_review__bridge_diff');
+      args.push(
+        '--mcp-config',
+        JSON.stringify({
+          mcpServers: {
+            bridge_review: { type: 'http', url: reviewUrl, headers: { Authorization: 'Bearer ${AGENT_BRIDGE_REVIEW_TOKEN}' } },
+          },
+        }),
+      );
     }
+    if (allowed.length) args.push('--allowedTools', allowed.join(','));
     // Route permission prompts back to us as `can_use_tool` control requests (the channel the Agent SDK's canUseTool uses).
     if (c.permissionPrompts !== false) args.push('--permission-prompt-tool', 'stdio');
     if (this.systemPromptFile) args.push('--append-system-prompt-file', this.systemPromptFile);
@@ -209,11 +217,13 @@ export class ClaudeAgent extends EventEmitter implements Agent {
 
   start() {
     const command = this.config.command || 'claude';
-    const args = this.buildArgs();
+    const review = this.config.reviewMcp?.();
+    const args = this.buildArgs(review?.url);
     this.emitEvent('info', { text: `Starting: ${command} ${args.join(' ')}` });
     this.proc = spawnJsonl(command, args, {
       cwd: this.cwd,
       shell: false,
+      env: review ? { ...process.env, AGENT_BRIDGE_REVIEW_TOKEN: review.token } : process.env,
       onMessage: (m) => this.handle(m),
       onText: (t) => this.emitEvent('info', { text: t }),
       onStderr: (t) => {
@@ -222,7 +232,6 @@ export class ClaudeAgent extends EventEmitter implements Agent {
       },
       onExit: (code) => {
         const wasExpected = this.stopping;
-        const neverStarted = !this.gotOutput;
         this.stopping = false;
         this.proc = null;
         const taskIds = [...(this.activeBatch?.taskIds || []), ...this.unconfirmed.values()];
@@ -236,8 +245,8 @@ export class ClaudeAgent extends EventEmitter implements Agent {
           this.emitEvent('error', {
             text: `Claude process exited (code ${code}).${this.stderrTail.trim() ? ` ${this.stderrTail.trim().slice(-300)}` : ''}`,
           });
-        // A process that dies before producing any output usually means the CLI changed or is broken.
-        if (!wasExpected && neverStarted) this.markUnavailable(`Claude Code did not start (exit code ${code}).`);
+        // An unexpected exit is an explicit failure even if the CLI wrote output before it became ready.
+        if (!wasExpected) this.markUnavailable(`Claude Code stopped unexpectedly (exit code ${code}).`);
       },
     });
     // Same control message the Agent SDK sends first; its answer lists the models this account can use.
@@ -298,7 +307,6 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     this.restartWhenIdle = false;
     this.available = true;
     this.unavailableReason = null;
-    this.gotOutput = false;
     this.stderrTail = '';
     if (this.proc) {
       this.stopping = true;
@@ -335,7 +343,6 @@ export class ClaudeAgent extends EventEmitter implements Agent {
   }
 
   handle(m: any): void {
-    this.gotOutput = true;
     switch (m.type) {
       case 'control_request':
         this.handleControlRequest(m);

@@ -21,6 +21,7 @@ import { captureProject } from './project.ts';
 import { createWorktree } from '../workspace/worktree.ts';
 import { globMatch } from '../core/roles.ts';
 import { startAndWait, statusOf } from './agent-lifecycle.ts';
+import { configureReviewMcp, revokeReviewClient } from './review-mcp.ts';
 /** Team used for a new conversation: config.defaultTeam, else the old mainAgent setting. */
 export function defaultTeam() {
   if (Array.isArray(config.defaultTeam) && config.defaultTeam.length) return config.defaultTeam.map((a) => ({ ...a }));
@@ -113,7 +114,11 @@ export function createAgent(spec: AgentSpec): Agent {
     userName: setting('userName'),
     extra: config[spec.driver]?.instructions,
   });
-  const base = { ...(config[spec.driver] || {}) };
+  const owner = S.conv;
+  const base = {
+    ...(config[spec.driver] || {}),
+    reviewMcp: () => configureReviewMcp(owner, spec.id, () => S.roles[spec.role]?.context === 'diff'),
+  };
   if (spec.model && spec.model !== 'default') base.model = spec.model;
   if (spec.effort) base.effort = spec.effort;
   let agent: Agent;
@@ -189,8 +194,8 @@ export async function addAgent(
   waitUntilReady = false,
 ): Promise<AgentSpec> {
   const owner = S.conv;
-  if (!DRIVERS[driver]) throw new Error(`unknown provider ${driver}`);
-  if (!S.roles[role]) throw new Error(`unknown role ${role}`);
+  if (!Object.hasOwn(DRIVERS, driver)) throw new Error(`unknown provider ${driver}`);
+  if (!Object.hasOwn(S.roles, role)) throw new Error(`unknown role ${role}`);
   const spec: AgentSpec = {
     id: `a${++S.conv.nextAgent}`,
     name: uniqueName(name || defaultName(driver, role)),
@@ -227,6 +232,7 @@ export async function removeAgent(id: string): Promise<void> {
   if (S.conv.team.length === 1) throw new Error('a conversation needs at least one agent');
   const [spec] = S.conv.team.splice(idx, 1);
   const agent = S.conv.agents[id];
+  revokeReviewClient(owner, id);
   delete S.conv.agents[id];
   const taskIds = [...S.conv.tasks.values()].filter((task) => task.agent === id).map((task) => task.id);
   for (const taskId of taskIds) S.conv.tasks.delete(taskId);
@@ -240,7 +246,7 @@ export async function removeAgent(id: string): Promise<void> {
 
 export async function setRole(id: string, roleId: string): Promise<void> {
   const spec = S.conv.team.find((a) => a.id === id);
-  if (!spec || !S.roles[roleId]) throw new Error('unknown agent or role');
+  if (!spec || !Object.hasOwn(S.roles, roleId)) throw new Error('unknown agent or role');
   spec.role = roleId;
   const role = S.roles[roleId];
   const agent = S.conv.agents[id];

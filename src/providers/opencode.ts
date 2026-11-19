@@ -201,11 +201,30 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     this.emitEvent('info', { text: `Starting: ${command} ${args.join(' ')}` });
     const isWin = process.platform === 'win32';
     this.stopping = false;
+    const review = this.config.reviewMcp?.();
+    const env: NodeJS.ProcessEnv = { ...process.env, OPENCODE_SERVER_PASSWORD: this.password };
+    if (review) {
+      try {
+        const overrides = JSON.parse(env.OPENCODE_CONFIG_CONTENT || '{}');
+        const server = {
+          type: 'remote',
+          url: review.url,
+          enabled: true,
+          oauth: false,
+          headers: { Authorization: 'Bearer ' + review.token },
+        };
+        const mcp = overrides.mcp || {};
+        overrides.mcp = mcp.servers ? { ...mcp, servers: { ...mcp.servers, bridge_review: server } } : { ...mcp, bridge_review: server };
+        env.OPENCODE_CONFIG_CONTENT = JSON.stringify(overrides);
+      } catch {
+        // Preserve the user's existing OpenCode configuration if it is not JSON.
+      }
+    }
     this.proc = spawn(isWin ? 'cmd.exe' : command, isWin ? ['/d', '/s', '/c', command, ...args] : args, {
       cwd: this.cwd,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, OPENCODE_SERVER_PASSWORD: this.password },
+      env,
     });
     this.proc.stdout?.on('data', (d) => this.emitEvent('stderr', { text: String(d) }));
     this.proc.stderr?.on('data', (d) => this.emitEvent('stderr', { text: String(d) }));
@@ -241,6 +260,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
       await sleep(400);
     }
 
+    if (review) await this.http('GET', '/mcp').catch(() => {});
     await this.loadModels();
     if (this.sessionId) {
       try {

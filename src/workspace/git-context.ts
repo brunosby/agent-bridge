@@ -20,15 +20,15 @@ export function isReviewExcluded(file: string, configured: unknown = []): boolea
   });
 }
 
-function gitAsync(cwd: string, args: string[]): Promise<string | null> {
+function gitAsync(cwd: string, args: string[], patchExit = false): Promise<string | null> {
   return new Promise((resolve) => {
     execFile('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 15000, maxBuffer: 20 * 1024 * 1024 }, (error, stdout) =>
-      resolve(error ? null : stdout),
+      resolve(!error || (patchExit && error.code === 1) ? stdout : null),
     );
   });
 }
 
-export async function reviewChanges(cwd: string, excluded: unknown) {
+export async function reviewChanges(cwd: string, excluded: unknown, onlyPath?: string) {
   // Git resolves junctions and alternate path spellings before reporting its root and prefix.
   const [rootOutput, prefixOutput] = await Promise.all([
     gitAsync(cwd, ['rev-parse', '--show-toplevel']),
@@ -49,18 +49,22 @@ export async function reviewChanges(cwd: string, excluded: unknown) {
   const records = tracked.split('\0').filter(Boolean);
   const files: { status: string; names: string[] }[] = [];
   const denied = new Set<string>();
+  let unresolvedSensitiveRemoval = false;
   for (let index = 0; index < records.length;) {
     const status = records[index++];
     const names = records.slice(index, index + (/^[RC]/.test(status) ? 2 : 1));
     index += names.length;
     if (!names.length) break;
+    const sensitive = names.some(excludedPath);
+    if (status.startsWith('D') && sensitive) unresolvedSensitiveRemoval = true;
     if (!names.some(withinScope)) continue;
-    if (names.some(excludedPath)) for (const name of names) denied.add(name);
+    if (sensitive) for (const name of names) denied.add(name);
     files.push({ status, names });
   }
   for (const name of untracked.split('\0').filter(Boolean)) {
     if (!withinScope(name)) continue;
-    if (excludedPath(name)) denied.add(name);
+    // Git cannot classify a rename to an untracked destination. Withhold those files while a sensitive deletion is unresolved.
+    if (unresolvedSensitiveRemoval || excludedPath(name)) denied.add(name);
     files.push({ status: '??', names: [name] });
   }
   const visible = files
@@ -69,10 +73,21 @@ export async function reviewChanges(cwd: string, excluded: unknown) {
       status: file.status,
       names: file.names.filter(withinScope).map((name) => name.slice(prefix.length)),
     }));
+  const omittedPaths = [...denied].filter(withinScope).map((name) => name.slice(prefix.length));
   const configured = Array.isArray(excluded) ? excluded.filter((item): item is string => typeof item === 'string') : [];
   const safeBasenames = configured.map((name) => name.trim()).filter((name) => /^[\w.*-]+$/.test(name));
   const common = [...sensitiveNames, ...safeBasenames].map((name) => ':(exclude,icase,glob)**/' + name);
   const exact = [...denied].map((name) => ':(exclude,icase,literal)' + name);
+  const selected = onlyPath === undefined ? undefined : visible.find((file) => file.names.includes(onlyPath));
+  if (onlyPath !== undefined && !selected) return { patch: null, files: [], omitted: denied.size > 0, omittedPaths };
+  if (selected?.status === '??') {
+    const patch = await gitAsync(
+      cwd,
+      ['diff', '--no-index', '--no-color', '--no-ext-diff', '--no-textconv', '--', '/dev/null', './' + onlyPath],
+      true,
+    );
+    return { patch, files: [selected], omitted: denied.size > 0, omittedPaths };
+  }
   const args = [
     'diff',
     'HEAD',
@@ -81,15 +96,16 @@ export async function reviewChanges(cwd: string, excluded: unknown) {
     '--no-color',
     '--no-ext-diff',
     '--no-textconv',
+    '--submodule=short',
     '--',
-    ...(relative ? [':(literal)' + relative] : []),
+    ...(selected ? selected.names.map((name) => ':(literal)' + prefix + name) : relative ? [':(literal)' + relative] : []),
     ...common,
     ...exact,
   ];
   // Large allow-lists never go on the command line. If exclusions alone are too large, use metadata only.
   const fits = process.platform !== 'win32' || args.reduce((sum, arg) => sum + 2 * arg.length + 3, 0) < 28000;
   const patch = visible.some((file) => file.status !== '??') ? (fits ? await gitAsync(root, args) : null) : '';
-  return { patch, files: visible, omitted: denied.size > 0 };
+  return { patch, files: selected ? [selected] : visible, omitted: denied.size > 0, omittedPaths };
 }
 
 export function projectSnapshot(cwd: string): GitSnapshot | null {

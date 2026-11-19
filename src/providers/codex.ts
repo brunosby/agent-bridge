@@ -121,8 +121,10 @@ export class CodexAgent extends EventEmitter implements Agent {
     this.emitEvent('info', { text: `Starting: ${command} ${args.join(' ')}` });
     // codex is usually an npm .cmd shim on Windows, so it runs through cmd.exe. Args come from config, not from the UI.
     const isWin = process.platform === 'win32';
+    const review = this.config.reviewMcp?.();
     this.proc = spawnJsonl(isWin ? 'cmd.exe' : command, isWin ? ['/d', '/s', '/c', command, ...args] : args, {
       cwd: this.cwd,
+      env: review ? { ...process.env, AGENT_BRIDGE_REVIEW_TOKEN: review.token } : process.env,
       onMessage: (m) => this.handle(m),
       onText: (t) => this.emitEvent('info', { text: t }),
       onStderr: (t) => this.emitEvent('stderr', { text: String(t) }),
@@ -143,20 +145,27 @@ export class CodexAgent extends EventEmitter implements Agent {
         for (const w of this.waiting.values()) w.reject(new Error('codex app-server exited'));
         this.waiting.clear();
         this.emitEvent('status', { busy: false });
-        if (!expected) this.emitEvent('error', { text: `Codex app-server exited (code ${code}).` });
+        if (!expected && this.available) this.markUnavailable('Codex app-server exited (code ' + code + ').');
       },
     });
-    this.ready = this.handshake().catch((err) => {
+    this.ready = this.handshake(review?.url).catch((err) => {
       this.emitEvent('error', { text: `Codex start failed: ${errorText(err)}` });
       this.ready = null;
       // The handshake is the protocol contract; if it fails, treat Codex as unavailable instead of retrying forever.
-      this.markUnavailable(`Codex app-server did not start: ${errorText(err)}`);
+      if (this.available) this.markUnavailable('Codex app-server did not start: ' + errorText(err));
       throw err;
     });
     return this.ready;
   }
 
-  async handshake() {
+  async handshake(reviewUrl?: string) {
+    const reviewConfig = reviewUrl
+      ? {
+          mcp_servers: {
+            bridge_review: { url: reviewUrl, bearer_token_env_var: 'AGENT_BRIDGE_REVIEW_TOKEN', default_tools_approval_mode: 'approve' },
+          },
+        }
+      : undefined;
     await this.request('initialize', {
       clientInfo: { name: 'agent_bridge', title: 'Agent Bridge', version: '0.1.0' },
     });
@@ -167,7 +176,7 @@ export class CodexAgent extends EventEmitter implements Agent {
       // Threads are archived when a conversation closes (see shutdown); bring it back before resuming.
       await this.request('thread/unarchive', { threadId: this.threadId || c.resumeThreadId }).catch(() => {});
       try {
-        res = await this.request('thread/resume', { threadId: this.threadId || c.resumeThreadId });
+        res = await this.request('thread/resume', { threadId: this.threadId || c.resumeThreadId, config: reviewConfig });
       } catch (err) {
         this.emitEvent('info', { text: `Could not resume the earlier Codex thread (${errorText(err)}); starting a new one.` });
         this.threadId = null;
@@ -181,11 +190,13 @@ export class CodexAgent extends EventEmitter implements Agent {
         sandbox: this.readOnly ? 'read-only' : c.sandbox || 'workspace-write',
         serviceName: 'agent_bridge',
         developerInstructions: this.instructions,
+        config: reviewConfig,
       };
       if (c.model) params.model = c.model;
       res = await this.request('thread/start', params);
     }
     this.threadId = res.thread.id;
+    if (reviewUrl) await this.request('mcpServerStatus/list', { threadId: this.threadId }).catch(() => {});
     this.resolvedModel = res.model || null;
     // A readable title in Codex's thread list (and the ChatGPT app) instead of the first relayed message.
     if (!res.thread.name)

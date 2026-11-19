@@ -41,6 +41,7 @@ export interface DriverConfig {
   instructions?: string | null;
   resumeSessionId?: string | null;
   resumeThreadId?: string | null;
+  reviewMcp?: () => { url: string; token: string } | undefined;
   [key: string]: any;
 }
 

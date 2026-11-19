@@ -1,6 +1,7 @@
 import { canReceiveWork } from '../core/agent-status.ts';
 import { rosterText } from '../core/prompts.ts';
 import { reviewChanges } from '../workspace/git-context.ts';
+import { closeReview, openReview } from './review-mcp.ts';
 import { randomUUID } from 'node:crypto';
 import { config, setting } from '../config/settings.ts';
 import { agentName, publish } from './events.ts';
@@ -32,9 +33,25 @@ export function deliver(toId: string, text: string, delivery: Delivery): void {
   const pending = (previous || Promise.resolve())
     .then(async () => {
       if (!valid()) return discard();
-      const extras = needsDiff ? [original, await diffContext(agent.cwd || owner.workDir)] : [];
-      if (valid()) sendDelivery(toId, text, delivery, extras);
-      else discard();
+      const dir = agent.cwd || owner.workDir;
+      const context = needsDiff ? await diffContext(dir) : null;
+      if (!valid()) return discard();
+      const extras: string[] = [];
+      if (context) {
+        closeReview(owner, toId);
+        extras.push(original, context.text);
+        if (context.review) {
+          const { files, omitted, limit } = context.review;
+          const id = openReview(owner, toId, dir, files, omitted, limit);
+          if (id)
+            extras.push(
+              'Use the bridge_diff MCP tool with reviewId ' +
+                id +
+                ' and a path from the file list. Use this tool for the review diff, without reading it through Git or the shell.',
+            );
+        }
+      }
+      sendDelivery(toId, text, delivery, extras);
     })
     .catch(() => {
       if (valid()) publish({ kind: 'error', agent: toId, text: 'Could not prepare Reviewer context.' });
@@ -100,27 +117,41 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
 }
 
 /** git diff of the working tree (tracked changes + list of new files), trimmed to a reasonable size. */
-export async function diffContext(dir: string): Promise<string> {
+async function diffContext(dir: string) {
   const changes = await reviewChanges(dir, config.reviewDiffExcludePatterns);
   if (!changes)
-    return '[Current changes]\n(No filtered file list is available. Git is unavailable, the folder has no Git history, or collection failed.)';
+    return {
+      text: '[Current changes]\n(No filtered file list is available. Git is unavailable, the folder has no Git history, or collection failed.)',
+    };
   const { patch, files, omitted } = changes;
   const configured = Number(setting('reviewDiffMaxChars'));
   const limit = Number.isFinite(configured) && configured > 0 ? Math.max(1, Math.floor(configured)) : configured === 0 ? 0 : 40000;
   const metadataOnly = patch === null || (limit > 0 && patch.length > limit);
-  const shown = (metadataOnly ? files : files.filter((file) => file.status === '??')).slice(0, 5000);
-  const list = shown.map(({ status, names }) => status + ' ' + names.map((name) => JSON.stringify(name)).join(' → ')).join('\n');
+  const candidates = metadataOnly ? files : files.filter((file) => file.status === '??');
+  let characters = 0;
+  const shown = [];
+  const lines = [];
+  for (const file of candidates.slice(0, 5000)) {
+    const line = file.status + ' ' + file.names.map((name) => JSON.stringify(name)).join(' \u2192 ');
+    if (characters + line.length > 200000) break;
+    characters += line.length + 1;
+    lines.push(line);
+    shown.push(file);
+  }
+  const list = lines.join('\n');
   const line =
     patch === null
       ? '(The filtered patch could not be read.)'
       : metadataOnly
         ? '(Patch exceeds the configured size limit. Showing file status only.)'
         : patch.trim() || '(no visible tracked changes)';
-  return (
-    '[Current changes (filtered git diff HEAD)]\n' +
-    line +
-    (list ? '\nFiltered files:\n' + list.slice(0, 200000) : '') +
-    (shown.length === 5000 || list.length > 200000 ? '\nFile list truncated.' : '') +
-    (omitted ? '\nSensitive paths omitted.' : '')
-  );
+  return {
+    text:
+      '[Current changes (filtered git diff HEAD)]\n' +
+      line +
+      (list ? '\nFiltered files:\n' + list : '') +
+      (shown.length < candidates.length ? '\nFile list truncated.' : '') +
+      (omitted ? '\nSensitive paths omitted.' : ''),
+    review: metadataOnly ? { files: shown.flatMap((file) => file.names), omitted: changes.omittedPaths, limit } : undefined,
+  };
 }

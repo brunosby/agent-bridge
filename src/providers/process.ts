@@ -4,6 +4,7 @@ import readline from 'node:readline';
 export interface JsonlOptions {
   cwd: string;
   shell?: boolean;
+  env?: NodeJS.ProcessEnv;
   onMessage: (msg: any) => void;
   onText?: (line: string) => void;
   onStderr?: (text: string) => void;
@@ -23,14 +24,14 @@ export interface JsonlProcess {
 export function spawnJsonl(
   command: string,
   args: string[],
-  { cwd, shell = false, onMessage, onText, onStderr, onExit }: JsonlOptions,
+  { cwd, shell = false, env = process.env, onMessage, onText, onStderr, onExit }: JsonlOptions,
 ): JsonlProcess {
   const child = spawn(command, args, {
     cwd,
     shell,
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: process.env,
+    env,
   });
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
