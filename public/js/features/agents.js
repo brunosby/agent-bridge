@@ -1,3 +1,4 @@
+import { agentWarnings, describeAgent, modelInfo, sortModels } from '../core/agent-view.js';
 // Header: agent cards (role, model, effort, bypass), relay status and the message target menu.
 import { $, fmtTokens, h } from '../core/dom.js';
 import { agentOf, cards, roleOf, store } from '../core/store.js';
@@ -66,27 +67,6 @@ export function renderTargets() {
   t.appendChild(new Option('All agents', 'all'));
   t.title = mode ? `Routing: ${mode.label}. Start the message with @Name to pick an agent.` : '';
   t.value = [...t.options].some((o) => o.value === prev) ? prev : 'auto';
-}
-
-/**
- * Model shown on the card: a short name for the second line and the full id for the tooltip.
- * "Default" resolves to the model the provider actually runs, when it reports one.
- */
-function modelInfo(a) {
-  const models = a.models || [];
-  const isDefault = !a.model || a.model === 'default';
-  const selected = isDefault
-    ? models.find((m) => m.value === 'default') || models.find((m) => m.isDefault)
-    : models.find((m) => m.value === a.model);
-  const selectedId = isDefault ? (selected?.value !== 'default' ? selected?.value : '') : a.model;
-  const full = (isDefault && a.resolvedModel) || selected?.resolved || selectedId || '';
-  const entry = isDefault ? models.find((m) => m.value !== 'default' && (m.value === full || m.resolved === full)) : selected;
-  const label = entry?.label && !/^default\b/i.test(entry.label) ? entry.label : full;
-  const short = label
-    .replace(/^[^:/]+:\s+|^[^:/\s]+\/(?=\S)/, '') // "Provider: Name" or "provider/model"
-    .replace(/\s*\((free|recommended)\)$/i, '')
-    .trim();
-  return { short, full };
 }
 
 export function renderCard(a) {
@@ -171,7 +151,8 @@ export function renderCard(a) {
     };
     c = cards[a.id] = { el, name, roleName, details, taskLink, drv, status, tokens, stop, retry, role, model, effort, bypass, rec, warn };
   }
-  c.el.className = `card drv-${a.driver}${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${!a.available || a.account ? ' unavailable' : ''}`;
+  const availability = describeAgent(a);
+  c.el.className = `card drv-${a.driver}${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${!availability.available ? ' unavailable' : ''}`;
   c.details.classList.toggle('bypass-on', a.bypass);
   c.name.textContent = a.name;
   const roleLabel = roleOf(a.role)?.name || a.role;
@@ -183,28 +164,18 @@ export function renderCard(a) {
   if (detailsDialog.open && detailsDialog.dataset.agent === a.id) $('agentDetailsTitle').textContent = a.name;
   c.drv.textContent = a.driverLabel;
   c.details.title = `${a.sessionId ? `Session: ${a.sessionId}` : 'No session yet'}${a.worktree ? `\nWorktree: ${a.cwd} (branch ${a.worktree.branch})` : ''}`;
-  c.status.textContent = !a.available
-    ? 'unavailable'
-    : a.account
-      ? a.account.state === 'rate_limited'
-        ? 'usage limit'
-        : 'no access'
-      : a.waitingApproval
-        ? 'waiting for approval'
-        : a.busy
-          ? 'working'
-          : 'idle';
+  c.status.textContent = availability.label;
   const tasks = (store.state.tasks || []).filter((task) => task.agent === a.id);
   const working = tasks.filter((task) => task.state === 'working');
   const task = working[0] || tasks[0];
-  if (task && a.available && !a.account && !a.waitingApproval) {
+  if (task && availability.available && availability.activity !== 'waiting') {
     c.status.textContent = working.length ? (working[0].activity || 'working') + ' · ' + working.length : 'queued · ' + tasks.length;
   }
   c.taskLink.hidden = !task?.sourceSeq;
   c.taskLink.dataset.seq = task?.sourceSeq || '';
   c.tokens.textContent = `${fmtTokens(a.tokens)} tok${a.cachedTokens ? ` (+${fmtTokens(a.cachedTokens)} cache)` : ''}`;
   c.stop.disabled = !a.busy;
-  c.retry.hidden = a.available;
+  c.retry.hidden = !availability.retry;
   c.bypass.checked = a.bypass;
 
   // role select
@@ -233,9 +204,7 @@ export function renderCard(a) {
       const def = a.models.find((m) => m.value === 'default' || m.isDefault);
       const defName = def ? def.resolved || def.label || def.value : a.model === 'default' ? a.resolvedModel : null;
       c.model.appendChild(new Option(`Default${defName ? ` (${defName})` : ''}`, 'default'));
-      const sorted = a.models
-        .filter((m) => m.value !== 'default')
-        .sort((x, y) => Number(x.disabled) - Number(y.disabled) || Number(y.recommended) - Number(x.recommended));
+      const sorted = sortModels(a.models);
       for (const m of sorted) {
         const name = m.label && m.label !== m.value ? `${m.label} · ${m.value}` : m.value;
         const o = new Option(`${m.recommended ? '★ ' : ''}${m.sensitive ? '⚠ ' : ''}${name}${m.disabled ? ' (unavailable)' : ''}`, m.value);
@@ -279,30 +248,7 @@ export function renderCard(a) {
     }
   }
 
-  // warnings
-  const warnings = [];
-  if (!a.available)
-    warnings.push(
-      `Unavailable: ${a.unavailableReason || 'the provider did not start'}. Press Retry after fixing it (Settings > Accounts).`,
-    );
-  if (a.account)
-    warnings.push(
-      a.account.state === 'rate_limited'
-        ? `Usage limit reached${a.account.resetsAt ? ` until ${new Date(a.account.resetsAt).toLocaleString()}` : ''}.`
-        : `No access: ${a.account.detail || 'check the plan or sign in again'} (Settings > Accounts).`,
-    );
-  const current =
-    a.models.find((m) => m.value === a.model) ||
-    (a.model === 'default' ? a.models.find((m) => m.isDefault || m.value === a.resolvedModel) : null);
-  if (current?.sensitive)
-    warnings.push(
-      `⚠ ${current.label || current.value} is a free/stealth model: your prompts may be used for training. Avoid sensitive code${a.role === 'orchestrator' ? ', and remember the orchestrator sees the whole task' : ''}.`,
-    );
-  // Research reads long pages; a smaller window fills up and OpenCode then summarises the conversation.
-  if (a.role === 'researcher' && current?.contextWindow && current.contextWindow <= 200000)
-    warnings.push(
-      `Context window of ${Math.round(current.contextWindow / 1000)}k tokens: long pages can fill it and make the agent lose earlier findings. A model with a larger window suits research better.`,
-    );
+  const warnings = agentWarnings(a);
   c.warn.textContent = warnings.join(' ');
   c.warn.hidden = !warnings.length;
 }

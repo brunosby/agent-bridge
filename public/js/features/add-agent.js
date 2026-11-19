@@ -1,3 +1,4 @@
+import { matchesRole, sortModels } from '../core/agent-view.js';
 // "Add agent" dialog.
 import { $, closeDialog } from '../core/dom.js';
 import { roleOf, store } from '../core/store.js';
@@ -70,17 +71,6 @@ export async function loadAddModels() {
   renderAddModels();
 }
 
-export function matchesRole(role, m) {
-  const text = `${m.value} ${m.label || ''} ${m.resolved || ''}`;
-  return (role?.recommended?.patterns || []).some((p) => {
-    try {
-      return new RegExp(p, 'i').test(text);
-    } catch {
-      return false;
-    }
-  });
-}
-
 export function renderAddModels() {
   const sel = $('addModel');
   const prev = sel.value;
@@ -89,10 +79,7 @@ export function renderAddModels() {
   const def = addModels.find((m) => m.value === 'default' || m.isDefault);
   const defName = def ? def.resolved || def.label || def.value : '';
   sel.appendChild(new Option(`Default${defName ? ` (${defName})` : ''}`, 'default'));
-  const list = addModels
-    .filter((m) => m.value !== 'default')
-    .map((m) => ({ ...m, recommended: matchesRole(role, m) }))
-    .sort((x, y) => Number(x.disabled) - Number(y.disabled) || Number(y.recommended) - Number(x.recommended));
+  const list = sortModels(addModels.map((m) => ({ ...m, recommended: matchesRole(role, m) })));
   for (const m of list) {
     const name = m.label && m.label !== m.value ? `${m.label} · ${m.value}` : m.value;
     const o = new Option(`${m.recommended ? '★ ' : ''}${m.sensitive ? '⚠ ' : ''}${name}${m.disabled ? ' (unavailable)' : ''}`, m.value);
