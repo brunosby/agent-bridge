@@ -66,6 +66,13 @@ export class FakeAgent extends EventEmitter implements Agent {
   }
 
   async start(): Promise<void> {
+    if (this.config.failRoleStartup && this.name === this.config.failRoleStartup && this.available) {
+      this.available = false;
+      this.unavailableReason = 'Fixture startup failure.';
+      this.config.failRoleStartup = null;
+      this.emitEvent('unavailable', { reason: this.unavailableReason });
+      return;
+    }
     this.emitEvent('session', { sessionId: this.sessionId });
     this.emitEvent('models', {});
   }

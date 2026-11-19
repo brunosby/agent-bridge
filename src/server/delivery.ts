@@ -74,6 +74,15 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
     extras.push(rosterText(team, toId, S.conv.routingMode));
     S.conv.rosterSeen[toId] = S.conv.rosterVersion;
   }
+  if (owner.team.some((member) => member.id === toId && member.role === 'orchestrator')) {
+    const enabled = setting('recommendRoles') === 'ask';
+    const declined = [...owner.refusedRoles].join(', ');
+    extras.push(
+      '[Role recommendations] ' +
+        (enabled ? 'Enabled.' : 'Off. Do not emit recommendation blocks.') +
+        (declined ? ' Declined roles: ' + declined + '.' : ''),
+    );
+  }
   extras.push(...context);
   S.conv.lastSender[toId] = from;
   if (from !== 'user') publish({ kind: 'routed', from, to: toId, relayed: true, hop: S.conv.relay.hops });

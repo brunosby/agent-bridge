@@ -1,5 +1,5 @@
 // Routing: who receives each message, review rounds, missing roles, delivery to agents.
-import type { AgentEvent, AgentSpec, Conversation } from '../core/types.ts';
+import type { AgentEvent, AgentSpec, Conversation, RoleDecisionEvent, RoleRecommendation } from '../core/types.ts';
 import { S } from './state.ts';
 import { agentName, logError, publish, publishState } from './events.ts';
 import { setting } from '../config/settings.ts';
@@ -190,12 +190,118 @@ export function onTurnEnd(fromId: string, ev: AgentEvent): void {
   }
 }
 
+export function clearRoleDecisions(owner: Conversation, action: string) {
+  owner.roleDecisionVersion += 1;
+  if (owner.pendingRoleRequest) {
+    publish({ kind: 'needRoleClosed', requestId: owner.pendingRoleRequest.requestId, action } satisfies RoleDecisionEvent);
+    owner.pendingRoleRequest = null;
+  }
+  if (owner.pendingRecommendation) {
+    publish({ kind: 'recommendRolesClosed', requestId: owner.pendingRecommendation.requestId, action } satisfies RoleDecisionEvent);
+    owner.pendingRecommendation = null;
+  }
+}
+
+export function dismissRoleDecision(owner: Conversation) {
+  clearRoleDecisions(owner, 'dismiss');
+  owner.relay.halted = owner.relay.userPaused;
+  publishState();
+}
+
+function sendRoleDecision(owner: Conversation, text: string) {
+  const orch = orchestratorId();
+  if (!orch) return;
+  if (owner.relay.userPaused) {
+    owner.pendingRoleNote[orch] = [owner.pendingRoleNote[orch], text].filter(Boolean).join('\n');
+    return;
+  }
+  deliver(orch, '[Message from ' + setting('userName') + ']\n' + text, { from: 'user' });
+}
+
+export function offerRecommendedRoles(owner: Conversation, id: string, received: { id: string; reason: string }[]): boolean {
+  if (owner.team.find((member) => member.id === id)?.role !== 'orchestrator' || setting('recommendRoles') !== 'ask') return false;
+  if (owner.pendingRoleRequest || owner.pendingRecommendation) {
+    publish({ kind: 'info', agent: id, text: 'A role decision is already waiting for you.' });
+    return true;
+  }
+  const seen = new Set(owner.team.map((agent) => agent.role));
+  const roles: RoleRecommendation[] = [];
+  for (const { id: roleId, reason } of received) {
+    if (!Object.hasOwn(S.roles, roleId) || seen.has(roleId) || owner.refusedRoles.has(roleId)) continue;
+    seen.add(roleId);
+    const suggestion = suggestFor(roleId);
+    roles.push({
+      id: roleId,
+      name: S.roles[roleId].name,
+      reason,
+      suggestion: { ...suggestion, driverLabel: DRIVERS[suggestion.driver].label },
+    });
+    if (roles.length === 3) break;
+  }
+  if (!roles.length) return false;
+  const requestId = 'recommend-' + randomUUID();
+  owner.pendingRecommendation = { requestId, roles, resolving: false };
+  owner.relay.halted = true;
+  publish({ kind: 'recommendRoles', agent: id, requestId, roles } satisfies RoleDecisionEvent);
+  publishState();
+  return true;
+}
+
+export async function resolveRecommendedRoles(requestId: string, selected: string[]) {
+  const owner = S.conv;
+  const request = owner.pendingRecommendation;
+  if (!request || request.requestId !== requestId || request.resolving) throw new Error('this recommendation is no longer pending');
+  const choices = new Set(selected);
+  if (choices.size !== selected.length || selected.some((id) => !request.roles.some((role) => role.id === id)))
+    throw new Error('invalid recommended roles');
+  request.resolving = true;
+  const results: { role: string; ok: boolean; reason?: string }[] = [];
+  for (const role of request.roles) {
+    if (S.conv !== owner || owner.pendingRecommendation !== request) return { results };
+    if (!choices.has(role.id)) {
+      owner.refusedRoles.add(role.id);
+      continue;
+    }
+    try {
+      let spec = owner.team.find((member) => member.role === role.id);
+      if (!spec) spec = await addAgent({ driver: role.suggestion.driver, role: role.id, model: role.suggestion.model }, true);
+      if (S.conv !== owner || owner.pendingRecommendation !== request) return { results };
+      const status = statusFor(owner, spec.id);
+      const ok = canReceiveWork(status);
+      results.push({ role: role.id, ok, ...(ok ? {} : { reason: status.reason || status.availability }) });
+    } catch (error) {
+      results.push({ role: role.id, ok: false, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  if (S.conv !== owner || owner.pendingRecommendation !== request) return { results };
+  clearRoleDecisions(owner, 'resolved');
+  owner.relay.halted = owner.relay.userPaused;
+  const ready = owner.team
+    .filter((agent) => canReceiveWork(statusFor(owner, agent.id)))
+    .map((agent) => '@' + agent.name + ' (' + agent.role + ')');
+  const refused = request.roles.filter((role) => !choices.has(role.id)).map((role) => role.name);
+  const failed = results.filter((result) => !result.ok).map((result) => result.role + ' (' + result.reason + ')');
+  const added = results.filter((result) => result.ok).map((result) => result.role);
+  const summary = [
+    'Role decision completed. Available team: ' + (ready.join(', ') || 'none') + '.',
+    added.length && 'Added: ' + added.join(', ') + '.',
+    refused.length && 'Declined for this conversation: ' + refused.join(', ') + '.',
+    failed.length && 'Could not start: ' + failed.join(', ') + '.',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  publish({ kind: 'system', text: summary });
+  sendRoleDecision(owner, summary + ' Continue with the available team.');
+  publishState();
+  return { results };
+}
+
 export const NEED_ROLE = /\[\[NEED_ROLE:\s*([\w-]+)\s*\]\]/i;
 
 /** Closest agent for a missing role: the role's fallback list, then the orchestrator. */
 export function closestAgent(roleId: string): AgentSpec | undefined {
   for (const fb of S.roles[roleId]?.fallback || []) {
-    const a = S.conv.team.find((x) => x.role === fb);
+    const a = S.conv.team.find((x) => x.role === fb && canReceiveWork(statusFor(S.conv, x.id)));
     if (a) return a;
   }
   return S.conv.team.find((x) => x.id === orchestratorId());
@@ -219,6 +325,10 @@ export function handleNeedRole(fromId: string, text: string): boolean {
   const m = NEED_ROLE.exec(text);
   if (!m) return false;
   const roleId = m[1].toLowerCase();
+  if (S.conv.pendingRoleRequest || S.conv.pendingRecommendation) {
+    publish({ kind: 'info', agent: fromId, text: 'A role decision is already waiting for you.' });
+    return true;
+  }
   const existing = S.conv.team.find((a) => a.role === roleId);
   if (!S.roles[roleId] || existing) {
     deliver(
@@ -230,7 +340,7 @@ export function handleNeedRole(fromId: string, text: string): boolean {
   }
   const closest = closestAgent(roleId);
   if (setting('missingRolePolicy') === 'closest') {
-    resolveMissingRole(roleId, 'closest');
+    void resolveMissingRole(roleId, 'closest');
     return true;
   }
   S.conv.relay.halted = true;
@@ -250,32 +360,41 @@ export function handleNeedRole(fromId: string, text: string): boolean {
   return true;
 }
 
-export async function resolveMissingRole(roleId: string, action: string): Promise<void> {
+export async function resolveMissingRole(roleId: string, action: 'add' | 'closest'): Promise<void> {
+  const owner = S.conv;
   const role = S.roles[roleId];
   const orch = orchestratorId();
-  S.conv.pendingRoleRequest = null;
-  S.conv.relay.halted = false;
-  S.conv.relay.hops = 0;
+  clearRoleDecisions(owner, action);
+  const version = owner.roleDecisionVersion;
   if (action === 'add') {
     const sug = suggestFor(roleId);
-    const spec = await addAgent({ driver: sug.driver, role: roleId, model: sug.model });
-    publish({ kind: 'system', text: `Added ${spec.name} for the missing ${role.name} role.` });
-    deliver(orch, `[Message from ${setting('userName')}]\nI added @${spec.name} as ${role.name}. Continue and delegate that work to it.`, {
-      from: 'user',
-    });
+    const spec = await addAgent({ driver: sug.driver, role: roleId, model: sug.model }, true);
+    if (S.conv !== owner || owner.roleDecisionVersion !== version) return;
+    const status = statusFor(owner, spec.id);
+    const message = canReceiveWork(status)
+      ? 'I added @' + spec.name + ' as ' + role.name + '. Continue and delegate that work to it.'
+      : spec.name +
+        ' could not start as ' +
+        role.name +
+        ': ' +
+        (status.reason || status.availability) +
+        '. Continue with the available team.';
+    publish({ kind: 'system', text: message });
+    sendRoleDecision(owner, message);
   } else {
     const closest = closestAgent(roleId);
-    publish({
-      kind: 'system',
-      text: `No ${role.name} added: continuing with ${closest?.name || 'the orchestrator'} as the closest agent.`,
-    });
-    logError('bridge', `missing role ${roleId}: continued with ${closest?.name || 'orchestrator'}`);
-    deliver(
-      orch,
-      `[Message from ${setting('userName')}]\nNo ${role.name} will be added. ${closest && closest.id !== orch ? `Give that work to @${closest.name} (${S.roles[closest.role]?.name}), the closest role in the team.` : 'Handle that part yourself as far as your role allows, and tell me what is left.'}`,
-      { from: 'user' },
-    );
+    const message =
+      'No ' +
+      role.name +
+      ' will be added. ' +
+      (closest && closest.id !== orch
+        ? 'Give that work to @' + closest.name + ' (' + S.roles[closest.role]?.name + '), the closest role in the team.'
+        : 'Handle that part yourself as far as your role allows, and tell me what is left.');
+    publish({ kind: 'system', text: message });
+    sendRoleDecision(owner, message);
   }
+  owner.relay.halted = owner.relay.userPaused;
+  owner.relay.hops = 0;
   publishState();
 }
 
@@ -287,8 +406,9 @@ export function userSend(text: string, target?: string): void {
   const targets = userTargets(target, text);
   if (!targets.length) throw new Error('no agent to receive this message');
   S.conv.lastUserText = text;
+  clearRoleDecisions(S.conv, 'new message');
   S.conv.relay.hops = 0;
-  S.conv.relay.halted = false;
+  S.conv.relay.halted = S.conv.relay.userPaused = false;
   const source = publish({ kind: 'user', text, to: targets });
   const note = targets.length > 1 ? ` (sent to ${targets.length} agents)` : '';
   for (const t of targets) deliver(t, `[Message from ${setting('userName')}${note}]\n${text}`, { from: 'user', sourceSeq: source.seq });

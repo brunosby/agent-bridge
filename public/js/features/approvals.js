@@ -109,6 +109,45 @@ export function renderNeedRole(ev) {
   updatePending();
 }
 
+export function renderRoleRecommendation(ev) {
+  const el = h('div', 'approval');
+  el.dataset.title = 'Role recommendation';
+  el.append(h('div', 'title', label(ev.agent) + ' recommends adding roles'));
+  const fields = h('div', 'form');
+  const choices = ev.roles.map(({ id, name, reason, suggestion }) => {
+    const check = h('input');
+    check.type = 'checkbox';
+    check.checked = true;
+    const row = h('label', 'check');
+    const star = suggestion.model ? ' \u2605' : '';
+    row.append(check, h('span', null, name + ' (' + suggestion.driverLabel + ' \u00b7 ' + suggestion.modelLabel + star + ')'));
+    fields.append(row, h('div', 'hint', reason));
+    return { id, check };
+  });
+  el.append(fields);
+  const actions = h('div', 'actions');
+  const add = h('button', 'primary', 'Add selected');
+  const keep = h('button', '', 'Keep current team');
+  async function resolve(selected) {
+    add.disabled = keep.disabled = true;
+    for (const choice of choices) choice.check.disabled = true;
+    try {
+      await api('resolveRecommendedRoles', { requestId: ev.requestId, selected });
+    } catch (error) {
+      addSys(error.message, true);
+      add.disabled = keep.disabled = false;
+      for (const choice of choices) choice.check.disabled = false;
+    }
+  }
+  add.onclick = () => resolve(choices.filter(({ check }) => check.checked).map(({ id }) => id));
+  keep.onclick = () => resolve([]);
+  actions.append(add, keep);
+  el.append(actions);
+  approvals.set(ev.requestId, el);
+  $('pending').append(el);
+  updatePending();
+}
+
 export function renderApproval(ev) {
   const el = h('div', `approval drv-${driverOf(ev.agent)}`);
   el.dataset.title = ev.title;

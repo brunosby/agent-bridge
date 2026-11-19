@@ -32,6 +32,7 @@ export const SETTING_LABELS = {
   ],
   destructivePatterns: ['Destructive actions (always ask)', 'One regex per line. Bypass never approves these.'],
   deletionPatterns: ['Deletion commands', 'One regex per line. Bypass approves them only for single files inside the project folder.'],
+  recommendRoles: ['Recommend roles', 'Let the orchestrator suggest additions to the team for substantial work.'],
   openBrowser: ['Open the browser at start', ''],
 };
 
@@ -55,7 +56,7 @@ export function renderSettingsForm() {
         input = h('select');
         for (const v of def.values) {
           const m = store.catalog.routingModes.find((x) => x.id === v);
-          const names = { ask: 'Ask me', closest: 'Continue with the closest agent' };
+          const names = { ask: 'Ask me', closest: 'Continue with the closest agent', off: 'Off' };
           input.appendChild(new Option(m ? m.label : names[v] || v, v));
         }
         input.value = value;

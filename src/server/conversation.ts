@@ -11,7 +11,8 @@ import { approvalTimers, cliCache, providerRuntime, relay } from './state.ts';
 import { createAgent, defaultName, defaultTeam, startAgent, uniqueName } from './team.ts';
 import { driverModelCache } from './state.ts';
 import { DRIVERS } from '../providers/registry.ts';
-import { cancelBatchPart, onTurnEnd } from './routing.ts';
+import { cancelBatchPart, onTurnEnd, offerRecommendedRoles } from './routing.ts';
+import { parseRoleMarkers } from '../../public/js/core/role-markers.js';
 import { isTestCommand } from '../core/test-command.ts';
 import { captureProject } from './project.ts';
 import { buildMatcher } from '../core/safety.ts';
@@ -52,6 +53,8 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
     pendingRoleNote: {},
     lastSender: {},
     tasks: new Map(),
+    refusedRoles: new Set(),
+    roleDecisionVersion: 0,
     project: saved?.events.findLast((event) => event.kind === 'projectBaseline')?.project || {},
     testResults:
       saved?.events
@@ -223,12 +226,16 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       owner.testResults = [...owner.testResults.slice(-39), result];
       publish({ kind: 'observedTest', result });
     }
-    const published = publish(ev);
+    const markers = (ev.kind === 'text' || ev.kind === 'turnEnd') && typeof ev.text === 'string' ? parseRoleMarkers(ev.text) : null;
+    const clean = markers ? { ...ev, text: markers.text } : ev;
+    const published = publish(clean);
     if (ev.kind === 'text' && ev.final && published.seq) owner.lastAnswerSeq[id] = published.seq;
     if (ev.kind === 'turnEnd') {
       const sourceSeq = owner.lastAnswerSeq[id] ?? published.seq;
       delete owner.lastAnswerSeq[id];
-      onTurnEnd(id, { ...ev, seq: published.seq, sourceSeq });
+      if (markers?.incomplete) publish({ kind: 'info', agent: id, text: 'Incomplete role recommendation ignored.' });
+      if (markers?.roles.length && offerRecommendedRoles(owner, id, markers.roles)) return;
+      onTurnEnd(id, { ...clean, seq: published.seq, sourceSeq });
     }
     if (ev.kind === 'tasksCancelled') cancelBatchPart(owner, id, 'cancelled: provider interrupted the task', ev.taskIds || []);
     if (ev.kind === 'taskStarted' || ev.kind === 'tasksCancelled') publishState();

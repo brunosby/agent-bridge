@@ -7,7 +7,15 @@ import { LOGS_DIR, ROLES_DIR, SETTINGS, config, safeRegex, saveLocalConfig, sett
 import { ROUTING_MODES } from '../core/prompts.ts';
 import { canReceiveWork } from '../core/agent-status.ts';
 import { newConversation, restoreConversation, saveSettings, settingsView } from './conversation.ts';
-import { cancelBatchPart, resolveMissingRole, userSend, userTargets } from './routing.ts';
+import {
+  cancelBatchPart,
+  clearRoleDecisions,
+  dismissRoleDecision,
+  resolveMissingRole,
+  resolveRecommendedRoles,
+  userSend,
+  userTargets,
+} from './routing.ts';
 import { approvalTimers, cliCache, providerRuntime, relay } from './state.ts';
 import {
   type AddAgentInput,
@@ -27,12 +35,22 @@ import { listConversations, removeConversation } from '../core/history.ts';
 import { searchSavedTranscript } from '../core/transcript-search.ts';
 import { restartServer, shutdown } from '../cli/main.ts';
 import { codeChanged } from './http.ts';
+function textField(value: unknown, field: string, optional = false): string | undefined {
+  if (value === undefined && optional) return;
+  if (typeof value !== 'string' || !value.trim()) throw new Error('invalid ' + field);
+  return value;
+}
+
+function optionalBoolean(value: unknown, field: string) {
+  if (value !== undefined && typeof value !== 'boolean') throw new Error('invalid ' + field);
+}
+
 /** Handle one API call from the page. Returns the JSON answer; throws to send an error. */
 export async function api(action: string, body: Record<string, any>): Promise<unknown> {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('expected a JSON object');
   const agents = S.conv?.agents || {};
   const agentOf = (id: string): Agent => {
-    const a = agents[id];
+    const a = typeof id === 'string' && Object.hasOwn(agents, id) ? agents[id] : null;
     if (!a) throw new Error(`unknown agent ${id}`);
     return a;
   };
@@ -63,30 +81,38 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       };
     }
     case 'send':
+      textField(body.target, 'destination', true);
+      textField(body.conversationId, 'conversation ID', true);
       if (body.conversationId && body.conversationId !== S.conv.id) throw new Error('conversation changed before sending');
-      if (!body.text?.trim()) throw new Error('empty message');
+      if (typeof body.text !== 'string' || !body.text.trim()) throw new Error('empty message');
       userSend(body.text, body.target);
       return { ok: true };
     case 'relay':
+      for (const key of ['auto', 'resume', 'pause']) optionalBoolean(body[key], key);
+      if (body.resume && body.pause) throw new Error('choose pause or resume');
+      if (body.maxHops !== undefined && (!Number.isFinite(body.maxHops) || body.maxHops < 0)) throw new Error('invalid maxHops');
       if (typeof body.auto === 'boolean') relay.auto = body.auto;
       if (Number.isFinite(body.maxHops) && body.maxHops >= 0) relay.maxHops = body.maxHops;
       if (body.resume) {
-        S.conv.relay.halted = false;
+        clearRoleDecisions(S.conv, 'resume');
+        S.conv.relay.halted = S.conv.relay.userPaused = false;
         S.conv.relay.hops = 0;
       }
-      if (body.pause) S.conv.relay.halted = true;
+      if (body.pause) S.conv.relay.halted = S.conv.relay.userPaused = true;
       publishState();
       return { ok: true };
     case 'routing': {
-      if (!(body.mode in ROUTING_MODES)) throw new Error('unknown routing mode');
+      if (typeof body.mode !== 'string' || !Object.hasOwn(ROUTING_MODES, body.mode)) throw new Error('unknown routing mode');
       const mode = ROUTING_MODES[body.mode as RoutingMode];
-      S.conv.routingMode = body.mode;
+      S.conv.routingMode = body.mode as RoutingMode;
       S.conv.rosterVersion++;
       publish({ kind: 'system', text: `Routing: ${mode.label}. ${mode.rule}` });
       publishState();
       return { ok: true };
     }
     case 'finalReview': {
+      if (body.action !== 'approve' && body.action !== 'changes') throw new Error('unknown final review decision');
+      textField(body.requestId, 'review request ID');
       if (S.conv.pendingFinal !== body.requestId) throw new Error('this confirmation is no longer pending');
       S.conv.pendingFinal = null;
       publish({ kind: 'finalReviewClosed', requestId: body.requestId, action: body.action });
@@ -106,7 +132,13 @@ export async function api(action: string, body: Record<string, any>): Promise<un
         ),
       };
     case 'roleProfile': {
-      if (!S.roles[body.role]) throw new Error('unknown role');
+      optionalBoolean(body.reset, 'reset');
+      if (!body.reset && body.profile !== 'lean' && body.profile !== 'full') throw new Error('unknown role profile');
+      for (const key of ['skillsOff', 'skillsOn']) {
+        if (body[key] !== undefined && (!Array.isArray(body[key]) || body[key].some((item: unknown) => typeof item !== 'string')))
+          throw new Error('invalid ' + key);
+      }
+      if (typeof body.role !== 'string' || !Object.hasOwn(S.roles, body.role)) throw new Error('unknown role');
       const roleOverrides = { ...(config.roleOverrides || {}) };
       if (body.reset) delete roleOverrides[body.role];
       else
@@ -142,13 +174,19 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       if (typeof requestedId !== 'string' || !requestedId) throw new Error('missing role request id');
       if (!S.conv.pendingRoleRequest || S.conv.pendingRoleRequest.requestId !== requestedId)
         throw new Error('this request is no longer pending');
-      const { requestId, roleId } = S.conv.pendingRoleRequest;
-      publish({ kind: 'needRoleClosed', requestId, action: decision });
-      if (decision === 'add' || decision === 'closest') await resolveMissingRole(roleId, decision);
-      else S.conv.pendingRoleRequest = null;
+      const { roleId } = S.conv.pendingRoleRequest;
+      if (decision === 'dismiss') dismissRoleDecision(S.conv);
+      else await resolveMissingRole(roleId, decision);
       return { ok: true };
     }
+    case 'resolveRecommendedRoles': {
+      const { requestId, selected } = body;
+      if (typeof requestId !== 'string' || !Array.isArray(selected) || selected.length > 3 || selected.some((id) => typeof id !== 'string'))
+        throw new Error('invalid recommendation decision');
+      return resolveRecommendedRoles(requestId, selected);
+    }
     case 'interrupt': {
+      textField(body.agent, 'agent ID', true);
       const owner = S.conv;
       const ids = body.agent ? [agentOf(body.agent).id] : Object.keys(agents);
       if (!body.agent) {
@@ -164,7 +202,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
     }
     case 'model': {
       const agent = agentOf(body.agent);
-      const model = String(body.model || 'default');
+      const model = textField(body.model ?? undefined, 'model', true) || 'default';
       const entry = (agent.models || []).find((m) => m.value === model);
       if (model !== 'default' && !entry) throw new Error(`model ${model} is not in ${agentName(body.agent)}'s list`);
       if (entry?.disabled) throw new Error(`model ${model} is not available: ${entry.disabledReason || 'not enabled for this account'}`);
@@ -186,7 +224,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       const agent = agentOf(body.agent);
       const spec = S.conv.team.find((a) => a.id === body.agent);
       if (!spec) throw new Error(`unknown agent ${body.agent}`);
-      const effort = String(body.effort || 'default');
+      const effort = textField(body.effort ?? undefined, 'effort', true) || 'default';
       if (effort !== 'default') {
         const current =
           (agent.models || []).find((m) => m.value === (agent.model || 'default')) || (agent.models || []).find((m) => m.isDefault);
@@ -202,8 +240,8 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       await setRole(body.agent, body.role);
       return { ok: true };
     case 'bypass': {
+      if (typeof body.on !== 'boolean') throw new Error('invalid bypass choice');
       const spec = S.conv.team.find((a) => a.id === body.agent);
-      if (!spec) throw new Error(`unknown agent ${body.agent}`);
       if (!spec) throw new Error(`unknown agent ${body.agent}`);
       spec.bypass = Boolean(body.on);
       publish({
@@ -216,6 +254,9 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       return { ok: true };
     }
     case 'approval': {
+      if (body.decision !== 'accept' && body.decision !== 'acceptForSession' && body.decision !== 'decline')
+        throw new Error('unknown approval decision');
+      textField(body.requestId, 'approval request ID');
       const owner = Object.keys(agents).find((id) => agents[id].approvals?.has(body.requestId));
       if (!owner) throw new Error('this request is no longer pending');
       agents[owner].respondApproval(body.requestId, body.decision);
@@ -225,7 +266,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       return { ok: true };
     }
     case 'driverModels': {
-      if (!DRIVERS[body.driver]) throw new Error('unknown provider');
+      if (typeof body.driver !== 'string' || !Object.hasOwn(DRIVERS, body.driver)) throw new Error('unknown provider');
       const sensitive = (setting('sensitiveModelPatterns') as string[]).map((p) => safeRegex(p)).filter((x): x is RegExp => x !== null);
       const blocked = providerBlocked(body.driver);
       const models = (await listDriverModels(body.driver)).map((m) => ({
@@ -237,6 +278,13 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       return { models };
     }
     case 'addAgent':
+      textField(body.driver, 'provider');
+      textField(body.role, 'role');
+      if (body.name !== undefined && typeof body.name !== 'string') throw new Error('invalid agent name');
+      if (body.model !== null) textField(body.model, 'model', true);
+      if (body.effort !== null) textField(body.effort, 'effort', true);
+      optionalBoolean(body.bypass, 'bypass');
+      optionalBoolean(body.worktree, 'worktree');
       return { ok: true, agent: await addAgent(body as AddAgentInput) };
     case 'removeAgent': {
       const owner = S.conv;
@@ -257,6 +305,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       publishState();
       return { ok: true, settings: settingsView() };
     case 'accounts': {
+      optionalBoolean(body.refresh, 'refresh');
       const out = [];
       for (const driver of Object.keys(PROVIDERS)) {
         if (body.refresh || !cliCache[driver] || Date.now() - cliCache[driver].at > 30000) {
@@ -268,7 +317,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       return { accounts: out };
     }
     case 'login': {
-      if (!PROVIDERS[body.driver]) throw new Error('unknown provider');
+      if (typeof body.driver !== 'string' || !Object.hasOwn(PROVIDERS, body.driver)) throw new Error('unknown provider');
       const command = openLoginTerminal(body.driver, config[body.driver]);
       delete providerRuntime[body.driver];
       delete cliCache[body.driver];
@@ -288,10 +337,10 @@ export async function api(action: string, body: Record<string, any>): Promise<un
     case 'conversations':
       return { current: S.conv?.id || null, conversations: listConversations(LOGS_DIR) };
     case 'restore':
-      await restoreConversation(String(body.id || ''));
+      await restoreConversation(textField(body.id, 'conversation ID') || '');
       return { ok: true };
     case 'remove': {
-      const id = String(body.id || '');
+      const id = textField(body.id, 'conversation ID') || '';
       if (id === S.conv?.id) throw new Error('this conversation is open now');
       removeConversation(LOGS_DIR, id);
       return { ok: true };
@@ -305,6 +354,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       setTimeout(() => shutdown(), 100);
       return { ok: true };
     case 'new':
+      if (body.workDir !== undefined && typeof body.workDir !== 'string') throw new Error('invalid workspace');
       await newConversation(body.workDir);
       return { ok: true };
     default:

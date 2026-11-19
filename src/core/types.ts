@@ -157,6 +157,17 @@ export interface GitSnapshot {
   files: { path: string; status: string }[];
 }
 
+export interface RoleRecommendation {
+  id: string;
+  name: string;
+  reason: string;
+  suggestion: { driver: string; driverLabel: string; model: string | null; modelLabel: string };
+}
+
+export type RoleDecisionEvent =
+  | { kind: 'recommendRoles'; agent: string; requestId: string; roles: RoleRecommendation[] }
+  | { kind: 'recommendRolesClosed' | 'needRoleClosed'; requestId: string; action: string };
+
 export interface Conversation {
   id: string;
   runDir: string;
@@ -180,5 +191,8 @@ export interface Conversation {
   batch?: { pending: Map<string, string>; results: { from: string; text: string; sourceSeq?: number }[] } | null;
   reviewRounds?: number;
   pendingRoleRequest?: { requestId: string; roleId: string } | null;
+  pendingRecommendation?: { requestId: string; roles: RoleRecommendation[]; resolving: boolean } | null;
+  roleDecisionVersion: number;
+  refusedRoles: Set<string>;
   pendingFinal?: string | null;
 }

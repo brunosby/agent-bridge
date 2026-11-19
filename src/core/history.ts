@@ -164,15 +164,23 @@ export function loadConversation(logsDir: string, id: string): ConversationSumma
   for (const e of events) {
     if (e.kind === 'taskQueued' && e.id && e.agent) openTasks.set(e.id, e.agent);
     if (e.kind === 'turnEnd' || e.kind === 'tasksCancelled') for (const taskId of e.taskIds || []) openTasks.delete(taskId);
-    if (e.kind === 'approval' || e.kind === 'needRole' || e.kind === 'finalReview') openApprovals.add(e.requestId);
-    if (e.kind === 'needRoleClosed' || e.kind === 'finalReviewClosed') openApprovals.delete(e.requestId);
+    if (e.kind === 'approval' || e.kind === 'needRole' || e.kind === 'finalReview' || e.kind === 'recommendRoles')
+      openApprovals.add(e.requestId);
+    if (e.kind === 'needRoleClosed' || e.kind === 'finalReviewClosed' || e.kind === 'recommendRolesClosed')
+      openApprovals.delete(e.requestId);
     if (e.kind === 'approvalClosed') openApprovals.delete(e.requestId);
     if (['delta', 'text', 'tool'].includes(e.kind) && e.agent) openTurn[e.agent] = true;
     if (e.kind === 'turnEnd') openTurn[e.agent] = false;
   }
   for (const requestId of openApprovals) {
     const id = String(requestId);
-    const kind = id.startsWith('role-') ? 'needRoleClosed' : id.startsWith('final-') ? 'finalReviewClosed' : 'approvalClosed';
+    const kind = id.startsWith('recommend-')
+      ? 'recommendRolesClosed'
+      : id.startsWith('role-')
+        ? 'needRoleClosed'
+        : id.startsWith('final-')
+          ? 'finalReviewClosed'
+          : 'approvalClosed';
     events.push({ seq: ++lastSeq, at: lastAt, kind, requestId, decision: 'cancelled', action: 'cancelled' });
   }
   for (const [agent, open] of Object.entries(openTurn)) {

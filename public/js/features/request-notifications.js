@@ -6,9 +6,10 @@ const SEEN_KEY = 'agent-bridge-notified-requests';
 const NOTICES = {
   approval: ['needs tool approval', 'Review the tool request in Agent Bridge.'],
   needRole: ['needs another role', 'Choose how to continue in Agent Bridge.'],
+  recommendRoles: ['recommends adding roles', 'Review the suggested team in Agent Bridge.'],
   finalReview: ['requests final confirmation', 'Review the result in Agent Bridge.'],
 };
-const CLOSED = new Set(['approvalClosed', 'needRoleClosed', 'finalReviewClosed']);
+const CLOSED = new Set(['approvalClosed', 'needRoleClosed', 'recommendRolesClosed', 'finalReviewClosed']);
 let notifier;
 
 function read(browser, key) {

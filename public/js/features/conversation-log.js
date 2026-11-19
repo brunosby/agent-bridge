@@ -2,10 +2,11 @@
 import { agentOf, approvals, driverOf, label, roleOf, store } from '../core/store.js';
 import { $, h, log, renderMarkdown, time } from '../core/dom.js';
 import { Transcript } from '../core/transcript.js';
-import { renderApproval, renderFinalReview, renderNeedRole, updatePending } from './approvals.js';
+import { renderApproval, renderFinalReview, renderNeedRole, renderRoleRecommendation, updatePending } from './approvals.js';
 import { renderState } from './agents.js';
 import { updateComposer } from './controls.js';
 import { bindSavedSearch } from './transcript-search.js';
+import { parseRoleMarkers } from '../core/role-markers.js';
 
 const transcript = new Transcript();
 const views = new Map();
@@ -133,7 +134,11 @@ function message(ev) {
     if (!user) transcript.track(ev.agent, entry);
     mount(entry, node, body);
   }
-  transcript.update(entry, ev.kind === 'delta' ? entry.text + ev.text : ev.text);
+  if (user) transcript.update(entry, ev.text);
+  else {
+    entry.rawMessage = ev.kind === 'delta' ? (entry.rawMessage || '') + ev.text : ev.text;
+    transcript.update(entry, parseRoleMarkers(entry.rawMessage).text);
+  }
   dirty.add(entry);
   if (isNew && !replaying && !follow && transcript.matches(entry, ...filterOptions())) unread += 1;
   if (ev.final) {
@@ -358,12 +363,17 @@ export function handle(ev) {
       renderNeedRole(ev);
       addLine(ev, 'approval', 'sys', label(ev.agent) + ' asked for ' + ev.roleName, [ev.agent]);
       break;
+    case 'recommendRoles':
+      renderRoleRecommendation(ev);
+      addLine(ev, 'approval', 'sys', label(ev.agent) + ' suggested additional roles', [ev.agent]);
+      break;
     case 'finalReview':
       renderFinalReview(ev);
       addLine(ev, 'approval', 'sys', label(ev.agent) + ' requested final confirmation', [ev.agent]);
       break;
     case 'finalReviewClosed':
     case 'needRoleClosed':
+    case 'recommendRolesClosed':
     case 'approvalClosed': {
       const el = approvals.get(ev.requestId);
       if (!el) break;
