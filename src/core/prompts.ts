@@ -1,3 +1,4 @@
+import type { agentStatus } from './agent-status.ts';
 /** Instructions given to each agent so it knows it is part of a live multi-agent conversation. */
 
 import type { Role, RoutingMode } from './types.ts';
@@ -66,18 +67,23 @@ export interface RosterMember {
   roleName: string;
   canEdit?: string;
   model?: string | null;
+  status?: ReturnType<typeof agentStatus>;
 }
 
 export function rosterText(team: RosterMember[], selfId: string, routingMode: string): string {
   const edits: Record<string, string> = { all: 'edits files', tests: 'edits tests only', none: 'read-only' };
-  const lines = team.map(
+  const ready = team.filter((a) => !a.status || a.status.availability === 'ready');
+  const unavailable = team.filter((a) => a.status && a.status.availability !== 'ready');
+  const lines = ready.map(
     (a) =>
       `- @${a.name}: ${a.roleName} (${edits[a.canEdit || 'all'] || 'edits files'})${a.model ? `, model ${a.model}` : ''}${a.id === selfId ? ' (you)' : ''}`,
   );
   const mode = ROUTING_MODES[routingMode as RoutingMode] || ROUTING_MODES.orchestrator;
-  const noEditor = !team.some((a) => a.canEdit === 'all');
+  const noEditor = !ready.some((a) => a.canEdit === 'all');
   const note = noEditor
     ? '\nNo agent in this team can edit production code. Do not try to work around it: plan and review only, and tell the user to add a Coder (or another role that edits files) when the task needs code changes.'
     : '';
-  return `[Team]\n${lines.join('\n')}\nRouting: ${mode.label}.${note}`;
+  const blocked = unavailable.map((a) => '@' + a.name + ' (' + (a.status?.reason || a.status?.availability) + ')');
+  const warning = blocked.length ? '\nUnavailable: ' + blocked.join(', ') + '. Do not delegate to these agents.' : '';
+  return '[Team]\n' + lines.join('\n') + warning + '\nRouting: ' + mode.label + '.' + note;
 }

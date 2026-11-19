@@ -163,6 +163,7 @@ export interface Conversation {
   transcript: WriteStream;
   workDir: string;
   routingMode: RoutingMode;
+  relay: { hops: number; halted: boolean; userPaused: boolean };
   team: AgentSpec[];
   agents: Record<string, Agent>;
   nextAgent: number;
@@ -176,7 +177,7 @@ export interface Conversation {
   testResults: string[];
   possibleTests: Map<string, string>;
   lastAnswerSeq: Record<string, number>;
-  batch?: { pending: Set<string>; results: { from: string; text: string }[] } | null;
+  batch?: { pending: Map<string, string>; results: { from: string; text: string; sourceSeq?: number }[] } | null;
   reviewRounds?: number;
   pendingRoleRequest?: { requestId: string; roleId: string } | null;
   pendingFinal?: string | null;

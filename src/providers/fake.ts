@@ -128,6 +128,8 @@ export class FakeAgent extends EventEmitter implements Agent {
 
   async restart(): Promise<void> {
     this.available = true;
+    this.unavailableReason = null;
+    await this.start();
   }
 
   async shutdown(): Promise<void> {

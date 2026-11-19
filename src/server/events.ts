@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { S, clients, relay } from './state.ts';
 import { safeRegex, setting } from '../config/settings.ts';
-import { providerBlocked } from './team.ts';
+import { providerBlocked, statusFor } from './team.ts';
+import { canReceiveWork } from '../core/agent-status.ts';
 import { isRecommended } from '../core/roles.ts';
 import { projectLabel } from './project.ts';
 import { DRIVERS } from '../providers/registry.ts';
@@ -52,6 +53,7 @@ export function decorateModels(spec: AgentSpec, agent: Agent): ModelInfo[] {
 export function teamState() {
   return S.conv.team.map((spec) => {
     const a = S.conv.agents[spec.id];
+    const status = statusFor(S.conv, spec.id);
     return {
       id: spec.id,
       name: spec.name,
@@ -70,8 +72,9 @@ export function teamState() {
       models: a ? decorateModels(spec, a) : [],
       tokens: a?.tokens || 0,
       cachedTokens: a?.cachedTokens || 0,
-      available: a ? a.available !== false : false,
-      unavailableReason: a?.unavailableReason || null,
+      status,
+      available: canReceiveWork(status),
+      unavailableReason: status.reason,
       account: providerBlocked(spec.driver),
     };
   });
@@ -86,7 +89,7 @@ export function stateEvent() {
     conversationId: S.conv.id,
     workDir: S.conv.workDir,
     routingMode: S.conv.routingMode,
-    relay: { ...relay },
+    relay: { ...relay, ...S.conv.relay },
     tokenLimit: Number(setting('tokenLimit')),
     totalTokens: team.reduce((s, a) => s + a.tokens, 0),
     totalCachedTokens: team.reduce((s, a) => s + a.cachedTokens, 0),

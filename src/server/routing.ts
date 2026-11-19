@@ -1,19 +1,20 @@
 // Routing: who receives each message, review rounds, missing roles, delivery to agents.
-import type { AgentEvent, AgentSpec } from '../core/types.ts';
+import type { AgentEvent, AgentSpec, Conversation } from '../core/types.ts';
 import { S } from './state.ts';
 import { agentName, logError, publish, publishState } from './events.ts';
-import { config, setting } from '../config/settings.ts';
+import { setting } from '../config/settings.ts';
 import { DONE_MARKER, relay } from './state.ts';
 import { checkTokenLimit } from './conversation.ts';
 import { DRIVERS } from '../providers/registry.ts';
-import { addAgent, providerBlocked } from './team.ts';
+import { addAgent, providerBlocked, statusFor } from './team.ts';
+import { canReceiveWork } from '../core/agent-status.ts';
+import { addBatchPart, finishBatchPart } from './batch.ts';
+import { deliver } from './delivery.ts';
 import { driverModelCache } from './state.ts';
 import { isRecommended } from '../core/roles.ts';
 import { randomUUID } from 'node:crypto';
 import { resolveRecipients } from '../core/recipients.ts';
-import { reviewChanges } from '../workspace/git-context.ts';
 import { summarizeProject } from './project.ts';
-import { rosterText } from '../core/prompts.ts';
 export function orchestratorId() {
   return (S.conv.team.find((a) => a.role === 'orchestrator') || S.conv.team[0])?.id;
 }
@@ -80,31 +81,43 @@ export function reviewNote(fromId: string, text: string): string {
   return `${text}\n\n[Agent Bridge: review round ${S.conv.reviewRounds} of ${max}. Send the findings to the coder.]`;
 }
 
+function completeBatch(owner: Conversation, agent: string, taskId: string, text: string, sourceSeq?: number) {
+  if (owner !== S.conv) return;
+  const batch = finishBatchPart(owner, agent, taskId, text, sourceSeq);
+  if (!batch) return;
+  const orch = orchestratorId();
+  if (batch.pending.size) {
+    publish({
+      kind: 'system',
+      text: agentName(agent) + ' finished. Waiting for ' + [...batch.pending.keys()].map(agentName).join(', ') + '.',
+    });
+    return;
+  }
+  if (!relay.auto || owner.relay.halted || checkTokenLimit() || !canReceiveWork(statusFor(owner, orch))) return;
+  owner.relay.hops += 1;
+  const body = batch.results.map((item) => '[Message from ' + agentName(item.from) + ']\n' + item.text).join('\n\n');
+  const intro = batch.results.length > 1 ? '[Results from ' + batch.results.length + ' agents]\n\n' : '';
+  deliver(orch, intro + body, {
+    from: batch.results[0].from,
+    sourceSeq: sourceSeq ?? batch.results.findLast((item) => item.sourceSeq)?.sourceSeq,
+  });
+}
+
+export function cancelBatchPart(owner: Conversation, agent: string, reason: string, taskIds?: string[]) {
+  const taskId = owner.batch?.pending.get(agent);
+  if (taskId && (!taskIds || taskIds.includes(taskId))) completeBatch(owner, agent, taskId, '(' + reason + ')');
+}
+
 export function onTurnEnd(fromId: string, ev: AgentEvent): void {
   const text = reviewNote(fromId, (ev.text || '').trim());
   const orch = orchestratorId();
 
-  // Orchestrator mode: results of the agents the orchestrator delegated to are collected and delivered
-  // in one message once all of them have finished (one orchestrator turn instead of one per result).
-  if (S.conv.routingMode === 'orchestrator' && fromId !== orch && S.conv.batch?.pending.has(fromId)) {
-    S.conv.batch.pending.delete(fromId);
-    S.conv.batch.results.push({ from: fromId, text: text || `(no answer${ev.detail ? `: ${ev.detail}` : ''})` });
-    if (S.conv.batch.pending.size) {
-      publish({
-        kind: 'system',
-        text: `${agentName(fromId)} finished. Waiting for ${[...S.conv.batch.pending].map(agentName).join(', ')} before passing the results to ${agentName(orch)}.`,
-      });
-      return;
+  const owner = S.conv;
+  const task = owner.batch?.pending.get(fromId);
+  if (task) {
+    if (ev.taskIds?.includes(task)) {
+      completeBatch(owner, fromId, task, text || '(no answer' + (ev.detail ? ': ' + ev.detail : '') + ')', ev.sourceSeq ?? ev.seq);
     }
-    const results = S.conv.batch.results;
-    S.conv.batch = null;
-    if (!relay.auto || relay.halted || checkTokenLimit()) return;
-    relay.hops += 1;
-    const body = results.map((r) => `[Message from ${agentName(r.from)}]\n${r.text}`).join('\n\n');
-    deliver(orch, results.length > 1 ? `[Results from ${results.length} agents]\n\n${body}` : body, {
-      from: results[0].from,
-      sourceSeq: ev.sourceSeq ?? ev.seq,
-    });
     return;
   }
   if (!text) return;
@@ -114,7 +127,7 @@ export function onTurnEnd(fromId: string, ev: AgentEvent): void {
   // In orchestrator mode only the orchestrator closes the work; a worker's [[DONE]] still goes back to it.
   const closes = S.conv.routingMode !== 'orchestrator' || fromId === orch;
   if (DONE_MARKER.test(text) && closes) {
-    relay.halted = true;
+    S.conv.relay.halted = true;
     publish({ kind: 'system', text: `${agentName(fromId)} marked the work as done. Waiting for you.` });
     // Final confirmation: the user approves the result or asks for changes.
     if (setting('finalConfirmation') && S.conv.routingMode === 'orchestrator') {
@@ -133,29 +146,47 @@ export function onTurnEnd(fromId: string, ev: AgentEvent): void {
     publishState();
     return;
   }
-  if (!relay.auto || relay.halted) return;
+  if (!relay.auto || S.conv.relay.halted) return;
   if (checkTokenLimit()) return;
-  const targets = routeTargets(fromId, text).filter((t) => S.conv.agents[t]);
+  const requested = routeTargets(fromId, text).filter((id) => owner.agents[id]);
+  const targets = requested.filter((id) => canReceiveWork(statusFor(owner, id)) && !owner.batch?.pending.has(id));
+  const blocked = requested.filter((id) => !canReceiveWork(statusFor(owner, id)));
+  const note = blocked.length
+    ? 'Unavailable: ' + blocked.map(agentName).join(', ') + '. Choose available agents or explain what cannot proceed.'
+    : '';
+  if (note) publish({ kind: 'system', text: note });
   if (!targets.length) {
+    if (note && fromId === orch) {
+      if (owner.relay.hops < relay.maxHops) {
+        owner.relay.hops += 1;
+        deliver(orch, '[Message from Agent Bridge]\n' + note, { from: 'user' });
+      }
+      return;
+    }
     publish({ kind: 'system', text: `${agentName(fromId)} replied to you.` });
     return;
   }
-  if (relay.hops + targets.length > relay.maxHops) {
-    relay.halted = true;
+  if (S.conv.relay.hops + targets.length > relay.maxHops) {
+    S.conv.relay.halted = true;
     publish({
       kind: 'system',
-      text: `Relay paused after ${relay.hops} hand-offs (limit ${relay.maxHops}). Send a message or press Resume to continue.`,
+      text: `Relay paused after ${S.conv.relay.hops} hand-offs (limit ${relay.maxHops}). Send a message or press Resume to continue.`,
     });
     publishState();
     return;
   }
-  if (S.conv.routingMode === 'orchestrator' && fromId === orch) {
-    S.conv.batch = S.conv.batch || { pending: new Set(), results: [] };
-    for (const t of targets) S.conv.batch.pending.add(t);
-  }
-  for (const to of targets) {
-    relay.hops += 1;
-    deliver(to, `[Message from ${agentName(fromId)}]\n${text}`, { from: fromId, sourceSeq: ev.sourceSeq ?? ev.seq });
+  const deliveries = targets.map((to) => ({
+    to,
+    taskId: owner.routingMode === 'orchestrator' && fromId === orch ? addBatchPart(owner, to) : undefined,
+  }));
+  for (const { to, taskId } of deliveries) {
+    owner.relay.hops += 1;
+    deliver(to, '[Message from ' + agentName(fromId) + ']\n' + text, {
+      from: fromId,
+      sourceSeq: ev.sourceSeq ?? ev.seq,
+      taskId,
+      discarded: taskId ? (reason) => completeBatch(owner, to, taskId, '(not delivered: ' + reason + ')') : undefined,
+    });
   }
 }
 
@@ -202,9 +233,9 @@ export function handleNeedRole(fromId: string, text: string): boolean {
     resolveMissingRole(roleId, 'closest');
     return true;
   }
-  relay.halted = true;
+  S.conv.relay.halted = true;
   const sug = suggestFor(roleId);
-  const requestId = `role-${Date.now()}`;
+  const requestId = 'role-' + randomUUID();
   S.conv.pendingRoleRequest = { requestId, roleId };
   publish({
     kind: 'needRole',
@@ -223,8 +254,8 @@ export async function resolveMissingRole(roleId: string, action: string): Promis
   const role = S.roles[roleId];
   const orch = orchestratorId();
   S.conv.pendingRoleRequest = null;
-  relay.halted = false;
-  relay.hops = 0;
+  S.conv.relay.halted = false;
+  S.conv.relay.hops = 0;
   if (action === 'add') {
     const sug = suggestFor(roleId);
     const spec = await addAgent({ driver: sug.driver, role: roleId, model: sug.model });
@@ -248,106 +279,6 @@ export async function resolveMissingRole(roleId: string, action: string): Promis
   publishState();
 }
 
-/** Send a message to one agent, adding the team roster or a role note when they changed. */
-type Delivery = { from: string; sourceSeq?: number };
-const reviewerQueues = new WeakMap<typeof S.conv, Map<string, Promise<void>>>();
-
-export function deliver(toId: string, text: string, delivery: Delivery): void {
-  const owner = S.conv;
-  const agent = owner.agents[toId];
-  const spec = owner.team.find((member) => member.id === toId);
-  if (!agent || !spec) return;
-  const role = spec.role;
-  const needsDiff = S.roles[role]?.context === 'diff' && delivery.from !== 'user';
-  let queue = reviewerQueues.get(owner);
-  const previous = queue?.get(toId);
-  if (!needsDiff && !previous) return sendDelivery(toId, text, delivery);
-  if (!queue) reviewerQueues.set(owner, (queue = new Map()));
-  const original = needsDiff ? '[Original request from ' + setting('userName') + ']\n' + (owner.lastUserText || '(not available)') : '';
-  const valid = () => S.conv === owner && owner.agents[toId] === agent && spec.role === role;
-  const pending = (previous || Promise.resolve())
-    .then(async () => {
-      if (!valid()) return;
-      const extras = needsDiff ? [original, await diffContext(agent.cwd || owner.workDir)] : [];
-      if (valid()) sendDelivery(toId, text, delivery, extras);
-    })
-    .catch(() => {
-      if (valid()) publish({ kind: 'error', agent: toId, text: 'Could not prepare Reviewer context.' });
-    });
-  queue.set(toId, pending);
-  void pending.then(() => {
-    if (queue.get(toId) === pending) queue.delete(toId);
-  });
-}
-
-function sendDelivery(toId: string, text: string, { from, sourceSeq }: Delivery, context: string[] = []): void {
-  const agent = S.conv.agents[toId];
-  if (!agent) return;
-  const blocked = providerBlocked(S.conv.team.find((a) => a.id === toId)?.driver);
-  if (blocked) {
-    publish({ kind: 'error', agent: toId, text: `${agentName(toId)} was skipped: ${blocked.detail || blocked.state}.` });
-    return;
-  }
-  if (agent.available === false) {
-    publish({
-      kind: 'error',
-      agent: toId,
-      text: `${agentName(toId)} is unavailable, so the message was not delivered. ${agent.unavailableReason || ''}`,
-    });
-    return;
-  }
-  const extras = [];
-  if (S.conv.pendingRoleNote[toId]) {
-    extras.push(S.conv.pendingRoleNote[toId]);
-    delete S.conv.pendingRoleNote[toId];
-  }
-  if ((S.conv.rosterSeen[toId] || 0) < S.conv.rosterVersion) {
-    const team = S.conv.team.map((a) => ({
-      id: a.id,
-      name: a.name,
-      roleName: S.roles[a.role]?.name || a.role,
-      canEdit: S.roles[a.role]?.canEdit || 'all',
-      model: S.conv.agents[a.id]?.resolvedModel || S.conv.agents[a.id]?.model,
-    }));
-    extras.push(rosterText(team, toId, S.conv.routingMode));
-    S.conv.rosterSeen[toId] = S.conv.rosterVersion;
-  }
-  extras.push(...context);
-  S.conv.lastSender[toId] = from;
-  if (from !== 'user') publish({ kind: 'routed', from, to: toId, relayed: true, hop: relay.hops });
-  const id = randomUUID();
-  const task = { id, agent: toId, from, sourceSeq: sourceSeq || null, state: 'queued' as const };
-  S.conv.tasks.set(id, task);
-  publish({ kind: 'taskQueued', ...task });
-  agent.send(extras.length ? `${extras.join('\n\n')}\n\n${text}` : text, id);
-}
-
-/** git diff of the working tree (tracked changes + list of new files), trimmed to a reasonable size. */
-export async function diffContext(dir: string): Promise<string> {
-  const changes = await reviewChanges(dir, config.reviewDiffExcludePatterns);
-  if (!changes)
-    return '[Current changes]\n(No filtered file list is available. Git is unavailable, the folder has no Git history, or collection failed.)';
-  const { patch, files, omitted } = changes;
-  const configured = Number(setting('reviewDiffMaxChars'));
-  const limit = Number.isFinite(configured) && configured > 0 ? Math.max(1, Math.floor(configured)) : configured === 0 ? 0 : 40000;
-  const metadataOnly = patch === null || (limit > 0 && patch.length > limit);
-  const shown = (metadataOnly ? files : files.filter((file) => file.status === '??')).slice(0, 5000);
-  const list = shown.map(({ status, names }) => status + ' ' + names.map((name) => JSON.stringify(name)).join(' → ')).join('\n');
-  const line =
-    patch === null
-      ? '(The filtered patch could not be read.)'
-      : metadataOnly
-        ? '(Patch exceeds the configured size limit. Showing file status only.)'
-        : patch.trim() || '(no visible tracked changes)';
-  return (
-    '[Current changes (filtered git diff HEAD)]\n' +
-    line +
-    (list ? '\nFiltered files:\n' + list.slice(0, 200000) : '') +
-    (shown.length === 5000 || list.length > 200000 ? '\nFile list truncated.' : '') +
-    (omitted ? '\nSensitive paths omitted.' : '')
-  );
-}
-
 export function userTargets(target?: string, prefix?: string) {
   return resolveRecipients(S.conv.team, S.conv.routingMode, target, prefix).filter((id) => Object.hasOwn(S.conv.agents, id));
 }
@@ -356,8 +287,8 @@ export function userSend(text: string, target?: string): void {
   const targets = userTargets(target, text);
   if (!targets.length) throw new Error('no agent to receive this message');
   S.conv.lastUserText = text;
-  relay.hops = 0;
-  relay.halted = false;
+  S.conv.relay.hops = 0;
+  S.conv.relay.halted = false;
   const source = publish({ kind: 'user', text, to: targets });
   const note = targets.length > 1 ? ` (sent to ${targets.length} agents)` : '';
   for (const t of targets) deliver(t, `[Message from ${setting('userName')}${note}]\n${text}`, { from: 'user', sourceSeq: source.seq });

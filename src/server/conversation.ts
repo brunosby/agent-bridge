@@ -11,7 +11,7 @@ import { approvalTimers, cliCache, providerRuntime, relay } from './state.ts';
 import { createAgent, defaultName, defaultTeam, startAgent, uniqueName } from './team.ts';
 import { driverModelCache } from './state.ts';
 import { DRIVERS } from '../providers/registry.ts';
-import { onTurnEnd } from './routing.ts';
+import { cancelBatchPart, onTurnEnd } from './routing.ts';
 import { isTestCommand } from '../core/test-command.ts';
 import { captureProject } from './project.ts';
 import { buildMatcher } from '../core/safety.ts';
@@ -43,6 +43,7 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
     transcript: fs.createWriteStream(path.join(runDir, 'transcript.jsonl'), { flags: 'a' }),
     workDir,
     routingMode: (routingMode && routingMode in ROUTING_MODES ? routingMode : setting('routingMode')) as RoutingMode,
+    relay: { hops: 0, halted: Boolean(saved), userPaused: Boolean(saved) },
     team: [],
     agents: {},
     nextAgent: 0,
@@ -62,8 +63,6 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
   };
   S.history = saved ? saved.events : [];
   S.seq = Math.max(S.seq, saved?.lastSeq || 0);
-  relay.hops = 0;
-  relay.halted = Boolean(saved);
 
   for (const t of team || defaultTeam()) {
     const driver = DRIVERS[t.driver] ? t.driver : 'claude';
@@ -144,10 +143,27 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
           text: `${DRIVERS[driver].label}: ${ev.state === 'rate_limited' ? `usage limit reached${when}` : 'the account has no access (plan inactive, invalid key or no credit)'}. Its models are disabled; see Settings > Accounts.`,
         });
       }
-      if (changed) publishState();
+      if (changed) {
+        owner.rosterVersion += 1;
+        publishState();
+      }
+      const resetsAt = Number(ev.resetsAt);
+      if (ev.state === 'rate_limited' && resetsAt > Date.now() && resetsAt - Date.now() < 2147483647) {
+        const current = providerRuntime[driver];
+        setTimeout(
+          () => {
+            if (providerRuntime[driver] !== current || !S.conv) return;
+            S.conv.rosterVersion += 1;
+            publishState();
+          },
+          Math.max(1, resetsAt - Date.now() + 10),
+        ).unref();
+      }
       return;
     }
     if (ev.kind === 'unavailable') {
+      owner.rosterVersion += 1;
+      cancelBatchPart(owner, id, 'not delivered: agent unavailable');
       logError(agentName(id), `unavailable: ${ev.reason}`);
       publish({
         kind: 'error',
@@ -214,6 +230,7 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       delete owner.lastAnswerSeq[id];
       onTurnEnd(id, { ...ev, seq: published.seq, sourceSeq });
     }
+    if (ev.kind === 'tasksCancelled') cancelBatchPart(owner, id, 'cancelled: provider interrupted the task', ev.taskIds || []);
     if (ev.kind === 'taskStarted' || ev.kind === 'tasksCancelled') publishState();
   });
 }
@@ -246,9 +263,9 @@ export function totalTokens() {
 
 export function checkTokenLimit() {
   const limit = Number(setting('tokenLimit'));
-  if (!(limit > 0) || relay.halted) return false;
+  if (!(limit > 0) || S.conv.relay.halted) return false;
   if (totalTokens() < limit) return false;
-  relay.halted = true;
+  S.conv.relay.halted = true;
   publish({
     kind: 'system',
     text: `Token limit reached (${totalTokens().toLocaleString()} of ${limit.toLocaleString()}). Hand-offs are paused; send a message or press Resume to continue.`,

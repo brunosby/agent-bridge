@@ -22,7 +22,7 @@ export const DONE_MARKER = /^\s*\[\[DONE\]\]\s*$/m;
 export const providerRuntime: Record<string, RuntimeStatus> = {};
 
 /** Hand-off state of the relay between agents. */
-export const relay = { auto: Boolean(setting('autoRelay')), maxHops: Number(setting('maxHops')), hops: 0, halted: false };
+export const relay = { auto: Boolean(setting('autoRelay')), maxHops: Number(setting('maxHops')) };
 
 export const approvalTimers = new Map<string, NodeJS.Timeout>();
 

@@ -1,5 +1,5 @@
 // The team: creating, adding, removing and reconfiguring agents; role profiles; model lists.
-import type { Agent, AgentEvent, AgentSpec, ModelInfo } from '../core/types.ts';
+import type { Agent, AgentEvent, AgentSpec, Conversation, ModelInfo } from '../core/types.ts';
 import type { RuntimeStatus } from '../providers/accounts.ts';
 import { S } from './state.ts';
 import path from 'node:path';
@@ -20,6 +20,7 @@ import { wireAgent } from './conversation.ts';
 import { captureProject } from './project.ts';
 import { createWorktree } from '../workspace/worktree.ts';
 import { globMatch } from '../core/roles.ts';
+import { startAndWait, statusOf } from './agent-lifecycle.ts';
 /** Team used for a new conversation: config.defaultTeam, else the old mainAgent setting. */
 export function defaultTeam() {
   if (Array.isArray(config.defaultTeam) && config.defaultTeam.length) return config.defaultTeam.map((a) => ({ ...a }));
@@ -77,6 +78,10 @@ export function providerBlocked(driver: string | undefined): RuntimeStatus | nul
   if (!r || r.state === 'ok') return null;
   if (r.state === 'rate_limited' && r.resetsAt && r.resetsAt < Date.now()) return null;
   return r;
+}
+
+export function statusFor(owner: Conversation, id: string) {
+  return statusOf(owner.agents[id], providerBlocked(owner.team.find((spec) => spec.id === id)?.driver));
 }
 
 export function uniqueName(base: string): string {
@@ -179,7 +184,11 @@ export interface AddAgentInput {
   worktree?: boolean;
 }
 
-export async function addAgent({ driver, role, name, model, effort, bypass, worktree }: AddAgentInput): Promise<AgentSpec> {
+export async function addAgent(
+  { driver, role, name, model, effort, bypass, worktree }: AddAgentInput,
+  waitUntilReady = false,
+): Promise<AgentSpec> {
+  const owner = S.conv;
   if (!DRIVERS[driver]) throw new Error(`unknown provider ${driver}`);
   if (!S.roles[role]) throw new Error(`unknown role ${role}`);
   const spec: AgentSpec = {
@@ -193,6 +202,7 @@ export async function addAgent({ driver, role, name, model, effort, bypass, work
   };
   if (worktree) {
     const wt = await createWorktree({ repoDir: S.conv.workDir, conversationId: S.conv.id, agentName: spec.name });
+    if (S.conv !== owner) throw new Error('conversation changed while creating the worktree');
     spec.cwd = wt.path;
     spec.worktree = wt;
     captureProject(S.conv, wt.path, true);
@@ -202,13 +212,16 @@ export async function addAgent({ driver, role, name, model, effort, bypass, work
   S.conv.team.push(spec);
   S.conv.rosterVersion++;
   const agent = createAgent(spec);
-  await startAgent(agent);
+  const ready = startAgent(agent);
+  if (waitUntilReady) await ready;
+  if (S.conv !== owner || owner.agents[spec.id] !== agent) return spec;
   publish({ kind: 'system', text: `Added ${spec.name} (${DRIVERS[driver].label}, ${S.roles[role].name}).` });
   publishState();
   return spec;
 }
 
 export async function removeAgent(id: string): Promise<void> {
+  const owner = S.conv;
   const idx = S.conv.team.findIndex((a) => a.id === id);
   if (idx < 0) throw new Error('unknown agent');
   if (S.conv.team.length === 1) throw new Error('a conversation needs at least one agent');
@@ -220,6 +233,7 @@ export async function removeAgent(id: string): Promise<void> {
   if (taskIds.length) publish({ kind: 'tasksCancelled', agent: id, taskIds });
   S.conv.rosterVersion++;
   await agent?.shutdown().catch(() => {});
+  if (S.conv !== owner) return;
   publish({ kind: 'system', text: `Removed ${spec.name}. Its session stays saved in the log.` });
   publishState();
 }
@@ -262,12 +276,13 @@ export async function setRole(id: string, roleId: string): Promise<void> {
   publishState();
 }
 
-export async function startAgent(agent: Agent): Promise<void> {
-  try {
-    await agent.start();
-  } catch {
-    // start errors are reported by the agent itself (and mark it unavailable)
-  }
+export function startAgent(agent: Agent, launch = () => agent.start()): Promise<boolean> {
+  const owner = S.conv;
+  return startAndWait(agent, launch, () => {
+    if (S.conv !== owner || owner.agents[agent.id] !== agent) return;
+    owner.rosterVersion += 1;
+    publishState();
+  });
 }
 
 /**

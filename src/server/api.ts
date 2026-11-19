@@ -5,8 +5,9 @@ import { agentName, logError, publish, publishState } from './events.ts';
 import { DRIVERS } from '../providers/registry.ts';
 import { LOGS_DIR, ROLES_DIR, SETTINGS, config, safeRegex, saveLocalConfig, setting } from '../config/settings.ts';
 import { ROUTING_MODES } from '../core/prompts.ts';
+import { canReceiveWork } from '../core/agent-status.ts';
 import { newConversation, restoreConversation, saveSettings, settingsView } from './conversation.ts';
-import { resolveMissingRole, userSend, userTargets } from './routing.ts';
+import { cancelBatchPart, resolveMissingRole, userSend, userTargets } from './routing.ts';
 import { approvalTimers, cliCache, providerRuntime, relay } from './state.ts';
 import {
   type AddAgentInput,
@@ -17,6 +18,8 @@ import {
   removeAgent,
   roleProfile,
   setRole,
+  startAgent,
+  statusFor,
 } from './team.ts';
 import { loadRoles } from '../core/roles.ts';
 import { PROVIDERS, cliStatus, mergeStatus, nextStep, openLoginTerminal } from '../providers/accounts.ts';
@@ -55,7 +58,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
         targets: ids.map((id) => ({
           id,
           name: agentName(id),
-          available: agents[id].available !== false && !providerBlocked(S.conv.team.find((a) => a.id === id)?.driver),
+          available: canReceiveWork(statusFor(S.conv, id)),
         })),
       };
     }
@@ -68,10 +71,10 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       if (typeof body.auto === 'boolean') relay.auto = body.auto;
       if (Number.isFinite(body.maxHops) && body.maxHops >= 0) relay.maxHops = body.maxHops;
       if (body.resume) {
-        relay.halted = false;
-        relay.hops = 0;
+        S.conv.relay.halted = false;
+        S.conv.relay.hops = 0;
       }
-      if (body.pause) relay.halted = true;
+      if (body.pause) S.conv.relay.halted = true;
       publishState();
       return { ok: true };
     case 'routing': {
@@ -146,12 +149,17 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       return { ok: true };
     }
     case 'interrupt': {
-      if (S.conv.batch) S.conv.batch = null;
-      relay.halted = true;
-      const ids = body.agent ? [body.agent] : Object.keys(agents);
+      const owner = S.conv;
+      const ids = body.agent ? [agentOf(body.agent).id] : Object.keys(agents);
+      if (!body.agent) {
+        owner.batch = null;
+        owner.relay.halted = owner.relay.userPaused = true;
+      } else cancelBatchPart(owner, body.agent, 'cancelled: stopped by the user');
       await Promise.all(ids.map((id) => agents[id]?.interrupt()));
-      publish({ kind: 'system', text: `Stopped ${ids.map(agentName).join(', ')}. Relay paused.` });
-      publishState();
+      if (S.conv === owner) {
+        publish({ kind: 'system', text: 'Stopped ' + ids.map(agentName).join(', ') + (body.agent ? '.' : '. Relay paused.') });
+        publishState();
+      }
       return { ok: true };
     }
     case 'model': {
@@ -230,14 +238,16 @@ export async function api(action: string, body: Record<string, any>): Promise<un
     }
     case 'addAgent':
       return { ok: true, agent: await addAgent(body as AddAgentInput) };
-    case 'removeAgent':
+    case 'removeAgent': {
+      const owner = S.conv;
       await removeAgent(body.agent);
+      cancelBatchPart(owner, body.agent, 'cancelled: agent removed');
       return { ok: true };
+    }
     case 'retry': {
       const agent = agentOf(body.agent);
       publish({ kind: 'system', text: `Retrying ${agentName(body.agent)}...` });
-      await agent.restart();
-      publishState();
+      await startAgent(agent, () => agent.restart());
       return { ok: true };
     }
     case 'settings':
