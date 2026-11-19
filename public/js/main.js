@@ -9,6 +9,7 @@ import { api, connect } from './core/api.js';
 import { $ } from './core/dom.js';
 import { renderState } from './features/agents.js';
 import { addSys } from './features/conversation-log.js';
+import { setupRequestNotifications } from './features/request-notifications.js';
 export async function loadCatalog() {
   store.catalog = await api('catalog');
   const r = $('routing');
@@ -24,6 +25,7 @@ export async function loadCatalog() {
   if (store.state) renderState();
 }
 
+setupRequestNotifications();
 loadCatalog()
   .catch((e) => addSys(`Could not load settings: ${e.message}`, true))
   .finally(connect);

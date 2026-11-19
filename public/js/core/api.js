@@ -1,6 +1,7 @@
 // Talking to the local server: API calls and the live event stream.
 import { store } from './store.js';
 import { addSys, handle } from '../features/conversation-log.js';
+import { observeRequestNotifications } from '../features/request-notifications.js';
 export const TOKEN = document.querySelector('meta[name="bridge-token"]').content;
 
 export async function api(action, body = {}) {
@@ -20,6 +21,7 @@ export function connect() {
     const ev = JSON.parse(m.data);
     if (ev.kind === 'replayComplete') {
       handle(ev);
+      observeRequestNotifications(ev);
       return;
     }
     if (ev.kind === 'reset') {
@@ -31,6 +33,7 @@ export function connect() {
       store.lastSeq = ev.seq;
     }
     handle(ev);
+    observeRequestNotifications(ev);
   };
   es.onerror = () => addSys('Connection to the bridge lost. Retrying...', true);
 }
