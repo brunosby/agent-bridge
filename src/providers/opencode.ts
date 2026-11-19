@@ -1,3 +1,5 @@
+import { cancelQueuedTasks, inputTaskIds } from './task-queue.ts';
+import type { ProviderEventArgs } from '../core/types.ts';
 import { EventEmitter } from 'node:events';
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -122,7 +124,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     return this.config.model || null;
   }
 
-  emitEvent(kind: string, data: Record<string, unknown> = {}): void {
+  emitEvent<const K extends string>(kind: K, ...[data]: ProviderEventArgs<NoInfer<K>>): void {
     this.emit('event', { agent: this.id, kind, ...data });
   }
 
@@ -233,7 +235,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
       this.proc = null;
       this.ready = null;
       this.running = false;
-      const taskIds = this.activeBatch?.map((input) => input.taskId).filter(Boolean) || [];
+      const taskIds = inputTaskIds(this.activeBatch);
       this.activeBatch = null;
       if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
       this.cancelQueued();
@@ -533,7 +535,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     this.running = true;
     const batch = this.queue.splice(0);
     this.activeBatch = batch;
-    const taskIds = batch.map((input) => input.taskId).filter(Boolean);
+    const taskIds = inputTaskIds(batch);
     const text = batch.map((input) => input.text).join('\n\n');
     if (taskIds.length) this.emitEvent('taskStarted', { taskIds });
     const body: Record<string, unknown> = {
@@ -592,11 +594,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
   }
 
   cancelQueued(): void {
-    const taskIds = this.queue
-      .splice(0)
-      .map((input) => input.taskId)
-      .filter(Boolean);
-    if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
+    cancelQueuedTasks(this.queue, (taskIds) => this.emitEvent('tasksCancelled', { taskIds }));
   }
 
   async interrupt() {

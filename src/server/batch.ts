@@ -1,4 +1,4 @@
-import type { Conversation } from '../core/types.ts';
+import type { Conversation, DeliveryBatch } from '../core/types.ts';
 import { randomUUID } from 'node:crypto';
 
 export function addBatchPart(owner: Conversation, agent: string): string | undefined {
@@ -9,7 +9,13 @@ export function addBatchPart(owner: Conversation, agent: string): string | undef
   return taskId;
 }
 
-export function finishBatchPart(owner: Conversation, agent: string, taskId: string, text: string, sourceSeq?: number) {
+export function finishBatchPart(
+  owner: Conversation,
+  agent: string,
+  taskId: string,
+  text: string,
+  sourceSeq?: number,
+): DeliveryBatch | undefined {
   const batch = owner.batch;
   if (!batch || batch.pending.get(agent) !== taskId) return;
   batch.pending.delete(agent);

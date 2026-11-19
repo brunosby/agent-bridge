@@ -1,3 +1,4 @@
+import type { ProviderEventArgs } from '../core/types.ts';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { spawnJsonl, type JsonlProcess } from './process.ts';
@@ -166,7 +167,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     return Boolean(this.activeBatch) || this.unconfirmed.size > 0;
   }
 
-  emitEvent(kind: string, data: Record<string, unknown> = {}): void {
+  emitEvent<const K extends string>(kind: K, ...[data]: ProviderEventArgs<NoInfer<K>>): void {
     this.emit('event', { agent: this.id, kind, ...data });
   }
 
@@ -237,7 +238,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
         const taskIds = [...(this.activeBatch?.taskIds || []), ...this.unconfirmed.values()];
         this.activeBatch = null;
         this.unconfirmed.clear();
-        const cancelled = taskIds.filter(Boolean);
+        const cancelled = taskIds.filter((id): id is string => Boolean(id));
         if (cancelled.length) this.emitEvent('tasksCancelled', { taskIds: cancelled });
         this.closeApprovals();
         this.emitEvent('status', { busy: false });
@@ -453,7 +454,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
         const batch = this.activeBatch;
         this.activeBatch = null;
         if (!batch && this.unconfirmed.size) {
-          const taskIds = [...this.unconfirmed.values()].filter(Boolean);
+          const taskIds = [...this.unconfirmed.values()].filter((id): id is string => Boolean(id));
           this.unconfirmed.clear();
           if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
           this.emitEvent('error', { text: 'Claude returned without acknowledging its inputs. Unconfirmed inputs were not resent.' });

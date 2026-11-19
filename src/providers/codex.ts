@@ -1,3 +1,5 @@
+import { cancelQueuedTasks, inputTaskIds } from './task-queue.ts';
+import type { ProviderEventArgs } from '../core/types.ts';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { spawnJsonl, type JsonlProcess } from './process.ts';
@@ -81,7 +83,7 @@ export class CodexAgent extends EventEmitter implements Agent {
     return Boolean(this.activeBatch || this.activeTurnId || this.steering) || this.queue.length > 0;
   }
 
-  emitEvent(kind: string, data: Record<string, unknown> = {}): void {
+  emitEvent<const K extends string>(kind: K, ...[data]: ProviderEventArgs<NoInfer<K>>): void {
     this.emit('event', { agent: this.id, kind, ...data });
   }
 
@@ -134,7 +136,7 @@ export class CodexAgent extends EventEmitter implements Agent {
         this.proc = null;
         this.ready = null;
         this.activeTurnId = null;
-        const taskIds = [...(this.activeBatch || []), ...(this.steering?.batch || [])].map((input) => input.taskId).filter(Boolean);
+        const taskIds = [...inputTaskIds(this.activeBatch), ...inputTaskIds(this.steering?.batch)];
         this.activeBatch = null;
         this.steering = null;
         this.blockedSteerTurn = null;
@@ -268,7 +270,7 @@ export class CodexAgent extends EventEmitter implements Agent {
     if (this.activeBatch) return;
     const batch = this.queue.splice(0);
     this.activeBatch = batch;
-    const taskIds = batch.map((input) => input.taskId).filter(Boolean);
+    const taskIds = inputTaskIds(batch);
     const text = batch.map((input) => input.text).join('\n\n');
     try {
       const params: Record<string, unknown> = { threadId: this.threadId, input: [{ type: 'text', text, text_elements: [] }] };
@@ -302,7 +304,7 @@ export class CodexAgent extends EventEmitter implements Agent {
   async steer(threadId: string, expectedTurnId: string): Promise<void> {
     const pending: NonNullable<CodexAgent['steering']> = { batch: this.queue.splice(0), turnId: expectedTurnId };
     this.steering = pending;
-    const taskIds = pending.batch.map((input) => input.taskId).filter(Boolean);
+    const taskIds = inputTaskIds(pending.batch);
     const text = pending.batch.map((input) => input.text).join('\n\n');
     try {
       const result = await this.request(
@@ -369,11 +371,7 @@ export class CodexAgent extends EventEmitter implements Agent {
   }
 
   cancelQueued(): void {
-    const taskIds = this.queue
-      .splice(0)
-      .map((input) => input.taskId)
-      .filter(Boolean);
-    if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
+    cancelQueuedTasks(this.queue, (taskIds) => this.emitEvent('tasksCancelled', { taskIds }));
   }
 
   async interrupt() {
@@ -522,7 +520,7 @@ export class CodexAgent extends EventEmitter implements Agent {
           break;
         }
         this.blockedSteerTurn = null;
-        const taskIds = this.activeBatch?.map((input) => input.taskId).filter(Boolean) || [];
+        const taskIds = inputTaskIds(this.activeBatch);
         this.activeBatch = null;
         this.activeTurnId = null;
         if (turn.status === 'completed') this.emitEvent('account', { state: 'ok' });

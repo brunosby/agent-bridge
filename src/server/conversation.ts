@@ -1,3 +1,4 @@
+import { isTaskLifecycleKind, readAgentTaskEvent } from '../core/task-events.ts';
 // Conversation lifecycle: open, close, restore, wire agent events, approvals timeout, token limit, settings.
 import type { Agent, AgentEvent, AgentSpec, Conversation, RoutingMode } from '../core/types.ts';
 import { S } from './state.ts';
@@ -189,11 +190,16 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       armApprovalTimeout(id, ev);
     }
     if (ev.kind === 'approvalClosed') clearTimeout(approvalTimers.get(ev.requestId));
-    if (ev.kind === 'taskStarted' || ev.kind === 'turnEnd' || ev.kind === 'tasksCancelled') {
-      for (const taskId of ev.taskIds || []) {
+    const lifecycle = isTaskLifecycleKind(ev.kind) ? readAgentTaskEvent(ev) : null;
+    if (isTaskLifecycleKind(ev.kind) && !lifecycle) {
+      publish({ kind: 'info', agent: id, text: 'Ignored a malformed provider task event.' });
+      return;
+    }
+    if (lifecycle) {
+      for (const taskId of lifecycle.taskIds) {
         const task = owner.tasks.get(taskId);
         if (task?.agent !== id) continue;
-        if (ev.kind === 'taskStarted') task.state = 'working';
+        if (lifecycle.kind === 'taskStarted') task.state = 'working';
         else owner.tasks.delete(taskId);
       }
     }
@@ -237,14 +243,14 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
     const clean = markers ? { ...ev, text: markers.text } : ev;
     const published = publish(clean);
     if (ev.kind === 'text' && ev.final && published.seq) owner.lastAnswerSeq[id] = published.seq;
-    if (ev.kind === 'turnEnd') {
+    if (lifecycle?.kind === 'turnEnd') {
       const sourceSeq = owner.lastAnswerSeq[id] ?? published.seq;
       delete owner.lastAnswerSeq[id];
       if (markers?.incomplete) publish({ kind: 'info', agent: id, text: 'Incomplete role recommendation ignored.' });
       if (markers?.roles.length && offerRecommendedRoles(owner, id, markers.roles)) return;
-      onTurnEnd(id, { ...clean, seq: published.seq, sourceSeq });
+      onTurnEnd(id, { ...lifecycle, text: markers?.text ?? lifecycle.text, seq: published.seq, sourceSeq });
     }
-    if (ev.kind === 'tasksCancelled') cancelBatchPart(owner, id, 'cancelled: provider interrupted the task', ev.taskIds || []);
+    if (lifecycle?.kind === 'tasksCancelled') cancelBatchPart(owner, id, 'cancelled: provider interrupted the task', lifecycle.taskIds);
     if (ev.kind === 'taskStarted' || ev.kind === 'tasksCancelled') publishState();
   });
 }

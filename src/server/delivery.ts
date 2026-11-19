@@ -1,3 +1,4 @@
+import type { TaskEvent } from '../core/types.ts';
 import { canReceiveWork } from '../core/agent-status.ts';
 import { rosterText } from '../core/prompts.ts';
 import { reviewChanges } from '../workspace/git-context.ts';
@@ -106,12 +107,12 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
   const id = taskId || randomUUID();
   const task = { id, agent: toId, from, sourceSeq: sourceSeq || null, state: 'queued' as const };
   S.conv.tasks.set(id, task);
-  publish({ kind: 'taskQueued', ...task });
+  publish({ kind: 'taskQueued', ...task } satisfies TaskEvent);
   try {
     agent.send(extras.length ? extras.join('\n\n') + '\n\n' + text : text, id);
   } catch {
     owner.tasks.delete(id);
-    publish({ kind: 'tasksCancelled', agent: toId, taskIds: [id] });
+    publish({ kind: 'tasksCancelled', agent: toId, taskIds: [id] } satisfies TaskEvent);
     discarded?.('provider rejected the delivery');
   }
 }

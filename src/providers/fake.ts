@@ -1,3 +1,4 @@
+import type { ProviderEventArgs } from '../core/types.ts';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -67,7 +68,7 @@ export class FakeAgent extends EventEmitter implements Agent {
     return this.config.effort || null;
   }
 
-  emitEvent(kind: string, data: Record<string, unknown> = {}): void {
+  emitEvent<const K extends string>(kind: K, ...[data]: ProviderEventArgs<NoInfer<K>>): void {
     this.emit('event', { agent: this.id, kind, ...data });
   }
 
@@ -138,7 +139,7 @@ export class FakeAgent extends EventEmitter implements Agent {
 
   async interrupt(): Promise<void> {
     for (const timer of this.timers.keys()) clearTimeout(timer);
-    const taskIds = [...this.timers.values()].filter(Boolean);
+    const taskIds = [...this.timers.values()].filter((id): id is string => Boolean(id));
     this.timers.clear();
     this.busyCount = 0;
     if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });

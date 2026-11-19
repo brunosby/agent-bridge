@@ -28,6 +28,8 @@ test('orchestrator delegates in parallel, gets both results in one message, then
     const user = await b.waitFor((e) => e.kind === 'user');
     assert.deepEqual(user.to.map(b.nameOf), ['Lead']);
 
+    await b.waitFor((e) => e.kind === 'batchProgress' && e.pending.length === 1);
+    await b.waitFor((e) => e.kind === 'batchCompleted' && e.agents.length === 2);
     const final = await b.waitFor((e) => e.kind === 'finalReview');
     assert.match(final.summary, /Built and researched/);
 

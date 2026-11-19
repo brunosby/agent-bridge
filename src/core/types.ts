@@ -32,6 +32,40 @@ export interface AgentEvent {
   [key: string]: any;
 }
 
+export interface ProviderTaskPayloads {
+  taskStarted: { taskIds: string[]; turnId?: string | null };
+  tasksCancelled: { taskIds: string[] };
+  turnEnd: { taskIds: string[]; text: string; ok: boolean; turnId?: string | null; detail?: string; costUsd?: number };
+}
+
+export type ProviderEventArgs<K extends string> = K extends keyof ProviderTaskPayloads
+  ? [data: ProviderTaskPayloads[K]]
+  : [data?: Record<string, unknown>];
+
+export type AgentTaskEvent = {
+  [K in keyof ProviderTaskPayloads]: { agent: string; kind: K } & ProviderTaskPayloads[K];
+}[keyof ProviderTaskPayloads];
+export type TurnEnded = Extract<AgentTaskEvent, { kind: 'turnEnd' }>;
+
+export interface TrackedTask {
+  id: string;
+  agent: string;
+  from: string;
+  sourceSeq: number | null;
+  state: 'queued' | 'working';
+  activity?: string;
+}
+
+export type TaskEvent = AgentTaskEvent | ({ kind: 'taskQueued'; state: 'queued' } & TrackedTask);
+
+export interface DeliveryBatch {
+  pending: Map<string, string>;
+  results: { from: string; text: string; sourceSeq?: number }[];
+}
+
+export type BatchEvent =
+  { kind: 'batchProgress'; agent: string; pending: string[]; text: string } | { kind: 'batchCompleted'; agents: string[] };
+
 /** Per-provider settings from config.json (`claude`, `codex`, `opencode`, `fake`). */
 export interface DriverConfig {
   command?: string;
@@ -185,11 +219,11 @@ export interface Conversation {
   lastSender: Record<string, string>;
   lastUserText?: string;
   project: Record<string, { initial: GitSnapshot | null; git: boolean; branch: string | null; detached: boolean }>;
-  tasks: Map<string, { id: string; agent: string; from: string; sourceSeq: number | null; state: 'queued' | 'working'; activity?: string }>;
+  tasks: Map<string, TrackedTask>;
   testResults: string[];
   possibleTests: Map<string, string>;
   lastAnswerSeq: Record<string, number>;
-  batch?: { pending: Map<string, string>; results: { from: string; text: string; sourceSeq?: number }[] } | null;
+  batch?: DeliveryBatch | null;
   reviewRounds?: number;
   pendingRoleRequest?: { requestId: string; roleId: string } | null;
   pendingRecommendation?: { requestId: string; roles: RoleRecommendation[]; resolving: boolean } | null;

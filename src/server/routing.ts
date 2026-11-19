@@ -1,5 +1,5 @@
 // Routing: who receives each message, review rounds, missing roles, delivery to agents.
-import type { AgentEvent, AgentSpec, Conversation, RoleDecisionEvent, RoleRecommendation } from '../core/types.ts';
+import type { AgentSpec, BatchEvent, Conversation, RoleDecisionEvent, RoleRecommendation, TurnEnded } from '../core/types.ts';
 import { S } from './state.ts';
 import { agentName, logError, publish, publishState } from './events.ts';
 import { setting } from '../config/settings.ts';
@@ -88,12 +88,16 @@ function completeBatch(owner: Conversation, agent: string, taskId: string, text:
   if (!batch) return;
   const orch = orchestratorId();
   if (batch.pending.size) {
+    const pending = [...batch.pending.keys()];
     publish({
-      kind: 'system',
-      text: agentName(agent) + ' finished. Waiting for ' + [...batch.pending.keys()].map(agentName).join(', ') + '.',
-    });
+      kind: 'batchProgress',
+      agent,
+      pending,
+      text: agentName(agent) + ' finished. Waiting for ' + pending.map(agentName).join(', ') + '.',
+    } satisfies BatchEvent);
     return;
   }
+  publish({ kind: 'batchCompleted', agents: batch.results.map((part) => part.from) } satisfies BatchEvent);
   if (!relay.auto || owner.relay.halted || checkTokenLimit() || !canReceiveWork(statusFor(owner, orch))) return;
   owner.relay.hops += 1;
   const body = batch.results.map((item) => '[Message from ' + agentName(item.from) + ']\n' + item.text).join('\n\n');
@@ -109,7 +113,7 @@ export function cancelBatchPart(owner: Conversation, agent: string, reason: stri
   if (taskId && (!taskIds || taskIds.includes(taskId))) completeBatch(owner, agent, taskId, '(' + reason + ')');
 }
 
-export function onTurnEnd(fromId: string, ev: AgentEvent): void {
+export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; sourceSeq?: number }): void {
   const text = reviewNote(fromId, (ev.text || '').trim());
   const orch = orchestratorId();
 

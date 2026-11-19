@@ -394,6 +394,9 @@ export function handle(ev) {
       if (!ev.taskIds?.length) break;
       addLine(ev, 'system', 'sys', label(ev.agent) + ' · ' + ev.taskIds.length + ' task(s) interrupted', [ev.agent]);
       break;
+    case 'batchProgress':
+      addLine(ev, 'system', 'sys', ev.text, [ev.agent, ...ev.pending]);
+      break;
     case 'system':
     case 'info':
     case 'error':

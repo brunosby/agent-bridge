@@ -1,3 +1,4 @@
+import { taskIdsFromLog } from './task-events.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AgentSpec, BridgeEvent } from './types.ts';
@@ -162,8 +163,8 @@ export function loadConversation(logsDir: string, id: string): ConversationSumma
   const openTasks = new Map<string, string>();
   const openTurn: Record<string, boolean> = {};
   for (const e of events) {
-    if (e.kind === 'taskQueued' && e.id && e.agent) openTasks.set(e.id, e.agent);
-    if (e.kind === 'turnEnd' || e.kind === 'tasksCancelled') for (const taskId of e.taskIds || []) openTasks.delete(taskId);
+    if (e.kind === 'taskQueued' && typeof e.id === 'string' && typeof e.agent === 'string') openTasks.set(e.id, e.agent);
+    if (e.kind === 'turnEnd' || e.kind === 'tasksCancelled') for (const taskId of taskIdsFromLog(e.taskIds)) openTasks.delete(taskId);
     if (e.kind === 'approval' || e.kind === 'needRole' || e.kind === 'finalReview' || e.kind === 'recommendRoles')
       openApprovals.add(e.requestId);
     if (e.kind === 'needRoleClosed' || e.kind === 'finalReviewClosed' || e.kind === 'recommendRolesClosed')

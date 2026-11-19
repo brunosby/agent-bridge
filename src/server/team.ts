@@ -1,5 +1,5 @@
 // The team: creating, adding, removing and reconfiguring agents; role profiles; model lists.
-import type { Agent, AgentEvent, AgentSpec, Conversation, ModelInfo } from '../core/types.ts';
+import type { Agent, AgentEvent, AgentSpec, Conversation, ModelInfo, TaskEvent } from '../core/types.ts';
 import type { RuntimeStatus } from '../providers/accounts.ts';
 import { S } from './state.ts';
 import path from 'node:path';
@@ -236,7 +236,7 @@ export async function removeAgent(id: string): Promise<void> {
   delete S.conv.agents[id];
   const taskIds = [...S.conv.tasks.values()].filter((task) => task.agent === id).map((task) => task.id);
   for (const taskId of taskIds) S.conv.tasks.delete(taskId);
-  if (taskIds.length) publish({ kind: 'tasksCancelled', agent: id, taskIds });
+  if (taskIds.length) publish({ kind: 'tasksCancelled', agent: id, taskIds } satisfies TaskEvent);
   S.conv.rosterVersion++;
   await agent?.shutdown().catch(() => {});
   if (S.conv !== owner) return;
