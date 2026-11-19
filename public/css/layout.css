@@ -206,24 +206,24 @@
 }
 
 .composer {
-  --composer-control-height: 2.25rem;
+  --composer-control-height: 2.5rem;
   grid-area: composer;
   container: composer / inline-size;
   background: var(--color-surface);
   border-top: 1px solid var(--color-border);
-  padding: var(--space-2) var(--conversation-gutter) var(--space-3);
+  padding: var(--space-2) var(--conversation-gutter);
 }
 
 .composer__layout {
   display: grid;
   gap: var(--space-2);
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: 'input input' 'target send';
+  grid-template-areas: 'target target' 'input send';
   align-items: end;
 }
 
 .composer__layout:has(.composer__notice:not([hidden])) {
-  grid-template-areas: 'notice notice' 'input input' 'target send';
+  grid-template-areas: 'notice notice' 'target target' 'input send';
 }
 
 .composer__notice {
@@ -253,10 +253,17 @@
   display: block;
   width: 100%;
   resize: vertical;
-  min-height: 3.25rem;
-  max-height: 30dvh;
+  min-height: var(--composer-control-height);
+  max-height: clamp(var(--composer-control-height), 30dvh, 10rem);
   padding: var(--space-2) var(--space-3);
   background: var(--color-bg);
+}
+
+@supports (field-sizing: content) {
+  .composer__input {
+    field-sizing: content;
+    resize: none;
+  }
 }
 
 .composer__send {

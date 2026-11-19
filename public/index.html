@@ -114,24 +114,24 @@
           <p id="noEditor" class="warning-box composer__notice" hidden>
             No agent on this team can edit code. Add a Coder to make code changes.
           </p>
-          <div class="composer__entry">
-            <label class="visually-hidden" for="input">Message</label>
-            <textarea
-              id="input"
-              class="composer__input"
-              rows="3"
-              placeholder="Write a message… Use @Name to address an agent."
-              aria-autocomplete="list"
-              aria-controls="mentionSuggestions"
-            ></textarea>
-            <div id="mentionSuggestions" class="mention-suggestions" role="listbox" aria-label="Agent mentions" hidden></div>
-          </div>
           <div class="composer__target">
             <div class="composer__target-caption">
               <label for="target">Send to</label>
               <output id="targetPreview" class="hint composer__preview" aria-live="polite"></output>
             </div>
             <select id="target" title="Who receives your message"></select>
+          </div>
+          <div class="composer__entry">
+            <label class="visually-hidden" for="input">Message</label>
+            <textarea
+              id="input"
+              class="composer__input"
+              rows="1"
+              placeholder="Message… Use @Name"
+              aria-autocomplete="list"
+              aria-controls="mentionSuggestions"
+            ></textarea>
+            <div id="mentionSuggestions" class="mention-suggestions" role="listbox" aria-label="Agent mentions" hidden></div>
           </div>
           <button id="send" class="btn btn--primary composer__send" title="Enter to send, Shift+Enter for a new line">Send</button>
         </div>

@@ -51,12 +51,12 @@
 
 @container composer (min-width: 40rem) {
   .composer__layout {
-    grid-template-columns: minmax(0, 1fr) clamp(10rem, 25cqi, 16rem) auto;
-    grid-template-areas: 'input target send';
+    grid-template-columns: clamp(10rem, 25cqi, 16rem) minmax(0, 1fr) auto;
+    grid-template-areas: 'target input send';
   }
 
   .composer__layout:has(.composer__notice:not([hidden])) {
-    grid-template-areas: 'notice notice notice' 'input target send';
+    grid-template-areas: 'notice notice notice' 'target input send';
   }
 }
 
