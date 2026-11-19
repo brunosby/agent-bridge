@@ -1,4 +1,7 @@
 import { execFile, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import type { GitSnapshot } from '../core/types.ts';
 import { globMatch } from '../core/roles.ts';
 
@@ -127,4 +130,39 @@ export function committedPaths(cwd: string, previous: string | null, current: st
   if (![previous, current].every((id) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id))) return null;
   const names = git(cwd, ['diff', '--no-renames', '--name-only', '-z', previous, current, '--']);
   return names?.split('\0').filter(Boolean) ?? null;
+}
+
+/**
+ * Fingerprint of the working tree: HEAD, the diff against HEAD and the untracked files (size and time).
+ * Two equal fingerprints mean no file changed in between. Null when the folder is not a Git repository.
+ */
+export async function changeFingerprint(cwd: string): Promise<string | null> {
+  const status = await gitAsync(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  if (status === null) return null;
+  const [head, diff, root] = await Promise.all([
+    gitAsync(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']),
+    gitAsync(cwd, ['diff', 'HEAD', '--no-ext-diff', '--binary']),
+    gitAsync(cwd, ['rev-parse', '--show-toplevel']),
+  ]);
+  const hash = createHash('sha256')
+    .update(head || '')
+    .update('\0')
+    .update(diff ?? status)
+    .update('\0')
+    .update(status);
+  const base = root?.trim() || cwd;
+  const untracked = status
+    .split('\0')
+    .filter((entry) => entry.startsWith('?? '))
+    .map((entry) => entry.slice(3))
+    .slice(0, 5000);
+  await Promise.all(
+    untracked.map((file) =>
+      stat(path.join(base, file)).then(
+        (info) => `${file}:${info.size}:${info.mtimeMs}`,
+        () => `${file}:missing`,
+      ),
+    ),
+  ).then((marks) => hash.update(marks.join('\n')));
+  return hash.digest('hex');
 }

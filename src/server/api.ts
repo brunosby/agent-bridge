@@ -85,7 +85,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       textField(body.conversationId, 'conversation ID', true);
       if (body.conversationId && body.conversationId !== S.conv.id) throw new Error('conversation changed before sending');
       if (typeof body.text !== 'string' || !body.text.trim()) throw new Error('empty message');
-      userSend(body.text, body.target);
+      await userSend(body.text, body.target);
       return { ok: true };
     case 'relay':
       for (const key of ['auto', 'resume', 'pause']) optionalBoolean(body[key], key);

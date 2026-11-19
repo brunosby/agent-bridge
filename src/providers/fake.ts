@@ -1,10 +1,16 @@
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { Agent, AgentOptions, DriverConfig, ModelInfo } from '../core/types.ts';
 
 interface FakeRule {
   agent?: string;
   match?: string;
   reply: string;
+  /** Report a successful Edit tool call, or a failed one for regression tests. */
+  edit?: boolean | 'failed';
+  /** Write [file, content] in the working folder before the reply, without a tool event (like a shell edit). */
+  writeFile?: [string, string];
 }
 
 /**
@@ -88,7 +94,13 @@ export class FakeAgent extends EventEmitter implements Agent {
     const timer = setTimeout(
       () => {
         this.timers.delete(timer);
-        const reply = this.replyFor(text, n);
+        const rule = this.ruleFor(text);
+        const reply = rule ? String(rule.reply).replace(/\{n\}/g, String(n)) : `ok ${n}`;
+        if (rule?.edit) {
+          this.emitEvent('tool', { key: `${this.id}-edit-${n}`, title: 'Edit', detail: 'file.txt' });
+          this.emitEvent('toolResult', { key: `${this.id}-edit-${n}`, ok: rule.edit === true });
+        }
+        if (rule?.writeFile) fs.writeFileSync(path.join(this.cwd, rule.writeFile[0]), rule.writeFile[1]);
         this.tokens += 100;
         this.emitEvent('usage', { tokens: this.tokens });
         this.emitEvent('text', { key: `${this.id}-${n}`, text: reply, final: true });
@@ -101,13 +113,13 @@ export class FakeAgent extends EventEmitter implements Agent {
     this.timers.set(timer, taskId);
   }
 
-  replyFor(text: string, n: number): string {
+  ruleFor(text: string): FakeRule | null {
     for (const r of (this.config.rules || []) as FakeRule[]) {
       if (r.agent && !new RegExp(r.agent, 'i').test(this.name)) continue;
       if (r.match && !new RegExp(r.match, 'i').test(text)) continue;
-      return String(r.reply).replace(/\{n\}/g, String(n));
+      return r;
     }
-    return `ok ${n}`;
+    return null;
   }
 
   async setModel(model: string): Promise<void> {

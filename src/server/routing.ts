@@ -14,6 +14,7 @@ import { driverModelCache } from './state.ts';
 import { isRecommended } from '../core/roles.ts';
 import { randomUUID } from 'node:crypto';
 import { resolveRecipients } from '../core/recipients.ts';
+import { changeFingerprint } from '../workspace/git-context.ts';
 import { summarizeProject } from './project.ts';
 export function orchestratorId() {
   return (S.conv.team.find((a) => a.role === 'orchestrator') || S.conv.team[0])?.id;
@@ -129,19 +130,8 @@ export function onTurnEnd(fromId: string, ev: AgentEvent): void {
   if (DONE_MARKER.test(text) && closes) {
     S.conv.relay.halted = true;
     publish({ kind: 'system', text: `${agentName(fromId)} marked the work as done. Waiting for you.` });
-    // Final confirmation: the user approves the result or asks for changes.
-    if (setting('finalConfirmation') && S.conv.routingMode === 'orchestrator') {
-      const requestId = `final-${Date.now()}`;
-      S.conv.pendingFinal = requestId;
-      publish({
-        kind: 'finalReview',
-        agent: fromId,
-        requestId,
-        summary: text.replace(DONE_MARKER, '').trim(),
-        project: summarizeProject(S.conv),
-        tests: [...S.conv.testResults],
-      });
-    }
+    // Final confirmation: the user approves the result or asks for changes, only when files changed.
+    if (setting('finalConfirmation') && S.conv.routingMode === 'orchestrator') void offerFinalReview(fromId, text);
     S.conv.reviewRounds = 0;
     publishState();
     return;
@@ -398,19 +388,83 @@ export async function resolveMissingRole(roleId: string, action: 'add' | 'closes
   publishState();
 }
 
+/** Capture the Git state for the main workspace and any agent worktrees before delivery. */
+async function captureChangeMark(owner: Conversation): Promise<NonNullable<Conversation['changeMark']>> {
+  const folders = new Set([owner.workDir, ...owner.team.flatMap((agent) => (agent.cwd ? [agent.cwd] : []))]);
+  const before = await Promise.all([...folders].map(async (folder) => [folder, await changeFingerprint(folder)] as const));
+  return { before: new Map(before), editTools: new Map(), editedFolders: new Set() };
+}
+
+async function filesChanged(mark: Conversation['changeMark']): Promise<boolean> {
+  if (!mark) return true; // No baseline was captured for restored work.
+  if ([...mark.editedFolders].some((folder) => mark.before.get(folder) == null)) return true;
+  const results = await Promise.all(
+    [...mark.before].map(async ([folder, before]) => {
+      const after = await changeFingerprint(folder);
+      return after !== null && after !== before;
+    }),
+  );
+  return results.some(Boolean);
+}
+
+async function offerFinalReview(fromId: string, text: string): Promise<void> {
+  const conv = S.conv;
+  const version = conv.roleDecisionVersion;
+  const mark = conv.changeMark;
+  const changed = await filesChanged(mark).catch(() => true);
+  if (S.conv !== conv || conv.changeMark !== mark || conv.roleDecisionVersion !== version || !conv.relay.halted) return;
+  if (!changed) {
+    publish({ kind: 'system', text: 'No files changed, so there is nothing to approve.' });
+    return;
+  }
+  const requestId = `final-${Date.now()}`;
+  S.conv.pendingFinal = requestId;
+  publish({
+    kind: 'finalReview',
+    agent: fromId,
+    requestId,
+    summary: text.replace(DONE_MARKER, '').trim(),
+    project: summarizeProject(S.conv),
+    tests: [...S.conv.testResults],
+  });
+  publishState();
+}
+
 export function userTargets(target?: string, prefix?: string) {
   return resolveRecipients(S.conv.team, S.conv.routingMode, target, prefix).filter((id) => Object.hasOwn(S.conv.agents, id));
 }
 
-export function userSend(text: string, target?: string): void {
-  const targets = userTargets(target, text);
-  if (!targets.length) throw new Error('no agent to receive this message');
-  S.conv.lastUserText = text;
-  clearRoleDecisions(S.conv, 'new message');
-  S.conv.relay.hops = 0;
-  S.conv.relay.halted = S.conv.relay.userPaused = false;
-  const source = publish({ kind: 'user', text, to: targets });
-  const note = targets.length > 1 ? ` (sent to ${targets.length} agents)` : '';
-  for (const t of targets) deliver(t, `[Message from ${setting('userName')}${note}]\n${text}`, { from: 'user', sourceSeq: source.seq });
-  publishState();
+const pendingUserSends = new WeakMap<Conversation, Promise<void>>();
+
+export async function userSend(text: string, target?: string): Promise<void> {
+  const owner = S.conv;
+  const previous = pendingUserSends.get(owner);
+  const delivery = (previous ?? Promise.resolve())
+    .catch(() => {})
+    .then(async () => {
+      if (S.conv !== owner) throw new Error('conversation changed before sending');
+      const targets = userTargets(target, text);
+      if (!targets.length) throw new Error('no agent to receive this message');
+      clearRoleDecisions(owner, 'new message');
+      owner.relay.userPaused = false;
+      const checkFiles = setting('finalConfirmation') && owner.routingMode === 'orchestrator';
+      const mark = checkFiles ? await captureChangeMark(owner) : null;
+      if (S.conv !== owner) throw new Error('conversation changed before sending');
+      owner.lastUserText = text;
+      owner.changeMark = mark;
+      owner.relay.hops = 0;
+      owner.relay.halted = owner.relay.userPaused;
+      const source = publish({ kind: 'user', text, to: targets });
+      const note = targets.length > 1 ? ' (sent to ' + targets.length + ' agents)' : '';
+      for (const to of targets) {
+        deliver(to, '[Message from ' + setting('userName') + ']' + note + '\n' + text, { from: 'user', sourceSeq: source.seq });
+      }
+      publishState();
+    });
+  pendingUserSends.set(owner, delivery);
+  try {
+    await delivery;
+  } finally {
+    if (pendingUserSends.get(owner) === delivery) pendingUserSends.delete(owner);
+  }
 }

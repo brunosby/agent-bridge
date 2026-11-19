@@ -18,7 +18,7 @@ test('orchestrator delegates in parallel, gets both results in one message, then
     rules: [
       { agent: 'Lead', match: 'Results from 2 agents', reply: 'Built and researched.\n[[DONE]]' },
       { agent: 'Lead', match: 'Message from Tester', reply: '@Dev build it\n@Res look it up' },
-      { agent: 'Dev', reply: 'built' },
+      { agent: 'Dev', reply: 'built', edit: true },
       { agent: 'Res', reply: 'found' },
     ],
   });
@@ -57,7 +57,7 @@ test('review loop stops after the configured number of rounds', async () => {
       { agent: 'Lead', match: 'Message from Rev', reply: '@Dev fix the findings' },
       { agent: 'Lead', match: 'Message from Dev', reply: '@Rev review it' },
       { agent: 'Lead', match: 'Message from Tester', reply: '@Dev build it' },
-      { agent: 'Dev', reply: 'done' },
+      { agent: 'Dev', reply: 'done', edit: true },
       { agent: 'Rev', reply: 'CHANGES REQUESTED\n- fix x' },
     ],
   });
@@ -78,8 +78,8 @@ test('missing role: continue with the closest agent, or add the role', async () 
       { driver: 'fake', role: 'coder', name: 'Dev' },
     ],
     rules: [
-      { agent: 'Lead', match: 'No Reviewer will be added', reply: 'ok then\n[[DONE]]' },
-      { agent: 'Lead', match: 'as Reviewer', reply: 'thanks\n[[DONE]]' },
+      { agent: 'Lead', match: 'No Reviewer will be added', reply: 'ok then\n[[DONE]]', edit: true },
+      { agent: 'Lead', match: 'as Reviewer', reply: 'thanks\n[[DONE]]', edit: true },
       { agent: 'Lead', match: 'Message from Tester', reply: '[[NEED_ROLE: reviewer]]' },
     ],
   });
@@ -124,7 +124,7 @@ test('settings are saved to config.local.json, not config.json', async () => {
 });
 
 test('restore brings back the team, models and messages', async () => {
-  const rules = [{ agent: 'Lead', reply: 'done\n[[DONE]]' }];
+  const rules = [{ agent: 'Lead', reply: 'done\n[[DONE]]', edit: true }];
   const b = await startBridge({ team: team3, rules });
   let root = '';
   try {
@@ -149,5 +149,25 @@ test('restore brings back the team, models and messages', async () => {
     await r.waitFor((e) => e.kind === 'user' && e.text === 'remember me');
   } finally {
     await r.stop();
+  }
+});
+
+test('an answer without file changes ends without the final approval card', async () => {
+  const b = await startBridge({
+    team: [{ driver: 'fake', role: 'orchestrator', name: 'Lead' }],
+    rules: [
+      { agent: 'Lead', match: 'try an edit', reply: 'Edit failed.\n[[DONE]]', edit: 'failed' },
+      { agent: 'Lead', reply: 'The answer is 42.\n[[DONE]]' },
+    ],
+  });
+  try {
+    await b.waitFor((e) => e.kind === 'state' && e.team.length === 1);
+    await b.api('send', { text: 'what is the answer?' });
+    const first = await b.waitFor((e) => e.kind === 'system' && /nothing to approve/.test(e.text));
+    await b.api('send', { text: 'try an edit' });
+    await b.waitFor((e) => e.seq > first.seq && e.kind === 'system' && /nothing to approve/.test(e.text));
+    assert.ok(!b.events.some((e) => e.kind === 'finalReview'));
+  } finally {
+    await b.stop();
   }
 });

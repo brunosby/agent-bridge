@@ -21,7 +21,10 @@ export const SETTING_LABELS = {
     'Review fix rounds',
     'How many times the Reviewer CHANGES REQUESTED answer goes back to the coder before the orchestrator reports to you.',
   ],
-  finalConfirmation: ['Ask me to approve the final result', 'Show Approve / Ask for changes when the orchestrator finishes.'],
+  finalConfirmation: [
+    'Ask me to approve the final result',
+    'Show Approve / Ask for changes when the orchestrator finishes and files changed since your last message.',
+  ],
   missingRolePolicy: [
     'When the orchestrator needs a missing role',
     'Ask me (add the role with a recommended model, or continue with the closest agent), or always continue with the closest agent.',

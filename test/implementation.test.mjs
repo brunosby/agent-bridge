@@ -130,12 +130,21 @@ test('final review reports Git metadata relative to the original baseline withou
   const b = await startBridge({
     dir,
     team: [{ driver: 'fake', name: 'Lead', role: 'orchestrator' }],
-    rules: [{ reply: 'Finished.\n[[DONE]]' }],
+    rules: [],
+    // A fast change with no edit-tool signal still has to be detected by Git.
+    settings: {
+      fake: {
+        rules: [
+          { match: 'dry run', reply: 'Nothing to change.\n[[DONE]]', edit: true },
+          { reply: 'Finished.\n[[DONE]]', writeFile: ['new.txt', 'DO_NOT_INCLUDE_FILE_CONTENT'] },
+        ],
+        delayMs: 0,
+      },
+    },
   });
   try {
     const state = await b.waitFor((e) => e.kind === 'state');
     assert.ok(state.project.branch);
-    fs.writeFileSync(path.join(work, 'new.txt'), 'DO_NOT_INCLUDE_FILE_CONTENT');
     await b.api('send', { text: 'Finish' });
     const final = await b.waitFor((e) => e.kind === 'finalReview');
     const summary = final.project[0];
@@ -143,6 +152,11 @@ test('final review reports Git metadata relative to the original baseline withou
     assert.equal(summary.files.find((f) => f.path === 'old.txt').preexisting, true);
     assert.equal(summary.files.find((f) => f.path === 'new.txt').preexisting, false);
     assert.doesNotMatch(JSON.stringify(final.project), /DO_NOT_INCLUDE_FILE_CONTENT/);
+
+    await b.api('finalReview', { requestId: final.requestId, action: 'approve' });
+    await b.api('send', { text: 'dry run' });
+    await b.waitFor((e) => e.seq > final.seq && e.kind === 'system' && /nothing to approve/.test(e.text));
+    assert.equal(b.events.filter((e) => e.kind === 'finalReview').length, 1);
   } finally {
     await b.stop();
   }

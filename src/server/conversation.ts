@@ -200,6 +200,8 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
     const toolKey = id + '|' + ev.key;
     if (ev.kind === 'tool') {
       const title = String(ev.title || '');
+      if (owner.changeMark && /^(?:edit|multiedit|notebookedit|write|fileChange|patch|apply_patch)$/i.test(title))
+        owner.changeMark.editTools.set(toolKey, agent.cwd || owner.workDir);
       const activity = /^(?:bash|shell|commandExecution)$/i.test(title)
         ? 'running a command'
         : /^(?:edit|fileChange|write)$/i.test(title)
@@ -219,6 +221,11 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
     }
     if (ev.kind === 'tool' && /^(?:Bash|shell|commandExecution)$/i.test(String(ev.title || '')) && isTestCommand(String(ev.detail || ''))) {
       owner.possibleTests.set(toolKey, agentName(id));
+    }
+    if (ev.kind === 'toolResult' && owner.changeMark) {
+      const folder = owner.changeMark.editTools.get(toolKey);
+      if (folder && ev.ok === true) owner.changeMark.editedFolders.add(folder);
+      owner.changeMark.editTools.delete(toolKey);
     }
     if (ev.kind === 'toolResult' && typeof ev.ok === 'boolean' && owner.possibleTests.has(toolKey)) {
       const result = owner.possibleTests.get(toolKey) + (ev.ok ? ' · passed' : ' · failed');

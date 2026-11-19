@@ -196,4 +196,6 @@ export interface Conversation {
   roleDecisionVersion: number;
   refusedRoles: Set<string>;
   pendingFinal?: string | null;
+  /** Git fingerprints and confirmed edit signals for the latest user message. */
+  changeMark?: { before: Map<string, string | null>; editTools: Map<string, string>; editedFolders: Set<string> } | null;
 }
