@@ -40,8 +40,10 @@ export const MIME: Record<string, string> = {
 };
 
 export const server = http.createServer(async (req, res) => {
+  let pathname = '/';
   try {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
+    pathname = url.pathname;
     if (req.method === 'GET' && url.pathname === '/events') {
       if (url.searchParams.get('token') !== token) return send(res, 403, 'forbidden');
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
@@ -61,7 +63,7 @@ export const server = http.createServer(async (req, res) => {
     send(res, 404, 'not found');
   } catch (err) {
     const e = err instanceof Error ? err : new Error(String(err));
-    logError('bridge', `${req.method} ${req.url}: ${e.stack || e.message}`);
+    logError('bridge', `${req.method} ${pathname}: ${e.stack || e.message}`);
     send(res, 400, JSON.stringify({ error: e.message }), 'application/json');
   }
 });

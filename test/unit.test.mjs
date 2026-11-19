@@ -90,6 +90,30 @@ test('history: old two-agent logs are converted to the team format', () => {
   assert.ok(loaded.events.some((/** @type {any} */ e) => e.kind === 'turnEnd' && e.agent === 'a2'));
 });
 
+test('history: malformed lines are skipped without losing the valid events', (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bridge-hist-'));
+  const id = 'malformed-history';
+  fs.mkdirSync(path.join(dir, id));
+  fs.writeFileSync(
+    path.join(dir, id, 'transcript.jsonl'),
+    [
+      JSON.stringify({ seq: 1, at: 1, kind: 'user', text: 'valid request' }),
+      'null',
+      '{}',
+      JSON.stringify({ seq: 2, at: 2, kind: 'system', text: 'valid event' }),
+      '{"kind":',
+    ].join('\n'),
+  );
+  const loaded = history.loadConversation(dir, id);
+  assert.equal(loaded.title, 'valid request');
+  assert.deepEqual(
+    loaded.events.map((/** @type {import('../src/core/types.ts').BridgeEvent} */ event) => event.seq),
+    [1, 2],
+  );
+  assert.match(warn.mock.calls[0].arguments[0], /Skipped 3 invalid lines?/);
+});
+
 const { OpenCodeAgent } = await load('providers/opencode.ts');
 
 test('opencode: only answer text is shown; reasoning and compaction summaries are not', () => {

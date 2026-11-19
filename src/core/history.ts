@@ -20,16 +20,25 @@ export interface ConversationSummary {
 export const LOGS_DIR_NAME = 'logs';
 const ID_PATTERN = /^[0-9A-Za-z_-]+$/;
 
+export function parseTranscriptLine(line: string): BridgeEvent | null {
+  try {
+    const event = JSON.parse(line);
+    return event && typeof event === 'object' && typeof event.kind === 'string' ? event : null;
+  } catch {
+    return null;
+  }
+}
+
 function readEvents(file: string): BridgeEvent[] {
   const out: BridgeEvent[] = [];
+  let skipped = 0;
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     if (!line.trim()) continue;
-    try {
-      out.push(JSON.parse(line));
-    } catch {
-      // a line cut short when the app was closed
-    }
+    const event = parseTranscriptLine(line);
+    if (event) out.push(event);
+    else skipped += 1;
   }
+  if (skipped) console.warn('Skipped ' + skipped + ' invalid line(s) in transcript history.');
   return out;
 }
 

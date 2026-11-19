@@ -25,6 +25,7 @@ import { restartServer, shutdown } from '../cli/main.ts';
 import { codeChanged } from './http.ts';
 /** Handle one API call from the page. Returns the JSON answer; throws to send an error. */
 export async function api(action: string, body: Record<string, any>): Promise<unknown> {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('expected a JSON object');
   const agents = S.conv?.agents || {};
   const agentOf = (id: string): Agent => {
     const a = agents[id];
@@ -132,11 +133,14 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       return { ok: true };
     }
     case 'resolveRole': {
-      if (!S.conv.pendingRoleRequest || S.conv.pendingRoleRequest.requestId !== body.requestId)
+      const { action: decision, requestId: requestedId } = body;
+      if (decision !== 'add' && decision !== 'closest' && decision !== 'dismiss') throw new Error('unknown role decision');
+      if (typeof requestedId !== 'string' || !requestedId) throw new Error('missing role request id');
+      if (!S.conv.pendingRoleRequest || S.conv.pendingRoleRequest.requestId !== requestedId)
         throw new Error('this request is no longer pending');
       const { requestId, roleId } = S.conv.pendingRoleRequest;
-      publish({ kind: 'needRoleClosed', requestId, action: body.action });
-      if (body.action === 'add' || body.action === 'closest') await resolveMissingRole(roleId, body.action);
+      publish({ kind: 'needRoleClosed', requestId, action: decision });
+      if (decision === 'add' || decision === 'closest') await resolveMissingRole(roleId, decision);
       else S.conv.pendingRoleRequest = null;
       return { ok: true };
     }
