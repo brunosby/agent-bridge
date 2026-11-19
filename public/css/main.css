@@ -16,6 +16,7 @@
 @import url('components/buttons.css') layer(components);
 @import url('components/forms.css') layer(components);
 @import url('components/agent-card.css') layer(components);
+@import url('components/conversation.css') layer(components);
 @import url('components/messages.css') layer(components);
 @import url('components/approvals.css') layer(components);
 @import url('components/dialogs.css') layer(components);

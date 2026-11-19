@@ -1,129 +1,308 @@
-// The conversation: message bubbles, tool lines, system lines, and the handler for every server event.
-import { agentOf, approvals, bubbles, driverOf, label, roleOf, store, tools } from '../core/store.js';
-import { $, append, h, keepScrolled, log, renderMarkdown, time } from '../core/dom.js';
+// Convert incoming events to transcript entries and update their views in frame-sized batches.
+import { agentOf, approvals, driverOf, label, roleOf, store } from '../core/store.js';
+import { $, h, log, nearBottom, renderMarkdown, time } from '../core/dom.js';
+import { Transcript } from '../core/transcript.js';
 import { renderApproval, renderFinalReview, renderNeedRole, updatePending } from './approvals.js';
 import { renderState } from './agents.js';
-/** Resolve a team member by @name, case-insensitively. */
-export function findAgent(name) {
-  const n = name.toLowerCase();
-  if (n === 'all' || n === 'everyone') return { name: 'everyone', driver: 'all', role: null };
-  const a = (store.state?.team || []).find((x) => x.name.toLowerCase() === n);
-  return a ? { name: a.name, driver: a.driver, role: roleOf(a.role)?.name || null } : null;
+import { updateComposer } from './controls.js';
+
+const transcript = new Transcript();
+const views = new Map();
+const dirty = new Set();
+const agentOptions = new Set();
+let newNodes = document.createDocumentFragment();
+let frame = 0;
+let unread = 0;
+let replaying = true;
+let results = null;
+let resultIndex = -1;
+let selected = null;
+
+function filterOptions() {
+  return [$('logSearch').value.trim().toLowerCase(), $('logMode').value, $('logAgent').value, $('logCategory').value];
 }
 
-export function bubble(agent, key, at) {
-  const id = `${agent}|${key}`;
-  let b = bubbles.get(id);
-  if (!b) {
-    const el = h('div', `msg agent drv-${driverOf(agent)} streaming`);
-    el.dataset.agent = agent;
-    const head = h('div', 'head');
-    const role = roleOf(agentOf(agent)?.role)?.name;
-    head.append(h('span', 'who', label(agent)), h('span', null, `${role ? `${role} · ` : ''}${time(at)}`));
-    const body = h('div', 'body');
-    el.append(head, body);
-    b = { el, body, text: '' };
-    bubbles.set(id, b);
-    append(el);
+function filterEntry(entry, filters = filterOptions()) {
+  const view = views.get(entry);
+  if (view) view.node.hidden = !transcript.matches(entry, ...filters);
+}
+
+function filterGroup(group) {
+  group.details.hidden = group.entries.every((entry) => views.get(entry).node.hidden);
+}
+
+function resetResults() {
+  results = null;
+  resultIndex = -1;
+  if (selected) views.get(selected)?.node.classList.remove('search-match');
+  selected = null;
+  $('searchPosition').textContent = '';
+}
+
+function showUnread() {
+  $('returnToEnd').hidden = nearBottom() && unread === 0;
+  $('returnToEnd').textContent = unread ? 'Back to end · ' + unread + ' new' : 'Back to end';
+}
+
+function flush() {
+  if (frame) cancelAnimationFrame(frame);
+  frame = 0;
+  const stick = nearBottom();
+  log.appendChild(newNodes);
+  newNodes = document.createDocumentFragment();
+  const filters = filterOptions();
+  for (const entry of dirty) {
+    renderMarkdown(views.get(entry).body, entry.text, findAgent);
+    filterEntry(entry, filters);
   }
-  return b;
+  dirty.clear();
+  if (stick) log.scrollTop = log.scrollHeight;
+  showUnread();
+}
+
+function schedule() {
+  if (!frame) frame = requestAnimationFrame(flush);
+}
+
+function mount(entry, node, body = null) {
+  views.set(entry, { node, body, group: null });
+  node.tabIndex = -1;
+  newNodes.appendChild(node);
+  filterEntry(entry);
+  for (const id of entry.agents) {
+    if (agentOptions.has(id)) continue;
+    agentOptions.add(id);
+    const option = h('option', null, label(id));
+    option.value = id;
+    $('logAgent').appendChild(option);
+  }
+  schedule();
+}
+
+function addLine(event, category, classes, text, agents = []) {
+  const entry = transcript.add(event, text, category, agents);
+  mount(entry, h('div', classes, text));
+  return entry;
 }
 
 export function addSys(text, isError = false) {
-  append(h('div', `sys${isError ? ' error' : ''}`, text));
+  addLine({}, isError ? 'error' : 'system', isError ? 'sys error' : 'sys', text);
 }
 
+export function findAgent(name) {
+  const n = name.toLowerCase();
+  if (n === 'all' || n === 'everyone') return { name: 'everyone', driver: 'all', role: null };
+  const a = store.state?.team.find((x) => x.name.toLowerCase() === n);
+  return a ? { name: a.name, driver: a.driver, role: roleOf(a.role)?.name || null } : null;
+}
+
+function message(ev) {
+  const user = ev.kind === 'user';
+  const key = user ? null : ev.agent + '|message|' + ev.key;
+  let entry = key && transcript.byKey.get(key);
+  const isNew = !entry;
+  if (!entry) {
+    entry = transcript.add(ev, '', 'message', user ? ev.to || [] : [ev.agent], key);
+    const node = h('div', user ? 'msg user' : 'msg agent drv-' + driverOf(ev.agent));
+    if (!user) node.classList.add('streaming');
+    const head = h('div', 'head');
+    const role = roleOf(agentOf(ev.agent)?.role)?.name;
+    const meta = user ? '→ ' + (ev.to || []).map(label).join(' + ') + ' · ' : role ? role + ' · ' : '';
+    head.append(h('span', 'who', user ? 'You' : label(ev.agent)), h('span', null, meta + time(ev.at)));
+    const body = h('div', 'body');
+    node.append(head, body);
+    if (!user) transcript.track(ev.agent, entry);
+    mount(entry, node, body);
+  }
+  transcript.update(entry, ev.kind === 'delta' ? entry.text + ev.text : ev.text);
+  dirty.add(entry);
+  if (isNew && !replaying && transcript.matches(entry, ...filterOptions()) && !nearBottom()) unread += 1;
+  if (ev.final) {
+    if (Number.isInteger(ev.seq)) transcript.bySequence.set(ev.seq, entry);
+    views.get(entry).node.classList.remove('streaming');
+  }
+  schedule();
+}
+
+function groupTools(entries) {
+  // Group adjacent successful calls so the display order is preserved across parallel agents.
+  let group = null;
+  let previous = null;
+  const groups = new Set();
+  for (const entry of entries) {
+    const view = views.get(entry);
+    if (entry.category !== 'tool' || entry.ok !== true) continue;
+    if (entry.previous !== previous || !group) {
+      const details = h('details', 'tool-group');
+      const summary = h('summary');
+      details.appendChild(summary);
+      view.node.before(details);
+      group = { details, summary, entries: [] };
+      groups.add(group);
+    }
+    group.entries.push(entry);
+    group.details.appendChild(view.node);
+    group.summary.textContent =
+      label(entry.agents[0]) + ' · ' + group.entries.length + ' successful tool ' + (group.entries.length === 1 ? 'call' : 'calls');
+    view.group = group;
+    previous = entry;
+  }
+  for (const grouped of groups) filterGroup(grouped);
+}
+
+export function jumpToSequence(seq) {
+  const entry = transcript.bySequence.get(seq);
+  if (!entry) return false;
+  const view = views.get(entry);
+  flush();
+  if (view.group) {
+    view.group.details.hidden = false;
+    view.group.details.open = true;
+  }
+  view.node.hidden = false;
+  view.node.scrollIntoView({ block: 'center' });
+  view.node.focus({ preventScroll: true });
+  return true;
+}
+
+function seek(step) {
+  results ??= transcript.search(...filterOptions());
+  if (!results.length) {
+    $('searchPosition').textContent = 'No matches';
+    return;
+  }
+  if (selected) views.get(selected).node.classList.remove('search-match');
+  resultIndex = resultIndex < 0 ? (step > 0 ? 0 : results.length - 1) : (resultIndex + step + results.length) % results.length;
+  selected = results[resultIndex];
+  if (!jumpToSequence(selected.seq)) views.get(selected).node.scrollIntoView({ block: 'center' });
+  views.get(selected).node.classList.add('search-match');
+  $('searchPosition').textContent = resultIndex + 1 + ' / ' + results.length;
+}
+
+for (const id of ['logSearch', 'logMode', 'logAgent', 'logCategory']) {
+  $(id).addEventListener(id === 'logSearch' ? 'input' : 'change', () => {
+    resetResults();
+    const filters = filterOptions();
+    const groups = new Set();
+    for (const entry of transcript.entries) {
+      filterEntry(entry, filters);
+      const group = views.get(entry)?.group;
+      if (group) groups.add(group);
+    }
+    for (const group of groups) filterGroup(group);
+  });
+}
+$('searchPrev').onclick = () => seek(-1);
+$('searchNext').onclick = () => seek(1);
+$('returnToEnd').onclick = () => {
+  flush();
+  unread = 0;
+  log.scrollTop = log.scrollHeight;
+  showUnread();
+};
+log.addEventListener('scroll', () => {
+  if (nearBottom()) unread = 0;
+  showUnread();
+});
+
 export function handle(ev) {
+  if (!['state', 'delta'].includes(ev.kind)) results = null;
   switch (ev.kind) {
-    case 'reset':
+    case 'reset': {
       if ($('agentDetails').open) $('agentDetails').close();
       log.textContent = '';
       $('pending').textContent = '';
-      bubbles.clear();
-      tools.clear();
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      newNodes = document.createDocumentFragment();
+      transcript.clear();
+      views.clear();
+      dirty.clear();
+      agentOptions.clear();
+      const allAgents = h('option', null, 'All agents');
+      allAgents.value = '';
+      $('logAgent').replaceChildren(allAgents);
+      $('logSearch').value = '';
+      $('logCategory').value = '';
+      unread = 0;
+      replaying = true;
+      resetResults();
       approvals.clear();
       updatePending();
+      showUnread();
+      break;
+    }
+    case 'replayComplete':
+      replaying = false;
+      flush();
       break;
     case 'state':
       store.state = ev;
       renderState();
+      updateComposer();
       break;
-    case 'user': {
-      const el = h('div', 'msg user');
-      const head = h('div', 'head');
-      head.append(h('span', 'who', 'You'), h('span', null, `→ ${(ev.to || []).map(label).join(' + ')} · ${time(ev.at)}`));
-      const body = h('div', 'body');
-      renderMarkdown(body, ev.text, findAgent);
-      el.append(head, body);
-      append(el);
+    case 'user':
+    case 'delta':
+    case 'text':
+      message(ev);
+      if (ev.kind === 'delta' && $('logSearch').value) results = null;
       break;
-    }
     case 'routed':
-      if (ev.relayed) append(h('div', 'route', `${label(ev.from)} → ${label(ev.to)} (hand-off ${ev.hop})`));
+      if (ev.relayed) addLine(ev, 'route', 'route', label(ev.from) + ' → ' + label(ev.to) + ' (hand-off ' + ev.hop + ')', [ev.from, ev.to]);
       break;
-    case 'delta': {
-      const b = bubble(ev.agent, ev.key, ev.at);
-      b.text += ev.text;
-      keepScrolled(() => renderMarkdown(b.body, b.text, findAgent));
-      break;
-    }
-    case 'text': {
-      const b = bubble(ev.agent, ev.key, ev.at);
-      b.text = ev.text;
-      keepScrolled(() => renderMarkdown(b.body, b.text, findAgent));
-      if (ev.final) b.el.classList.remove('streaming');
-      break;
-    }
     case 'tool': {
-      const el = h('div', `tool drv-${driverOf(ev.agent)}`);
-      el.append(h('span', 'status', '…'), document.createTextNode(`${label(ev.agent)} · ${ev.title}${ev.detail ? `: ${ev.detail}` : ''}`));
-      tools.set(`${ev.agent}|${ev.key}`, el);
-      append(el);
+      const entry = transcript.add(
+        ev,
+        label(ev.agent) + ' · ' + ev.title + (ev.detail ? ': ' + ev.detail : ''),
+        'tool',
+        [ev.agent],
+        ev.agent + '|tool|' + ev.key,
+      );
+      transcript.track(ev.agent, entry);
+      const node = h('div', 'tool drv-' + driverOf(ev.agent));
+      node.append(h('span', 'status', '…'), document.createTextNode(entry.text));
+      mount(entry, node);
       break;
     }
     case 'toolResult': {
-      const el = tools.get(`${ev.agent}|${ev.key}`);
-      if (!el) break;
-      el.classList.add(ev.ok ? 'ok' : 'fail');
-      el.querySelector('.status').textContent = ev.ok ? '✓' : '✗';
-      if (!ev.ok && ev.detail) el.appendChild(h('span', 'err', ev.detail));
+      const entry = transcript.byKey.get(ev.agent + '|tool|' + ev.key);
+      if (!entry) break;
+      entry.ok = ev.ok;
+      const node = views.get(entry).node;
+      node.classList.add(ev.ok ? 'ok' : 'fail');
+      node.querySelector('.status').textContent = ev.ok ? '✓' : '✗';
+      if (!ev.ok && ev.detail) {
+        node.appendChild(h('span', 'err', ev.detail));
+        transcript.update(entry, entry.text + ' ' + ev.detail);
+      }
+      filterEntry(entry);
       break;
     }
     case 'turnEnd': {
-      for (const [id, b] of bubbles) if (id.startsWith(`${ev.agent}|`)) b.el.classList.remove('streaming');
-      const parts = [`${label(ev.agent)} finished its turn`];
-      if (!ev.ok && ev.detail) parts.push(ev.detail);
-      append(h('div', `turn-end${ev.ok ? '' : ' fail'}`, parts.join(' · ')));
+      const entries = transcript.endTurn(ev.agent);
+      for (const entry of entries) views.get(entry).node.classList.remove('streaming');
+      groupTools(entries);
+      const detail = !ev.ok && ev.detail ? ' · ' + ev.detail : '';
+      addLine(ev, 'turn', 'turn-end' + (ev.ok ? '' : ' fail'), label(ev.agent) + ' finished its turn' + detail, [ev.agent]);
       break;
     }
     case 'autoApproved':
-      append(
-        h(
-          'div',
-          `tool drv-${driverOf(ev.agent)} ok`,
-          `⚡ ${label(ev.agent)} auto-approved (bypass): ${ev.detail ? ev.detail.split('\n')[0] : ev.title}`,
-        ),
-      );
+      addLine(ev, 'approval', 'tool ok', label(ev.agent) + ' auto-approved: ' + (ev.detail?.split('\n')[0] || ev.title), [ev.agent]);
       break;
     case 'approval':
       renderApproval(ev);
+      addLine(ev, 'approval', 'sys', label(ev.agent) + ' · ' + ev.title + ' · waiting for approval', [ev.agent]);
       break;
     case 'needRole':
       renderNeedRole(ev);
+      addLine(ev, 'approval', 'sys', label(ev.agent) + ' asked for ' + ev.roleName, [ev.agent]);
       break;
     case 'finalReview':
       renderFinalReview(ev);
+      addLine(ev, 'approval', 'sys', label(ev.agent) + ' requested final confirmation', [ev.agent]);
       break;
     case 'finalReviewClosed':
-    case 'needRoleClosed': {
-      const el = approvals.get(ev.requestId);
-      if (el) {
-        approvals.delete(ev.requestId);
-        el.remove();
-        updatePending();
-      }
-      break;
-    }
+    case 'needRoleClosed':
     case 'approvalClosed': {
       const el = approvals.get(ev.requestId);
       if (!el) break;
@@ -136,20 +315,24 @@ export function handle(ev) {
         cancelled: 'cancelled',
         timeout: 'declined automatically (no answer in time)',
       };
-      addSys(`${el.dataset.title} · ${names[ev.decision] || 'closed'}`);
+      addLine(ev, 'approval', 'sys', el.dataset.title + ' · ' + (names[ev.decision] || ev.action || 'closed'));
       updatePending();
       break;
     }
+    case 'tasksCancelled':
+      if (!ev.taskIds?.length) break;
+      addLine(ev, 'system', 'sys', label(ev.agent) + ' · ' + ev.taskIds.length + ' task(s) interrupted', [ev.agent]);
+      break;
     case 'system':
-      addSys(ev.text);
-      break;
     case 'info':
-      addSys(`${label(ev.agent)}: ${ev.text}`);
-      break;
     case 'error':
-      addSys(`${ev.agent ? `${label(ev.agent)}: ` : ''}${ev.text}`, true);
-      break;
-    default:
+      addLine(
+        ev,
+        ev.kind === 'error' ? 'error' : 'system',
+        ev.kind === 'error' ? 'sys error' : 'sys',
+        (ev.agent ? label(ev.agent) + ': ' : '') + ev.text,
+        ev.agent ? [ev.agent] : [],
+      );
       break;
   }
 }

@@ -6,7 +6,7 @@ import { DRIVERS } from '../providers/registry.ts';
 import { LOGS_DIR, ROLES_DIR, SETTINGS, config, safeRegex, saveLocalConfig, setting } from '../config/settings.ts';
 import { ROUTING_MODES } from '../core/prompts.ts';
 import { newConversation, restoreConversation, saveSettings, settingsView } from './conversation.ts';
-import { resolveMissingRole, userSend } from './routing.ts';
+import { resolveMissingRole, userSend, userTargets } from './routing.ts';
 import { approvalTimers, cliCache, providerRuntime, relay } from './state.ts';
 import {
   type AddAgentInput,
@@ -44,7 +44,16 @@ export async function api(action: string, body: Record<string, any>): Promise<un
         settings: settingsView(),
         settingsSchema: SETTINGS,
       };
+    case 'previewTarget':
+      return {
+        targets: userTargets(body.target, typeof body.prefix === 'string' ? body.prefix : '').map((id) => ({
+          id,
+          name: agentName(id),
+          available: agents[id].available !== false && !providerBlocked(S.conv.team.find((a) => a.id === id)?.driver),
+        })),
+      };
     case 'send':
+      if (body.conversationId && body.conversationId !== S.conv.id) throw new Error('conversation changed before sending');
       if (!body.text?.trim()) throw new Error('empty message');
       userSend(body.text, body.target);
       return { ok: true };

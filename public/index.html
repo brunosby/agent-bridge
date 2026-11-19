@@ -58,6 +58,8 @@
         <div class="conversation-bar__title">
           <h2 id="conversationTitle">Conversation</h2>
           <span id="relayState" class="pill"></span>
+          <button id="pendingCount" class="btn" hidden></button>
+          <span id="projectContext" class="hint"></span>
         </div>
         <div class="conversation-bar__actions" role="group" aria-label="Session actions">
           <button id="resume" class="btn" title="Reset the hop counter and resume the relay">Resume</button>
@@ -65,7 +67,32 @@
           <button id="stopAll" class="btn btn--danger" title="Interrupt every agent and pause the relay">Stop all</button>
         </div>
       </section>
-      <main id="log" class="log" aria-live="polite" aria-label="Conversation"></main>
+      <div class="conversation-log">
+        <details class="log-filters">
+          <summary>Filter and search</summary>
+          <div class="log-filters__controls">
+            <select id="logMode" aria-label="Conversation view">
+              <option value="activity">All activity</option>
+              <option value="messages">Messages</option>
+            </select>
+            <select id="logAgent" aria-label="Filter by agent">
+              <option value="">All agents</option>
+            </select>
+            <select id="logCategory" aria-label="Filter by entry type">
+              <option value="">All entries</option>
+              <option value="route">Hand-offs</option>
+              <option value="error">Errors</option>
+              <option value="approval">Decisions and requests</option>
+            </select>
+            <input id="logSearch" type="search" aria-label="Search loaded conversation" placeholder="Search loaded entries" />
+            <button id="searchPrev" aria-label="Previous result">↑</button>
+            <button id="searchNext" aria-label="Next result">↓</button>
+            <output id="searchPosition" aria-live="polite"></output>
+          </div>
+        </details>
+        <main id="log" class="log" aria-live="polite" aria-label="Conversation"></main>
+        <button id="returnToEnd" class="btn" hidden>Back to end</button>
+      </div>
 
       <section id="pending" class="pending" aria-live="assertive" aria-label="Waiting for you" hidden></section>
 
@@ -78,7 +105,18 @@
           <select id="target" title="Who receives your message"></select>
         </label>
         <label class="visually-hidden" for="input">Message</label>
-        <textarea id="input" class="composer__input" rows="3" placeholder="Write a message… Use @Name to address an agent."></textarea>
+        <div class="composer__entry">
+          <textarea
+            id="input"
+            class="composer__input"
+            rows="3"
+            placeholder="Write a message… Use @Name to address an agent."
+            aria-autocomplete="list"
+            aria-controls="mentionSuggestions"
+          ></textarea>
+          <div id="mentionSuggestions" class="mention-suggestions" role="listbox" aria-label="Agent mentions" hidden></div>
+        </div>
+        <output id="targetPreview" class="hint composer__preview" aria-live="polite"></output>
         <button id="send" class="btn btn--primary composer__send" title="Ctrl+Enter to send">Send</button>
       </footer>
     </div>

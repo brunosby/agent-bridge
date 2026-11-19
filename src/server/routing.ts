@@ -1,15 +1,18 @@
 // Routing: who receives each message, review rounds, missing roles, delivery to agents.
 import type { AgentEvent, AgentSpec } from '../core/types.ts';
 import { S } from './state.ts';
-import { spawnSync } from 'node:child_process';
 import { agentName, logError, publish, publishState } from './events.ts';
-import { setting } from '../config/settings.ts';
+import { config, setting } from '../config/settings.ts';
 import { DONE_MARKER, relay } from './state.ts';
 import { checkTokenLimit } from './conversation.ts';
 import { DRIVERS } from '../providers/registry.ts';
 import { addAgent, providerBlocked } from './team.ts';
 import { driverModelCache } from './state.ts';
 import { isRecommended } from '../core/roles.ts';
+import { randomUUID } from 'node:crypto';
+import { resolveRecipients } from '../core/recipients.ts';
+import { reviewChanges } from '../workspace/git-context.ts';
+import { summarizeProject } from './project.ts';
 import { rosterText } from '../core/prompts.ts';
 export function orchestratorId() {
   return (S.conv.team.find((a) => a.role === 'orchestrator') || S.conv.team[0])?.id;
@@ -98,7 +101,10 @@ export function onTurnEnd(fromId: string, ev: AgentEvent): void {
     if (!relay.auto || relay.halted || checkTokenLimit()) return;
     relay.hops += 1;
     const body = results.map((r) => `[Message from ${agentName(r.from)}]\n${r.text}`).join('\n\n');
-    deliver(orch, results.length > 1 ? `[Results from ${results.length} agents]\n\n${body}` : body, { from: results[0].from });
+    deliver(orch, results.length > 1 ? `[Results from ${results.length} agents]\n\n${body}` : body, {
+      from: results[0].from,
+      sourceSeq: ev.sourceSeq ?? ev.seq,
+    });
     return;
   }
   if (!text) return;
@@ -114,7 +120,14 @@ export function onTurnEnd(fromId: string, ev: AgentEvent): void {
     if (setting('finalConfirmation') && S.conv.routingMode === 'orchestrator') {
       const requestId = `final-${Date.now()}`;
       S.conv.pendingFinal = requestId;
-      publish({ kind: 'finalReview', agent: fromId, requestId, summary: text.replace(DONE_MARKER, '').trim() });
+      publish({
+        kind: 'finalReview',
+        agent: fromId,
+        requestId,
+        summary: text.replace(DONE_MARKER, '').trim(),
+        project: summarizeProject(S.conv),
+        tests: [...S.conv.testResults],
+      });
     }
     S.conv.reviewRounds = 0;
     publishState();
@@ -142,7 +155,7 @@ export function onTurnEnd(fromId: string, ev: AgentEvent): void {
   }
   for (const to of targets) {
     relay.hops += 1;
-    deliver(to, `[Message from ${agentName(fromId)}]\n${text}`, { from: fromId });
+    deliver(to, `[Message from ${agentName(fromId)}]\n${text}`, { from: fromId, sourceSeq: ev.sourceSeq ?? ev.seq });
   }
 }
 
@@ -236,7 +249,38 @@ export async function resolveMissingRole(roleId: string, action: string): Promis
 }
 
 /** Send a message to one agent, adding the team roster or a role note when they changed. */
-export function deliver(toId: string, text: string, { from }: { from: string }): void {
+type Delivery = { from: string; sourceSeq?: number };
+const reviewerQueues = new WeakMap<typeof S.conv, Map<string, Promise<void>>>();
+
+export function deliver(toId: string, text: string, delivery: Delivery): void {
+  const owner = S.conv;
+  const agent = owner.agents[toId];
+  const spec = owner.team.find((member) => member.id === toId);
+  if (!agent || !spec) return;
+  const role = spec.role;
+  const needsDiff = S.roles[role]?.context === 'diff' && delivery.from !== 'user';
+  let queue = reviewerQueues.get(owner);
+  const previous = queue?.get(toId);
+  if (!needsDiff && !previous) return sendDelivery(toId, text, delivery);
+  if (!queue) reviewerQueues.set(owner, (queue = new Map()));
+  const original = needsDiff ? '[Original request from ' + setting('userName') + ']\n' + (owner.lastUserText || '(not available)') : '';
+  const valid = () => S.conv === owner && owner.agents[toId] === agent && spec.role === role;
+  const pending = (previous || Promise.resolve())
+    .then(async () => {
+      if (!valid()) return;
+      const extras = needsDiff ? [original, await diffContext(agent.cwd || owner.workDir)] : [];
+      if (valid()) sendDelivery(toId, text, delivery, extras);
+    })
+    .catch(() => {
+      if (valid()) publish({ kind: 'error', agent: toId, text: 'Could not prepare Reviewer context.' });
+    });
+  queue.set(toId, pending);
+  void pending.then(() => {
+    if (queue.get(toId) === pending) queue.delete(toId);
+  });
+}
+
+function sendDelivery(toId: string, text: string, { from, sourceSeq }: Delivery, context: string[] = []): void {
   const agent = S.conv.agents[toId];
   if (!agent) return;
   const blocked = providerBlocked(S.conv.team.find((a) => a.id === toId)?.driver);
@@ -268,48 +312,54 @@ export function deliver(toId: string, text: string, { from }: { from: string }):
     extras.push(rosterText(team, toId, S.conv.routingMode));
     S.conv.rosterSeen[toId] = S.conv.rosterVersion;
   }
-  // Roles with context "diff" (Reviewer) get the original request and the current changes, so they
-  // review what changed instead of reading the whole conversation.
-  const spec = S.conv.team.find((a) => a.id === toId);
-  if (spec && S.roles[spec.role]?.context === 'diff' && from !== 'user') {
-    extras.push(`[Original request from ${setting('userName')}]\n${S.conv.lastUserText || '(not available)'}`);
-    extras.push(diffContext(agent.cwd || S.conv.workDir));
-  }
+  extras.push(...context);
   S.conv.lastSender[toId] = from;
   if (from !== 'user') publish({ kind: 'routed', from, to: toId, relayed: true, hop: relay.hops });
-  agent.send(extras.length ? `${extras.join('\n\n')}\n\n${text}` : text);
+  const id = randomUUID();
+  const task = { id, agent: toId, from, sourceSeq: sourceSeq || null, state: 'queued' as const };
+  S.conv.tasks.set(id, task);
+  publish({ kind: 'taskQueued', ...task });
+  agent.send(extras.length ? `${extras.join('\n\n')}\n\n${text}` : text, id);
 }
 
 /** git diff of the working tree (tracked changes + list of new files), trimmed to a reasonable size. */
-export function diffContext(dir: string): string {
-  const git = (args: string[]) =>
-    spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 15000, maxBuffer: 20 * 1024 * 1024 });
-  const inside = git(['rev-parse', '--is-inside-work-tree']);
-  if (inside.status !== 0)
-    return '[Current changes]\n(The project folder is not a git repository: read the files the coder reported as changed.)';
-  const diff = git(['diff', 'HEAD', '--no-color']).stdout || '';
-  const untracked = (git(['ls-files', '--others', '--exclude-standard']).stdout || '').trim();
-  const limit = 40000;
-  const body = diff.length > limit ? `${diff.slice(0, limit)}\n... (diff cut at ${limit} characters; run git diff for the rest)` : diff;
-  return `[Current changes (git diff HEAD)]\n${body.trim() ? `\`\`\`diff\n${body.trim()}\n\`\`\`` : '(no changes to tracked files)'}${untracked ? `\nNew files not in git yet:\n${untracked}` : ''}`;
+export async function diffContext(dir: string): Promise<string> {
+  const changes = await reviewChanges(dir, config.reviewDiffExcludePatterns);
+  if (!changes)
+    return '[Current changes]\n(No filtered file list is available. Git is unavailable, the folder has no Git history, or collection failed.)';
+  const { patch, files, omitted } = changes;
+  const configured = Number(setting('reviewDiffMaxChars'));
+  const limit = Number.isFinite(configured) && configured > 0 ? Math.max(1, Math.floor(configured)) : configured === 0 ? 0 : 40000;
+  const metadataOnly = patch === null || (limit > 0 && patch.length > limit);
+  const shown = (metadataOnly ? files : files.filter((file) => file.status === '??')).slice(0, 5000);
+  const list = shown.map(({ status, names }) => status + ' ' + names.map((name) => JSON.stringify(name)).join(' → ')).join('\n');
+  const line =
+    patch === null
+      ? '(The filtered patch could not be read.)'
+      : metadataOnly
+        ? '(Patch exceeds the configured size limit. Showing file status only.)'
+        : patch.trim() || '(no visible tracked changes)';
+  return (
+    '[Current changes (filtered git diff HEAD)]\n' +
+    line +
+    (list ? '\nFiltered files:\n' + list.slice(0, 200000) : '') +
+    (shown.length === 5000 || list.length > 200000 ? '\nFile list truncated.' : '') +
+    (omitted ? '\nSensitive paths omitted.' : '')
+  );
+}
+
+export function userTargets(target?: string, prefix?: string) {
+  return resolveRecipients(S.conv.team, S.conv.routingMode, target, prefix).filter((id) => Object.hasOwn(S.conv.agents, id));
 }
 
 export function userSend(text: string, target?: string): void {
-  S.conv.lastUserText = text;
-  let targets;
-  if (target === 'all') targets = S.conv.team.map((a) => a.id);
-  else if (!target || target === 'auto') {
-    // Only @mentions at the very start pick the receiver; mentions inside the text are instructions.
-    const lead = (String(text).match(/^\s*(?:@[\w-]+[\s,:]*)+/) || [''])[0];
-    const ment = mentions(lead, null);
-    targets = ment.length ? ment : [S.conv.routingMode === 'orchestrator' ? orchestratorId() : S.conv.team[0]?.id];
-  } else targets = [target];
-  targets = targets.filter((t) => S.conv.agents[t]);
+  const targets = userTargets(target, text);
   if (!targets.length) throw new Error('no agent to receive this message');
+  S.conv.lastUserText = text;
   relay.hops = 0;
   relay.halted = false;
-  publish({ kind: 'user', text, to: targets });
+  const source = publish({ kind: 'user', text, to: targets });
   const note = targets.length > 1 ? ` (sent to ${targets.length} agents)` : '';
-  for (const t of targets) deliver(t, `[Message from ${setting('userName')}${note}]\n${text}`, { from: 'user' });
+  for (const t of targets) deliver(t, `[Message from ${setting('userName')}${note}]\n${text}`, { from: 'user', sourceSeq: source.seq });
   publishState();
 }

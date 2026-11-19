@@ -17,6 +17,7 @@ import { OpenCodeAgent } from '../providers/opencode.ts';
 import { FakeAgent } from '../providers/fake.ts';
 import { buildMatcher } from '../core/safety.ts';
 import { wireAgent } from './conversation.ts';
+import { captureProject } from './project.ts';
 import { createWorktree } from '../workspace/worktree.ts';
 import { globMatch } from '../core/roles.ts';
 /** Team used for a new conversation: config.defaultTeam, else the old mainAgent setting. */
@@ -194,6 +195,8 @@ export async function addAgent({ driver, role, name, model, effort, bypass, work
     const wt = await createWorktree({ repoDir: S.conv.workDir, conversationId: S.conv.id, agentName: spec.name });
     spec.cwd = wt.path;
     spec.worktree = wt;
+    captureProject(S.conv, wt.path, true);
+    publish({ kind: 'projectBaseline', project: S.conv.project });
     publish({ kind: 'system', text: `${spec.name} works in its own git worktree: ${wt.path} (branch ${wt.branch}).` });
   }
   S.conv.team.push(spec);
@@ -212,6 +215,9 @@ export async function removeAgent(id: string): Promise<void> {
   const [spec] = S.conv.team.splice(idx, 1);
   const agent = S.conv.agents[id];
   delete S.conv.agents[id];
+  const taskIds = [...S.conv.tasks.values()].filter((task) => task.agent === id).map((task) => task.id);
+  for (const taskId of taskIds) S.conv.tasks.delete(taskId);
+  if (taskIds.length) publish({ kind: 'tasksCancelled', agent: id, taskIds });
   S.conv.rosterVersion++;
   await agent?.shutdown().catch(() => {});
   publish({ kind: 'system', text: `Removed ${spec.name}. Its session stays saved in the log.` });

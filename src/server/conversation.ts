@@ -12,6 +12,8 @@ import { createAgent, defaultName, defaultTeam, startAgent, uniqueName } from '.
 import { driverModelCache } from './state.ts';
 import { DRIVERS } from '../providers/registry.ts';
 import { onTurnEnd } from './routing.ts';
+import { isTestCommand } from '../core/test-command.ts';
+import { captureProject } from './project.ts';
 import { buildMatcher } from '../core/safety.ts';
 export interface OpenOptions {
   workDir: string;
@@ -48,6 +50,15 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
     rosterSeen: {},
     pendingRoleNote: {},
     lastSender: {},
+    tasks: new Map(),
+    project: saved?.events.findLast((event) => event.kind === 'projectBaseline')?.project || {},
+    testResults:
+      saved?.events
+        .filter((event) => event.kind === 'observedTest')
+        .map((event) => event.result)
+        .slice(-40) || [],
+    possibleTests: new Map(),
+    lastAnswerSeq: {},
   };
   S.history = saved ? saved.events : [];
   S.seq = Math.max(S.seq, saved?.lastSeq || 0);
@@ -75,6 +86,10 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
     S.conv.team.push(spec);
     createAgent(spec);
   }
+  const activePaths = new Set([workDir, ...S.conv.team.flatMap((spec) => (spec.worktree && spec.cwd ? [spec.cwd] : []))]);
+  S.conv.project = Object.fromEntries(Object.entries(S.conv.project).filter(([cwd]) => activePaths.has(cwd)));
+  for (const cwd of activePaths) captureProject(S.conv, cwd, !saved);
+  if (!saved) publish({ kind: 'projectBaseline', project: S.conv.project });
   return { saved };
 }
 
@@ -155,8 +170,51 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       armApprovalTimeout(id, ev);
     }
     if (ev.kind === 'approvalClosed') clearTimeout(approvalTimers.get(ev.requestId));
-    publish(ev);
-    if (ev.kind === 'turnEnd') onTurnEnd(id, ev);
+    if (ev.kind === 'taskStarted' || ev.kind === 'turnEnd' || ev.kind === 'tasksCancelled') {
+      for (const taskId of ev.taskIds || []) {
+        const task = owner.tasks.get(taskId);
+        if (task?.agent !== id) continue;
+        if (ev.kind === 'taskStarted') task.state = 'working';
+        else owner.tasks.delete(taskId);
+      }
+    }
+    const toolKey = id + '|' + ev.key;
+    if (ev.kind === 'tool') {
+      const title = String(ev.title || '');
+      const activity = /^(?:bash|shell|commandExecution)$/i.test(title)
+        ? 'running a command'
+        : /^(?:edit|fileChange|write)$/i.test(title)
+          ? 'editing files'
+          : /^(?:read|readFile)$/i.test(title)
+            ? 'reading files'
+            : '';
+      if (activity) {
+        let changed = false;
+        for (const task of owner.tasks.values()) {
+          if (task.agent !== id || task.state !== 'working' || task.activity === activity) continue;
+          task.activity = activity;
+          changed = true;
+        }
+        if (changed) publishState();
+      }
+    }
+    if (ev.kind === 'tool' && /^(?:Bash|shell|commandExecution)$/i.test(String(ev.title || '')) && isTestCommand(String(ev.detail || ''))) {
+      owner.possibleTests.set(toolKey, agentName(id));
+    }
+    if (ev.kind === 'toolResult' && typeof ev.ok === 'boolean' && owner.possibleTests.has(toolKey)) {
+      const result = owner.possibleTests.get(toolKey) + (ev.ok ? ' · passed' : ' · failed');
+      owner.possibleTests.delete(toolKey);
+      owner.testResults = [...owner.testResults.slice(-39), result];
+      publish({ kind: 'observedTest', result });
+    }
+    const published = publish(ev);
+    if (ev.kind === 'text' && ev.final && published.seq) owner.lastAnswerSeq[id] = published.seq;
+    if (ev.kind === 'turnEnd') {
+      const sourceSeq = owner.lastAnswerSeq[id] ?? published.seq;
+      delete owner.lastAnswerSeq[id];
+      onTurnEnd(id, { ...ev, seq: published.seq, sourceSeq });
+    }
+    if (ev.kind === 'taskStarted' || ev.kind === 'tasksCancelled') publishState();
   });
 }
 

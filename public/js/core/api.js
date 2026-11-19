@@ -18,6 +18,10 @@ export function connect() {
   const es = new EventSource(`/events?token=${encodeURIComponent(TOKEN)}`);
   es.onmessage = (m) => {
     const ev = JSON.parse(m.data);
+    if (ev.kind === 'replayComplete') {
+      handle(ev);
+      return;
+    }
     if (ev.kind === 'reset') {
       store.lastSeq = 0;
     } else if (ev.kind === 'state' && !ev.seq) {

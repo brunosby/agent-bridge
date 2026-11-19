@@ -4,7 +4,7 @@ import { agentOf, cards, roleOf, store } from '../core/store.js';
 import { openAddDialog } from './add-agent.js';
 import { updatePending } from './approvals.js';
 import { api } from '../core/api.js';
-import { addSys } from './conversation-log.js';
+import { addSys, jumpToSequence } from './conversation-log.js';
 const detailsDialog = $('agentDetails');
 
 $('addAgent').onclick = openAddDialog;
@@ -26,6 +26,10 @@ export function renderState() {
     if (box.children[index] !== card) box.insertBefore(card, box.children[index] || null);
   }
 
+  const project = store.state.project;
+  $('projectContext').textContent = project
+    ? [project.name, project.branch || (project.detached ? 'Detached HEAD' : project.git ? 'Git' : 'No Git')].join(' · ')
+    : '';
   const r = store.state.relay;
   $('auto').checked = r.auto;
   if (document.activeElement !== $('maxHops')) $('maxHops').value = r.maxHops;
@@ -128,7 +132,12 @@ export function renderCard(a) {
     const warn = h('div', 'card-warn');
     const details = h('div', 'agent-details');
     const meta = h('div', 'agent-details__meta');
-    meta.append(drv, tokens);
+    const taskLink = h('button', 'btn', 'Go to task message');
+    taskLink.onclick = () => {
+      detailsDialog.close();
+      if (!jumpToSequence(Number(taskLink.dataset.seq))) addSys('The task message is outside the loaded history.');
+    };
+    meta.append(drv, tokens, taskLink);
     const actions = h('div', 'agent-details__actions');
     actions.append(stop, retry, remove);
     details.append(meta, warn, row, rec, actions);
@@ -139,7 +148,7 @@ export function renderCard(a) {
       $('agentDetailsBody').replaceChildren(details);
       detailsDialog.showModal();
     };
-    c = cards[a.id] = { el, name, roleName, details, drv, status, tokens, stop, retry, role, model, effort, bypass, rec, warn };
+    c = cards[a.id] = { el, name, roleName, details, taskLink, drv, status, tokens, stop, retry, role, model, effort, bypass, rec, warn };
   }
   c.el.className = `card drv-${a.driver}${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${!a.available || a.account ? ' unavailable' : ''}`;
   c.details.classList.toggle('bypass-on', a.bypass);
@@ -159,6 +168,14 @@ export function renderCard(a) {
         : a.busy
           ? 'working'
           : 'idle';
+  const tasks = (store.state.tasks || []).filter((task) => task.agent === a.id);
+  const working = tasks.filter((task) => task.state === 'working');
+  const task = working[0] || tasks[0];
+  if (task && a.available && !a.account && !a.waitingApproval) {
+    c.status.textContent = working.length ? (working[0].activity || 'working') + ' · ' + working.length : 'queued · ' + tasks.length;
+  }
+  c.taskLink.hidden = !task?.sourceSeq;
+  c.taskLink.dataset.seq = task?.sourceSeq || '';
   c.tokens.textContent = `${fmtTokens(a.tokens)} tok${a.cachedTokens ? ` (+${fmtTokens(a.cachedTokens)} cache)` : ''}`;
   c.stop.disabled = !a.busy;
   c.retry.hidden = a.available;

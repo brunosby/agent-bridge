@@ -35,6 +35,7 @@ export class FakeAgent extends EventEmitter implements Agent {
   received = 0;
   busyCount = 0;
   inbox: string[] = [];
+  timers = new Map<ReturnType<typeof setTimeout>, string | undefined>();
 
   constructor({ id = 'fake', name = 'Fake', cwd = '.', config = {}, tokens = 0, cachedTokens = 0 }: AgentOptions) {
     super();
@@ -69,24 +70,28 @@ export class FakeAgent extends EventEmitter implements Agent {
     this.emitEvent('models', {});
   }
 
-  send(text: string): void {
+  send(text: string, taskId?: string): void {
     this.received += 1;
     this.inbox.push(text);
     this.busyCount += 1;
     this.emitEvent('status', { busy: true });
     const n = this.received;
-    setTimeout(
+    const taskIds = taskId ? [taskId] : [];
+    this.emitEvent('taskStarted', { taskIds });
+    const timer = setTimeout(
       () => {
+        this.timers.delete(timer);
         const reply = this.replyFor(text, n);
         this.tokens += 100;
         this.emitEvent('usage', { tokens: this.tokens });
         this.emitEvent('text', { key: `${this.id}-${n}`, text: reply, final: true });
         this.busyCount -= 1;
-        this.emitEvent('turnEnd', { text: reply, ok: true });
+        this.emitEvent('turnEnd', { taskIds, text: reply, ok: true });
         this.emitEvent('status', { busy: this.busy });
       },
       Number(this.config.delayMs ?? 20),
     );
+    this.timers.set(timer, taskId);
   }
 
   replyFor(text: string, n: number): string {
@@ -112,11 +117,20 @@ export class FakeAgent extends EventEmitter implements Agent {
     return false;
   }
 
-  async interrupt(): Promise<void> {}
+  async interrupt(): Promise<void> {
+    for (const timer of this.timers.keys()) clearTimeout(timer);
+    const taskIds = [...this.timers.values()].filter(Boolean);
+    this.timers.clear();
+    this.busyCount = 0;
+    if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
+    this.emitEvent('status', { busy: false });
+  }
 
   async restart(): Promise<void> {
     this.available = true;
   }
 
-  async shutdown(): Promise<void> {}
+  async shutdown(): Promise<void> {
+    await this.interrupt();
+  }
 }

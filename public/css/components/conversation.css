@@ -1,0 +1,102 @@
+.conversation-log {
+  grid-area: log;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+.conversation-log .log {
+  flex: 1;
+}
+
+.log-filters {
+  padding: var(--space-1) var(--workspace-gutter);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.log-filters summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.log-filters__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  align-items: center;
+  padding-block: var(--space-1);
+}
+
+#returnToEnd {
+  position: absolute;
+  inset-inline-end: var(--workspace-gutter);
+  inset-block-end: var(--space-2);
+}
+
+#pendingCount {
+  color: var(--color-warning);
+  border-color: var(--color-warning-border);
+  background: var(--color-warning-bg);
+}
+
+.tool-group {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  padding-inline: var(--space-3);
+}
+
+.tool-group summary {
+  cursor: pointer;
+}
+
+.search-match {
+  outline: 2px solid var(--color-workspace-accent);
+  outline-offset: 2px;
+}
+
+.composer__entry {
+  position: relative;
+  grid-area: input;
+  min-width: 0;
+}
+
+.composer__preview {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+
+.composer__preview:empty {
+  display: none;
+}
+
+.mention-suggestions {
+  position: absolute;
+  z-index: 2;
+  inset-inline-start: 0;
+  inset-block-end: 100%;
+  min-width: min(16rem, 100%);
+  max-height: 12rem;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-dialog);
+}
+
+.mention-suggestions [role='option'] {
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+
+.mention-suggestions [aria-selected='true'] {
+  background: var(--color-surface-2);
+}
+
+/* Leave offscreen message rendering to the browser while keeping transcript navigation native. */
+.log > .msg {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 4rem;
+}

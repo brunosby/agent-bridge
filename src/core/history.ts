@@ -150,8 +150,11 @@ export function loadConversation(logsDir: string, id: string): ConversationSumma
   }
 
   const openApprovals = new Set<string>();
+  const openTasks = new Map<string, string>();
   const openTurn: Record<string, boolean> = {};
   for (const e of events) {
+    if (e.kind === 'taskQueued' && e.id && e.agent) openTasks.set(e.id, e.agent);
+    if (e.kind === 'turnEnd' || e.kind === 'tasksCancelled') for (const taskId of e.taskIds || []) openTasks.delete(taskId);
     if (e.kind === 'approval' || e.kind === 'needRole' || e.kind === 'finalReview') openApprovals.add(e.requestId);
     if (e.kind === 'needRoleClosed' || e.kind === 'finalReviewClosed') openApprovals.delete(e.requestId);
     if (e.kind === 'approvalClosed') openApprovals.delete(e.requestId);
@@ -166,6 +169,14 @@ export function loadConversation(logsDir: string, id: string): ConversationSumma
   for (const [agent, open] of Object.entries(openTurn)) {
     if (open)
       events.push({ seq: ++lastSeq, at: lastAt, agent, kind: 'turnEnd', text: '', ok: false, detail: 'stopped when the app was closed' });
+  }
+  const interrupted = new Map<string, string[]>();
+  for (const [taskId, agent] of openTasks) {
+    if (!interrupted.has(agent)) interrupted.set(agent, []);
+    interrupted.get(agent)?.push(taskId);
+  }
+  for (const [agent, taskIds] of interrupted) {
+    events.push({ seq: ++lastSeq, at: lastAt, kind: 'tasksCancelled', agent, taskIds });
   }
   return { ...summary, events, lastSeq };
 }

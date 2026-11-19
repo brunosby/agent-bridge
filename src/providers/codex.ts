@@ -1,8 +1,17 @@
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { spawnJsonl, type JsonlProcess } from './process.ts';
-import type { Agent, AgentOptions, DriverConfig, ModelInfo, ReconfigureOptions } from '../core/types.ts';
+import type { Agent, AgentInput, AgentOptions, DriverConfig, ModelInfo, ReconfigureOptions } from '../core/types.ts';
 import { clip } from './claude.ts';
+
+class CodexResponseError extends Error {
+  code?: number;
+
+  constructor(error: { message?: string; code?: number }) {
+    super(error.message || JSON.stringify(error));
+    this.code = error.code;
+  }
+}
 
 /**
  * Drives Codex through `codex app-server` (JSON-RPC 2.0 without the "jsonrpc" field, JSONL over stdio).
@@ -27,7 +36,10 @@ export class CodexAgent extends EventEmitter implements Agent {
   threadId: string | null;
   activeTurnId: string | null;
   turnMessages: { text: string; phase?: string | null }[];
-  queue: string[];
+  queue: AgentInput[];
+  activeBatch: AgentInput[] | null = null;
+  steering: { batch: AgentInput[]; turnId: string; completion?: unknown; cancelled?: boolean } | null = null;
+  blockedSteerTurn: string | null = null;
   ready: Promise<void> | null;
   approvals: Map<string, { rpcId: number | string; method: string }>;
   fileChanges: Map<string, { path: string; kind: unknown }[]>;
@@ -66,18 +78,35 @@ export class CodexAgent extends EventEmitter implements Agent {
   }
 
   get busy() {
-    return Boolean(this.activeTurnId) || this.queue.length > 0;
+    return Boolean(this.activeBatch || this.activeTurnId || this.steering) || this.queue.length > 0;
   }
 
   emitEvent(kind: string, data: Record<string, unknown> = {}): void {
     this.emit('event', { agent: this.id, kind, ...data });
   }
 
-  request(method: string, params: unknown): Promise<any> {
+  request(method: string, params: unknown, timeoutMs?: number): Promise<any> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.waiting.set(id, { resolve, reject, method });
-      this.proc?.write({ method, id, params });
+      if (!this.proc) return reject(new Error('Codex transport unavailable'));
+      const timer = timeoutMs
+        ? setTimeout(() => {
+            this.waiting.delete(id);
+            reject(new Error(method + ' timed out'));
+          }, timeoutMs)
+        : undefined;
+      this.waiting.set(id, {
+        method,
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.proc.write({ method, id, params });
     });
   }
 
@@ -103,6 +132,12 @@ export class CodexAgent extends EventEmitter implements Agent {
         this.proc = null;
         this.ready = null;
         this.activeTurnId = null;
+        const taskIds = [...(this.activeBatch || []), ...(this.steering?.batch || [])].map((input) => input.taskId).filter(Boolean);
+        this.activeBatch = null;
+        this.steering = null;
+        this.blockedSteerTurn = null;
+        if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
+        this.cancelQueued();
         for (const key of this.approvals.keys()) this.emitEvent('approvalClosed', { requestId: key, decision: 'cancelled' });
         this.approvals.clear();
         for (const w of this.waiting.values()) w.reject(new Error('codex app-server exited'));
@@ -199,23 +234,31 @@ export class CodexAgent extends EventEmitter implements Agent {
     });
   }
 
-  async send(text: string): Promise<void> {
-    this.queue.push(text);
+  async send(text: string, taskId?: string): Promise<void> {
+    this.queue.push({ text, taskId });
     this.emitEvent('status', { busy: true });
     try {
       await this.start();
     } catch {
-      this.queue = [];
-      this.emitEvent('status', { busy: false });
+      this.cancelQueued();
+      this.emitEvent('status', { busy: this.busy });
       return;
     }
     this.flush();
   }
 
-  /** Start a turn with all queued text. If a turn is active, Codex adds the input to it. */
+  /** Send to a known active turn or start one when the thread is idle. */
   async flush(): Promise<void> {
-    if (!this.queue.length || !this.threadId) return;
-    const text = this.queue.splice(0).join('\n\n');
+    if (this.steering || !this.queue.length || !this.threadId || !this.available) return;
+    if (this.activeTurnId) {
+      if (this.blockedSteerTurn !== this.activeTurnId) await this.steer(this.threadId, this.activeTurnId);
+      return;
+    }
+    if (this.activeBatch) return;
+    const batch = this.queue.splice(0);
+    this.activeBatch = batch;
+    const taskIds = batch.map((input) => input.taskId).filter(Boolean);
+    const text = batch.map((input) => input.text).join('\n\n');
     try {
       const params: Record<string, unknown> = { threadId: this.threadId, input: [{ type: 'text', text, text_elements: [] }] };
       // Always send the model explicitly (the account default when none is chosen), so switching back to default is unambiguous.
@@ -229,14 +272,58 @@ export class CodexAgent extends EventEmitter implements Agent {
       }
       const res = await this.request('turn/start', params);
       if (model) this.resolvedModel = model;
+      if (this.activeBatch !== batch) return;
       if (res?.turn?.id && !this.activeTurnId) this.activeTurnId = res.turn.id;
+      if (taskIds.length) this.emitEvent('taskStarted', { taskIds, turnId: this.activeTurnId });
     } catch (err) {
+      if (this.activeBatch !== batch) return;
+      this.activeBatch = null;
+      if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
       this.emitEvent('error', { text: `turn/start failed: ${errorText(err)}` });
       if (/method not found|unknown (method|variant|field)|invalid params|missing field/i.test(errorText(err))) {
         this.markUnavailable(`Codex protocol changed: ${errorText(err)}`);
       }
     }
     this.emitEvent('status', { busy: this.busy });
+    if (this.queue.length) void this.flush();
+  }
+
+  async steer(threadId: string, expectedTurnId: string): Promise<void> {
+    const pending: NonNullable<CodexAgent['steering']> = { batch: this.queue.splice(0), turnId: expectedTurnId };
+    this.steering = pending;
+    const taskIds = pending.batch.map((input) => input.taskId).filter(Boolean);
+    const text = pending.batch.map((input) => input.text).join('\n\n');
+    try {
+      const result = await this.request(
+        'turn/steer',
+        { threadId, expectedTurnId, input: [{ type: 'text', text, text_elements: [] }] },
+        12000,
+      );
+      if (this.steering !== pending) return;
+      if (result?.turnId !== expectedTurnId) throw new Error('Unexpected turn ID in the steering response');
+      (this.activeBatch ??= []).push(...pending.batch);
+      if (taskIds.length) this.emitEvent('taskStarted', { taskIds, turnId: expectedTurnId });
+    } catch (err) {
+      if (this.steering !== pending) return;
+      const refused =
+        err instanceof CodexResponseError &&
+        ([-32600, -32601, -32602].includes(err.code ?? 0) ||
+          /no active turn|turn.*(?:not found|not steerable|does not support|mismatch)|expected.*turn/i.test(err.message));
+      if (refused && !pending.cancelled) {
+        this.blockedSteerTurn = expectedTurnId;
+        this.queue.unshift(...pending.batch);
+      } else {
+        if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
+        this.emitEvent('error', { text: 'Codex could not confirm the steering input. It was not resent: ' + errorText(err) });
+      }
+    } finally {
+      if (this.steering === pending) {
+        this.steering = null;
+        if (pending.completion) this.handleNotification('turn/completed', pending.completion);
+        this.emitEvent('status', { busy: this.busy });
+        if (this.queue.length) void this.flush();
+      }
+    }
   }
 
   get effort() {
@@ -270,7 +357,19 @@ export class CodexAgent extends EventEmitter implements Agent {
     await this.start().catch(() => {});
   }
 
+  cancelQueued(): void {
+    const taskIds = this.queue
+      .splice(0)
+      .map((input) => input.taskId)
+      .filter(Boolean);
+    if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
+  }
+
   async interrupt() {
+    if (this.steering) this.steering.cancelled = true;
+    if (this.activeTurnId) this.blockedSteerTurn = this.activeTurnId;
+    this.cancelQueued();
+    this.emitEvent('status', { busy: this.busy });
     if (!this.activeTurnId || !this.threadId) return;
     try {
       await this.request('turn/interrupt', { threadId: this.threadId, turnId: this.activeTurnId });
@@ -311,7 +410,7 @@ export class CodexAgent extends EventEmitter implements Agent {
       const w = this.waiting.get(m.id);
       if (!w) return;
       this.waiting.delete(m.id);
-      if (m.error) w.reject(new Error(m.error.message || JSON.stringify(m.error)));
+      if (m.error) w.reject(new CodexResponseError(m.error));
       else w.resolve(m.result);
       return;
     }
@@ -406,6 +505,14 @@ export class CodexAgent extends EventEmitter implements Agent {
 
       case 'turn/completed': {
         const turn = p.turn || {};
+        if (this.activeTurnId && turn.id && this.activeTurnId !== turn.id) break;
+        if (this.steering && (!turn.id || turn.id === this.steering.turnId)) {
+          this.steering.completion = p;
+          break;
+        }
+        this.blockedSteerTurn = null;
+        const taskIds = this.activeBatch?.map((input) => input.taskId).filter(Boolean) || [];
+        this.activeBatch = null;
         this.activeTurnId = null;
         if (turn.status === 'completed') this.emitEvent('account', { state: 'ok' });
         const finals = this.turnMessages.filter((x) => x.phase === 'final_answer');
@@ -413,6 +520,8 @@ export class CodexAgent extends EventEmitter implements Agent {
         const text = chosen.map((x) => x.text).join('\n\n');
         this.turnMessages = [];
         this.emitEvent('turnEnd', {
+          taskIds,
+          turnId: turn.id,
           text,
           ok: turn.status === 'completed',
           detail:

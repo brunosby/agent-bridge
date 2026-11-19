@@ -45,6 +45,11 @@ export interface DriverConfig {
 }
 
 /** Options given to every driver constructor. */
+export interface AgentInput {
+  text: string;
+  taskId?: string;
+}
+
 export interface AgentOptions {
   id?: string;
   name?: string;
@@ -90,7 +95,7 @@ export interface Agent extends EventEmitter {
   readonly model: string | null;
   readonly effort: string | null;
   start(): unknown;
-  send(text: string): unknown;
+  send(text: string, taskId?: string): unknown;
   setModel(model: string): Promise<void>;
   setEffort(effort: string | null): Promise<void>;
   reconfigure(opts: ReconfigureOptions): Promise<void>;
@@ -146,6 +151,12 @@ export interface BridgeEvent {
   [key: string]: any;
 }
 
+export interface GitSnapshot {
+  head: string | null;
+  branch: string | null;
+  files: { path: string; status: string }[];
+}
+
 export interface Conversation {
   id: string;
   runDir: string;
@@ -160,6 +171,11 @@ export interface Conversation {
   pendingRoleNote: Record<string, string>;
   lastSender: Record<string, string>;
   lastUserText?: string;
+  project: Record<string, { initial: GitSnapshot | null; git: boolean; branch: string | null; detached: boolean }>;
+  tasks: Map<string, { id: string; agent: string; from: string; sourceSeq: number | null; state: 'queued' | 'working'; activity?: string }>;
+  testResults: string[];
+  possibleTests: Map<string, string>;
+  lastAnswerSeq: Record<string, number>;
   batch?: { pending: Set<string>; results: { from: string; text: string }[] } | null;
   reviewRounds?: number;
   pendingRoleRequest?: { requestId: string; roleId: string } | null;

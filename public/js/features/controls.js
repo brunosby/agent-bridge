@@ -3,26 +3,157 @@ import { $, closeDialog } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { addSys } from './conversation-log.js';
 import { store } from '../core/store.js';
+const input = $('input');
+const target = $('target');
+const list = $('mentionSuggestions');
+const drafts = new Map();
+let conversationId = null;
+let previewTimer;
+let previewVersion = 0;
+let previewKey = '';
+let matches = [];
+let active = -1;
+let mention = null;
+
+function draft(id, value) {
+  if (!id) return '';
+  const key = 'agent-bridge-draft:' + id;
+  if (value !== undefined) {
+    if (value) drafts.set(id, value);
+    else drafts.delete(id);
+    try {
+      if (value) sessionStorage.setItem(key, value);
+      else sessionStorage.removeItem(key);
+    } catch {}
+    return value;
+  }
+  try {
+    return drafts.get(id) ?? sessionStorage.getItem(key) ?? '';
+  } catch {
+    return drafts.get(id) || '';
+  }
+}
+
+export function updateComposer() {
+  const state = store.state;
+  if (!state) return;
+  if (conversationId !== state.conversationId) {
+    draft(conversationId, input.value);
+    conversationId = state.conversationId;
+    input.value = draft(conversationId);
+    hideMentions();
+  }
+  const prefix = input.value.match(/^\s*(?:@[\w-]+[\s,:]*)+/)?.[0] || '';
+  const key = JSON.stringify([
+    conversationId,
+    state.routingMode,
+    target.value,
+    prefix,
+    state.team.map((agent) => [agent.id, agent.name, agent.role, agent.available, agent.account?.state]),
+  ]);
+  if (key === previewKey) return;
+  previewKey = key;
+  const version = ++previewVersion;
+  clearTimeout(previewTimer);
+  $('targetPreview').textContent = '';
+  previewTimer = setTimeout(async () => {
+    try {
+      const { targets } = await api('previewTarget', { target: target.value, prefix });
+      if (version !== previewVersion) return;
+      $('targetPreview').textContent = targets.length
+        ? 'To ' + targets.map((agent) => agent.name + (agent.available ? '' : ' (unavailable)')).join(', ')
+        : 'No recipient';
+    } catch {
+      if (version === previewVersion) $('targetPreview').textContent = 'Recipient preview unavailable';
+    }
+  }, 120);
+}
+
+function hideMentions() {
+  matches = [];
+  active = -1;
+  mention = null;
+  list.hidden = true;
+  list.replaceChildren();
+  input.removeAttribute('aria-activedescendant');
+}
+
+function selectMention(index) {
+  active = index;
+  for (const [i, option] of [...list.children].entries()) option.setAttribute('aria-selected', String(i === index));
+  if (index >= 0) input.setAttribute('aria-activedescendant', list.children[index].id);
+}
+
+function insertMention(index) {
+  const agent = matches[index];
+  if (!mention || !agent) return;
+  const end = input.selectionStart + (input.value.slice(input.selectionStart).match(/^[\w-]+/)?.[0].length || 0);
+  input.setRangeText('@' + agent.name + ' ', mention.start, end, 'end');
+  draft(conversationId, input.value);
+  hideMentions();
+  updateComposer();
+}
+
+function showMentions() {
+  const before = input.value.slice(0, input.selectionStart);
+  const token = /(?:^|\s)@([\w-]*)$/.exec(before);
+  hideMentions();
+  if (!token || input.selectionStart !== input.selectionEnd) return;
+  matches = (store.state?.team || []).filter((agent) => agent.name.toLowerCase().startsWith(token[1].toLowerCase()));
+  if (!matches.length) return;
+  mention = { start: before.length - token[1].length - 1 };
+  for (const [index, agent] of matches.entries()) {
+    const option = document.createElement('div');
+    option.id = 'mention-option-' + index;
+    option.setAttribute('role', 'option');
+    option.textContent = '@' + agent.name;
+    option.onpointerdown = (event) => event.preventDefault();
+    option.onclick = () => insertMention(index);
+    list.appendChild(option);
+  }
+  list.hidden = false;
+  selectMention(0);
+}
+
 export async function sendMessage() {
-  const text = $('input').value;
-  if (!text.trim()) return;
+  const text = input.value;
+  const id = conversationId;
+  if (!text.trim() || $('send').disabled) return;
   $('send').disabled = true;
   try {
-    await api('send', { text, target: $('target').value });
-    $('input').value = '';
+    await api('send', { text, target: target.value, conversationId: id });
+    if (draft(id) === text) draft(id, '');
+    if (conversationId === id && input.value === text) {
+      input.value = '';
+      hideMentions();
+      updateComposer();
+    }
   } catch (e) {
-    addSys(`Send failed: ${e.message}`, true);
+    addSys('Send failed: ' + e.message, true);
   } finally {
     $('send').disabled = false;
-    $('input').focus();
+    if (conversationId === id) input.focus();
   }
 }
 
 $('send').onclick = sendMessage;
-$('input').addEventListener('keydown', (e) => {
+target.addEventListener('change', updateComposer);
+input.addEventListener('blur', hideMentions);
+input.addEventListener('input', () => {
+  draft(conversationId, input.value);
+  showMentions();
+  updateComposer();
+});
+input.addEventListener('keydown', (e) => {
+  if (e.isComposing) return;
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
     sendMessage();
+  } else if (matches.length && ['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(e.key)) {
+    e.preventDefault();
+    if (e.key === 'Enter') insertMention(active);
+    else if (e.key === 'Escape') hideMentions();
+    else selectMention((active + matches.length + (e.key === 'ArrowDown' ? 1 : -1)) % matches.length);
   }
 });
 $('auto').onchange = (e) => api('relay', { auto: e.target.checked });

@@ -158,7 +158,6 @@
 }
 
 .log {
-  grid-area: log;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -219,7 +218,6 @@
 }
 
 .composer__input {
-  grid-area: input;
   width: 100%;
   resize: vertical;
   min-height: 3.25rem;

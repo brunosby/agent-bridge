@@ -27,6 +27,10 @@ Use **Restart** and **Quit** at the top of the page to restart or close the app.
 
 **Conversations.** Everything is saved. **Conversations** lists earlier conversations: **Restore** brings back the messages and the whole team with its sessions; **New conversation** starts fresh, optionally in another folder.
 
+**Conversation history.** The filter panel can show messages or all activity and search the entries loaded in the current conversation. Successful tool calls are grouped, while failures stay visible. The recipient preview uses the same rule as Send. Drafts are kept per conversation in the current browser tab.
+
+**Reviewer context.** The Bridge excludes common secret paths before requesting the reviewer patch. Add repository-relative globs or filename patterns to the `reviewDiffExcludePatterns` array in `config.local.json` for project-specific exclusions. The final review shows observed Git paths and status separately from the agent summary, without including file content.
+
 ## Roles
 
 | Role | Does | Edits files | Recommended models |

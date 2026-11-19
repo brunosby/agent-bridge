@@ -1,11 +1,10 @@
 // HTTP server: page files, live event stream (SSE) and the API endpoint.
 import crypto from 'node:crypto';
-import { S } from './state.ts';
 import path from 'node:path';
 import fs from 'node:fs';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { APP_DIR, PUBLIC_DIR } from '../config/settings.ts';
-import { logError, publish, publishState, snapshotLine } from './events.ts';
+import { logError, publish, publishState, replayHistory, snapshotLine } from './events.ts';
 import { clients } from './state.ts';
 import { api } from './api.ts';
 export const token = crypto.randomBytes(18).toString('hex');
@@ -47,7 +46,7 @@ export const server = http.createServer(async (req, res) => {
       if (url.searchParams.get('token') !== token) return send(res, 403, 'forbidden');
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
       res.write(snapshotLine());
-      for (const ev of S.history) res.write(`data: ${JSON.stringify(ev)}\n\n`);
+      replayHistory(res);
       clients.add(res);
       req.on('close', () => clients.delete(res));
       publishState();

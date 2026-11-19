@@ -5,16 +5,6 @@ export const log = $('log');
 export function nearBottom() {
   return log.scrollHeight - log.scrollTop - log.clientHeight < 120;
 }
-export function append(el) {
-  const stick = nearBottom();
-  log.appendChild(el);
-  if (stick) log.scrollTop = log.scrollHeight;
-}
-export function keepScrolled(fn) {
-  const stick = nearBottom();
-  fn();
-  if (stick) log.scrollTop = log.scrollHeight;
-}
 export function h(tag, cls, text) {
   const el = document.createElement(tag);
   if (cls) el.className = cls;

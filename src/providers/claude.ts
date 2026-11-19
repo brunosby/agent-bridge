@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { spawnJsonl, type JsonlProcess } from './process.ts';
 import type { Agent, AgentOptions, DriverConfig, ModelInfo, ReconfigureOptions } from '../core/types.ts';
@@ -34,7 +35,8 @@ export class ClaudeAgent extends EventEmitter implements Agent {
   stderrTail: string;
   gotOutput: boolean;
   sessionId: string | null;
-  pending: number;
+  unconfirmed = new Map<string, string | undefined>();
+  activeBatch: { uuid: string; taskIds: string[] } | null = null;
   proc: JsonlProcess | null;
   streamedMessages: Set<string | null>;
   currentMessageId: string | null;
@@ -78,7 +80,6 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     this.config = config || {};
     this.systemPromptFile = systemPromptFile;
     this.sessionId = this.config.resumeSessionId || null;
-    this.pending = 0;
     this.proc = null;
     this.streamedMessages = new Set();
     this.currentMessageId = null;
@@ -164,7 +165,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
   }
 
   get busy() {
-    return this.pending > 0;
+    return Boolean(this.activeBatch) || this.unconfirmed.size > 0;
   }
 
   emitEvent(kind: string, data: Record<string, unknown> = {}): void {
@@ -173,7 +174,16 @@ export class ClaudeAgent extends EventEmitter implements Agent {
 
   buildArgs(): string[] {
     const c = this.config;
-    const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
+    const args = [
+      '-p',
+      '--input-format',
+      'stream-json',
+      '--output-format',
+      'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--replay-user-messages',
+    ];
     if (c.model) args.push('--model', c.model);
     if (c.effort) args.push('--effort', c.effort);
     // Step limit of the role (per message): keeps support roles short.
@@ -215,7 +225,11 @@ export class ClaudeAgent extends EventEmitter implements Agent {
         const neverStarted = !this.gotOutput;
         this.stopping = false;
         this.proc = null;
-        this.pending = 0;
+        const taskIds = [...(this.activeBatch?.taskIds || []), ...this.unconfirmed.values()];
+        this.activeBatch = null;
+        this.unconfirmed.clear();
+        const cancelled = taskIds.filter(Boolean);
+        if (cancelled.length) this.emitEvent('tasksCancelled', { taskIds: cancelled });
         this.closeApprovals();
         this.emitEvent('status', { busy: false });
         if (!wasExpected)
@@ -293,15 +307,17 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     this.start();
   }
 
-  send(text: string): void {
+  send(text: string, taskId?: string): void {
     if (!this.proc) this.start();
-    this.pending += 1;
-    this.emitEvent('status', { busy: true });
-    this.proc?.write({
-      type: 'user',
-      message: { role: 'user', content: text },
-      parent_tool_use_id: null,
-    });
+    if (!this.proc || this.stopping) {
+      if (taskId) this.emitEvent('tasksCancelled', { taskIds: [taskId] });
+      this.emitEvent('error', { text: 'Claude is unavailable or stopping. The input was not sent.' });
+      return;
+    }
+    const uuid = randomUUID();
+    this.unconfirmed.set(uuid, taskId);
+    this.proc.write({ type: 'user', uuid, message: { role: 'user', content: text }, parent_tool_use_id: null });
+    this.emitEvent('status', { busy: this.busy });
   }
 
   /** Stop the current work: kill the process and restart it on the same session. */
@@ -309,7 +325,6 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     if (!this.proc || !this.busy) return;
     this.stopping = true;
     await this.proc.kill();
-    this.pending = 0;
     this.emitEvent('info', { text: 'Claude interrupted; session will resume on next message.' });
     this.emitEvent('status', { busy: false });
   }
@@ -406,6 +421,17 @@ export class ClaudeAgent extends EventEmitter implements Agent {
 
       case 'user': {
         if (m.parent_tool_use_id) break;
+        if (this.unconfirmed.has(m.uuid)) {
+          const taskId = this.unconfirmed.get(m.uuid);
+          this.unconfirmed.delete(m.uuid);
+          // Claude acknowledges queued messages when it consumes them, after the previous result if needed.
+          const batch: NonNullable<ClaudeAgent['activeBatch']> = (this.activeBatch ??= { uuid: m.uuid, taskIds: [] });
+          if (taskId) {
+            batch.taskIds.push(taskId);
+            this.emitEvent('taskStarted', { taskIds: [taskId], turnId: batch.uuid });
+          }
+          break;
+        }
         for (const block of m.message?.content || []) {
           if (block?.type === 'tool_result' && block.is_error) {
             this.emitEvent('toolResult', { key: block.tool_use_id, ok: false, detail: clip(contentText(block.content), 400) });
@@ -416,8 +442,15 @@ export class ClaudeAgent extends EventEmitter implements Agent {
         break;
       }
 
-      case 'result':
-        this.pending = Math.max(0, this.pending - 1);
+      case 'result': {
+        const batch = this.activeBatch;
+        this.activeBatch = null;
+        if (!batch && this.unconfirmed.size) {
+          const taskIds = [...this.unconfirmed.values()].filter(Boolean);
+          this.unconfirmed.clear();
+          if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
+          this.emitEvent('error', { text: 'Claude returned without acknowledging its inputs. Unconfirmed inputs were not resent.' });
+        }
         if (m.usage) {
           const u = m.usage;
           // tokens = new tokens (input, output, cache writes); cachedTokens = cache reads, which cost much less
@@ -434,6 +467,8 @@ export class ClaudeAgent extends EventEmitter implements Agent {
           this.emitEvent('account', { state: 'ok' });
         }
         this.emitEvent('turnEnd', {
+          taskIds: batch?.taskIds || [],
+          turnId: batch?.uuid,
           text: typeof m.result === 'string' ? m.result : '',
           ok: !m.is_error,
           detail: m.is_error ? m.subtype : undefined,
@@ -444,6 +479,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
           this.restart().then(() => this.emitEvent('info', { text: `New settings applied (model ${this.model || 'default'}).` }));
         }
         break;
+      }
 
       default:
         break;

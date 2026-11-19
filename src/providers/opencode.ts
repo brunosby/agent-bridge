@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import net from 'node:net';
 import { killTree } from './process.ts';
 import type { ChildProcess } from 'node:child_process';
-import type { Agent, AgentOptions, DriverConfig, ModelInfo, ReconfigureOptions } from '../core/types.ts';
+import type { Agent, AgentInput, AgentOptions, DriverConfig, ModelInfo, ReconfigureOptions } from '../core/types.ts';
 import { clip } from './claude.ts';
 
 /**
@@ -38,7 +38,8 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
   models: ModelInfo[];
   resolvedModel: string | null;
   approvals: Map<string, { permissionId: string }>;
-  queue: string[];
+  queue: AgentInput[];
+  activeBatch: AgentInput[] | null = null;
   running: boolean;
   ready: Promise<void> | null;
   proc: ChildProcess | null;
@@ -213,6 +214,10 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
       this.proc = null;
       this.ready = null;
       this.running = false;
+      const taskIds = this.activeBatch?.map((input) => input.taskId).filter(Boolean) || [];
+      this.activeBatch = null;
+      if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
+      this.cancelQueued();
       this.sse?.abort();
       this.closeApprovals();
       this.emitEvent('status', { busy: false });
@@ -489,14 +494,14 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
   }
 
   // ---------- messages ----------
-  async send(text: string): Promise<void> {
-    this.queue.push(text);
+  async send(text: string, taskId?: string): Promise<void> {
+    this.queue.push({ text, taskId });
     this.emitEvent('status', { busy: true });
     try {
       await this.start();
     } catch {
-      this.queue = [];
-      this.emitEvent('status', { busy: false });
+      this.cancelQueued();
+      this.emitEvent('status', { busy: this.busy });
       return;
     }
     this.pump();
@@ -506,7 +511,11 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
   async pump() {
     if (this.running || !this.queue.length) return;
     this.running = true;
-    const text = this.queue.splice(0).join('\n\n');
+    const batch = this.queue.splice(0);
+    this.activeBatch = batch;
+    const taskIds = batch.map((input) => input.taskId).filter(Boolean);
+    const text = batch.map((input) => input.text).join('\n\n');
+    if (taskIds.length) this.emitEvent('taskStarted', { taskIds });
     const body: Record<string, unknown> = {
       parts: [{ type: 'text', text }],
       agent: this.readOnly ? 'plan' : 'build',
@@ -519,6 +528,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     }
     try {
       const res = await this.http('POST', `/session/${encodeURIComponent(this.sessionId || '')}/message`, body);
+      if (this.activeBatch !== batch) return;
       const info = res?.info || {};
       // Only the answer goes to the chat and to the other agents: not a compaction summary, and not
       // synthetic or ignored text that OpenCode adds itself.
@@ -544,22 +554,34 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
       if (info.providerID && info.modelID) this.resolvedModel = `${info.providerID}/${info.modelID}`;
       if (info.error) {
         const msg = info.error.data?.message || info.error.message || info.error.name || 'error';
-        this.emitEvent('turnEnd', { text: answer, ok: false, detail: clip(msg, 300) });
+        this.emitEvent('turnEnd', { taskIds, text: answer, ok: false, detail: clip(msg, 300) });
       } else {
         this.emitEvent('account', { state: 'ok' });
-        this.emitEvent('turnEnd', { text: answer, ok: true });
+        this.emitEvent('turnEnd', { taskIds, text: answer, ok: true });
       }
     } catch (err) {
+      if (this.activeBatch !== batch) return;
       this.emitEvent('error', { text: `OpenCode message failed: ${errorText(err)}` });
       if (/HTTP 404|HTTP 405/.test(errorText(err))) this.markUnavailable(`OpenCode API changed: ${errorText(err)}`);
-      this.emitEvent('turnEnd', { text: '', ok: false, detail: clip(errorText(err), 300) });
+      this.emitEvent('turnEnd', { taskIds, text: '', ok: false, detail: clip(errorText(err), 300) });
     }
+    this.activeBatch = null;
     this.running = false;
     this.emitEvent('status', { busy: this.busy });
     if (this.queue.length) this.pump();
   }
 
+  cancelQueued(): void {
+    const taskIds = this.queue
+      .splice(0)
+      .map((input) => input.taskId)
+      .filter(Boolean);
+    if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
+  }
+
   async interrupt() {
+    this.cancelQueued();
+    this.emitEvent('status', { busy: this.busy });
     if (!this.running || !this.sessionId) return;
     try {
       await this.http('POST', `/session/${encodeURIComponent(this.sessionId || '')}/abort`);

@@ -1,15 +1,23 @@
 // Cards pinned above the message box: approvals, missing roles and the final confirmation.
 import { approvals, driverOf, label, store } from '../core/store.js';
-import { $, append, h, renderMarkdown, time } from '../core/dom.js';
+import { $, h, renderMarkdown, time } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { addSys } from './conversation-log.js';
 /** Pending approvals stay pinned above the message box until answered. */
 export function updatePending() {
   const n = approvals.size;
   $('pending').hidden = n === 0;
+  const count = $('pendingCount');
+  count.hidden = n === 0;
+  count.textContent = n + (n === 1 ? ' pending request' : ' pending requests');
   const base = store.state ? `Agent Bridge · ${store.state.workDir}` : 'Agent Bridge';
   document.title = n ? `(${n}) Approval needed · ${base}` : base;
 }
+
+$('pendingCount').onclick = () => {
+  const first = $('pending').querySelector('button');
+  if (first) first.focus();
+};
 
 /** End of the work: the user approves the result or asks for changes. */
 export function renderFinalReview(ev) {
@@ -20,6 +28,43 @@ export function renderFinalReview(ev) {
     const body = h('div', 'body');
     renderMarkdown(body, ev.summary.length > 1500 ? `${ev.summary.slice(0, 1500)}…` : ev.summary);
     el.appendChild(body);
+  }
+  if (ev.project?.length || ev.tests?.length) {
+    const evidence = h('details');
+    evidence.appendChild(h('summary', null, 'Observed changes and test signals'));
+    const content = h('div', 'body');
+    for (const project of ev.project || []) {
+      content.appendChild(h('h3', null, project.title));
+      const status = {
+        'no-git': 'Git metadata unavailable. File claims in the agent summary are unverified.',
+        'no-baseline': 'No initial Git state was recorded.',
+        partial: 'Only part of the Git history could be compared.',
+      };
+      if (status[project.status]) content.appendChild(h('p', null, status[project.status]));
+      if (project.files.length) {
+        const files = h('ul');
+        for (const file of project.files)
+          files.appendChild(
+            h(
+              'li',
+              null,
+              file.path +
+                ' · ' +
+                file.status +
+                (file.preexisting ? ' · pre-existing; session changes cannot be attributed from status alone' : ''),
+            ),
+          );
+        content.appendChild(files);
+      } else if (project.status === 'ok') content.appendChild(h('p', null, 'No changes observed in the Git metadata.'));
+    }
+    if (ev.tests?.length) {
+      const testList = h('ul');
+      content.appendChild(h('h3', null, 'Commands identified as possible tests'));
+      for (const result of ev.tests) testList.appendChild(h('li', null, result));
+      content.appendChild(testList);
+    }
+    evidence.appendChild(content);
+    el.appendChild(evidence);
   }
   const actions = h('div', 'actions');
   const ok = h('button', 'primary', 'Approve');
@@ -61,7 +106,6 @@ export function renderNeedRole(ev) {
   el.appendChild(actions);
   approvals.set(ev.requestId, el);
   $('pending').appendChild(el);
-  append(h('div', 'sys', `⏸ ${label(ev.agent)} asked for a ${ev.roleName}: choose below.`));
   updatePending();
 }
 
@@ -76,7 +120,13 @@ export function renderApproval(ev) {
     ),
   );
   if (ev.warning) el.appendChild(h('div', 'warning', `⚠ ${ev.warning}`));
-  if (ev.detail) el.appendChild(h('pre', null, ev.detail));
+  const scope = ev.decisions.includes('acceptForSession') ? 'Once or for this session' : 'Once';
+  el.appendChild(h('div', 'hint', label(ev.agent) + ' · ' + scope + (ev.cwd ? ' · ' + ev.cwd : '')));
+  if (ev.detail) {
+    const details = h('details');
+    details.append(h('summary', null, 'Technical details'), h('pre', null, ev.detail));
+    el.appendChild(details);
+  }
   const actions = h('div', 'actions');
   const names = { accept: 'Allow once', acceptForSession: 'Allow for session', decline: 'Decline' };
   for (const d of ev.decisions) {
@@ -87,6 +137,5 @@ export function renderApproval(ev) {
   el.appendChild(actions);
   approvals.set(ev.requestId, el);
   $('pending').appendChild(el);
-  append(h('div', `tool drv-${driverOf(ev.agent)}`, `⏸ ${ev.title}: waiting for your approval (see below)`));
   updatePending();
 }

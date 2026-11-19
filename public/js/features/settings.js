@@ -13,6 +13,10 @@ export const SETTING_LABELS = {
   approvalTimeoutSec: ['Approval timeout (seconds)', 'Decline an unanswered approval after this time (0 = wait forever).'],
   bypassNewAgents: ['Bypass on for new agents', 'New agents start with bypass mode on.'],
   warnOnExtraAgents: ['Warn about token use when adding agents', ''],
+  reviewDiffMaxChars: [
+    'Maximum Reviewer diff size (characters)',
+    '0 removes the character limit and can increase token use or fill the context window. Git still has time and memory limits.',
+  ],
   maxReviewRounds: [
     'Review fix rounds',
     'How many times the Reviewer CHANGES REQUESTED answer goes back to the coder before the orchestrator reports to you.',

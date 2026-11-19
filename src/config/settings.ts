@@ -46,6 +46,7 @@ export const SETTINGS: Record<string, SettingDef> = {
   bypassNewAgents: { type: 'boolean', default: false },
   warnOnExtraAgents: { type: 'boolean', default: true },
   missingRolePolicy: { type: 'enum', values: ['ask', 'closest'], default: 'ask' },
+  reviewDiffMaxChars: { type: 'number', min: 0, default: 40000 },
   maxReviewRounds: { type: 'number', min: 0, default: 2 },
   finalConfirmation: { type: 'boolean', default: true },
   sensitiveModelPatterns: { type: 'list', default: ['big-pickle', 'stealth', ':free', '-free'] },

@@ -137,7 +137,7 @@ test('opencode: the final answer passed on skips compaction summaries and synthe
     /** @type {any[]} */
     const events = [];
     agent.on('event', (/** @type {any} */ e) => events.push(e));
-    agent.queue.push('hi');
+    agent.queue.push({ text: 'hi', taskId: 'test-task' });
     await agent.pump();
     return { end: events.find((e) => e.kind === 'turnEnd'), shown: events.filter((e) => e.kind === 'text').map((e) => e.text) };
   };

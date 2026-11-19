@@ -1,7 +1,5 @@
 // Shared page state: the latest server snapshot, the catalog and the rendered elements.
 export const store = { state: null, catalog: { roles: [], drivers: [], routingModes: [], settings: {}, settingsSchema: {} }, lastSeq: 0 };
-export const bubbles = new Map(); // `${agent}|${key}` -> { el, body, text }
-export const tools = new Map(); // `${agent}|${key}` -> element
 export const approvals = new Map(); // requestId -> element
 export const cards = {}; // agent id -> card parts
 

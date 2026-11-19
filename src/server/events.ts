@@ -1,21 +1,24 @@
 // Event bus: everything the page shows goes through publish() and the state snapshot.
 import type { Agent, AgentSpec, BridgeEvent, ModelInfo } from '../core/types.ts';
+import type { ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { S, clients, relay } from './state.ts';
 import { safeRegex, setting } from '../config/settings.ts';
 import { providerBlocked } from './team.ts';
 import { isRecommended } from '../core/roles.ts';
+import { projectLabel } from './project.ts';
 import { DRIVERS } from '../providers/registry.ts';
 
-export function publish(ev: BridgeEvent): void {
+export function publish(ev: BridgeEvent): BridgeEvent {
   const full: BridgeEvent = { seq: ++S.seq, at: Date.now(), ...ev };
   S.history.push(full);
   if (S.history.length > 20000) S.history.splice(0, S.history.length - 20000);
   S.conv?.transcript.write(JSON.stringify(full) + '\n');
   if (full.kind === 'error') logError(full.agent ? agentName(full.agent) : 'bridge', full.text);
   const line = `data: ${JSON.stringify(full)}\n\n`;
-  for (const res of clients) res.write(line);
+  if (full.kind !== 'projectBaseline') for (const res of clients) res.write(line);
+  return full;
 }
 
 /** errors.log next to the transcript: one line per problem, for finding causes later. */
@@ -78,6 +81,8 @@ export function stateEvent() {
   const team = teamState();
   return {
     kind: 'state',
+    tasks: [...S.conv.tasks.values()],
+    project: projectLabel(S.conv),
     conversationId: S.conv.id,
     workDir: S.conv.workDir,
     routingMode: S.conv.routingMode,
@@ -103,6 +108,14 @@ export function resetClients() {
   for (const res of clients) {
     res.write(`data: ${JSON.stringify({ kind: 'reset' })}\n\n`);
     res.write(snapshotLine());
-    for (const ev of S.history) res.write(`data: ${JSON.stringify(ev)}\n\n`);
+    replayHistory(res);
   }
+}
+
+export function replayHistory(res: ServerResponse): void {
+  for (const ev of S.history) {
+    if (ev.kind === 'state' || ev.kind === 'projectBaseline') continue;
+    res.write(`data: ${JSON.stringify(ev)}\n\n`);
+  }
+  res.write('data: {"kind":"replayComplete"}\n\n');
 }
