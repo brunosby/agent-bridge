@@ -3,6 +3,7 @@ import './features/add-agent.js';
 import './features/settings.js';
 import './features/conversations.js';
 import './features/controls.js';
+import './features/workspace-resize.js';
 import { cards, store } from './core/store.js';
 import { api, connect } from './core/api.js';
 import { $ } from './core/dom.js';

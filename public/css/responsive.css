@@ -29,20 +29,34 @@
 
 @media (min-width: 900px) {
   .app {
-    grid-template-columns: var(--workspace-width) minmax(0, 1fr);
+    grid-template-columns: var(--workspace-width) var(--space-3) minmax(0, 1fr);
     grid-template-rows: auto auto minmax(8rem, 1fr) auto auto;
-    grid-template-areas: 'header header' 'workspace title' 'workspace log' 'workspace pending' 'workspace composer';
+    grid-template-areas: 'header header header' 'workspace resize title' 'workspace resize log' 'workspace resize pending' 'workspace resize composer';
   }
 
   .workspace-panel {
     display: block;
     max-height: none;
-    border-inline-end: 1px solid var(--color-border);
     border-bottom: 0;
+  }
+
+  .workspace-resizer {
+    display: grid;
   }
 
   .toolbar__toggle {
     display: none;
+  }
+}
+
+@container composer (min-width: 40rem) {
+  .composer__layout {
+    grid-template-columns: minmax(0, 1fr) clamp(10rem, 25cqi, 16rem) auto;
+    grid-template-areas: 'input target send';
+  }
+
+  .composer__layout:has(.composer__notice:not([hidden])) {
+    grid-template-areas: 'notice notice notice' 'input target send';
   }
 }
 

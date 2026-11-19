@@ -54,7 +54,7 @@ button.mini {
 
 .btn.composer__send {
   min-width: 5rem;
-  min-height: 2.25rem;
+  min-height: var(--composer-control-height);
   border-color: transparent;
   background: var(--color-workspace-accent);
 }

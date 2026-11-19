@@ -1,8 +1,8 @@
 /* Workspace shell, with dedicated team and conversation columns on desktop. */
 .app {
-  --workspace-width: 16rem;
+  --workspace-width: 256px;
   --workspace-gutter: clamp(1rem, 3vw, 2.75rem);
-  --conversation-width: 56rem;
+  --conversation-gutter: clamp(var(--space-3), 2vw, var(--space-5));
   display: grid;
   height: 100dvh;
   grid-template-columns: minmax(0, 1fr);
@@ -85,6 +85,32 @@
   display: block;
 }
 
+.workspace-resizer {
+  grid-area: resize;
+  display: none;
+  place-items: center;
+  background: var(--color-surface);
+  border-inline-end: 1px solid var(--color-border);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.workspace-resizer::after {
+  content: '';
+  width: 3px;
+  height: 2rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-text-muted);
+}
+
+.workspace-resizer:is(:hover, :focus-visible, :active) {
+  background: var(--color-surface-2);
+}
+
+.workspace-resizer:focus-visible {
+  outline-offset: -2px;
+}
+
 .toolbar__toggle {
   display: inline-block;
 }
@@ -140,7 +166,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: var(--space-3) max(var(--workspace-gutter), calc((100% - var(--conversation-width)) / 2));
+  padding: var(--space-3) var(--conversation-gutter);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
 }
@@ -164,7 +190,7 @@
   overflow-y: auto;
   overflow-wrap: anywhere;
   gap: var(--space-3);
-  padding: var(--space-4) max(var(--workspace-gutter), calc((100% - var(--conversation-width)) / 2));
+  padding: var(--space-4) var(--conversation-gutter);
 }
 
 .pending {
@@ -174,24 +200,29 @@
   gap: var(--space-2);
   max-height: 34dvh;
   overflow-y: auto;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--conversation-gutter);
   background: var(--color-warning-tray);
   border-top: 2px solid var(--color-warning-border);
 }
 
 .composer {
+  --composer-control-height: 2.25rem;
   grid-area: composer;
-  display: grid;
-  gap: var(--space-2);
+  container: composer / inline-size;
   background: var(--color-surface);
   border-top: 1px solid var(--color-border);
+  padding: var(--space-2) var(--conversation-gutter) var(--space-3);
+}
+
+.composer__layout {
+  display: grid;
+  gap: var(--space-2);
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: 'input input' 'target send';
   align-items: end;
-  padding: var(--space-2) max(var(--workspace-gutter), calc((100% - var(--conversation-width)) / 2)) var(--space-3);
 }
 
-.composer:has(.composer__notice:not([hidden])) {
+.composer__layout:has(.composer__notice:not([hidden])) {
   grid-template-areas: 'notice notice' 'input input' 'target send';
 }
 
@@ -212,12 +243,14 @@
 }
 
 .composer__target select {
+  min-height: var(--composer-control-height);
   min-width: 0;
   width: 100%;
   font-weight: 400;
 }
 
 .composer__input {
+  display: block;
   width: 100%;
   resize: vertical;
   min-height: 3.25rem;

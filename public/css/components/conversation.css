@@ -12,7 +12,7 @@
 }
 
 .log-filters {
-  padding: var(--space-1) var(--workspace-gutter);
+  padding: var(--space-1) var(--conversation-gutter);
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
 }
@@ -32,7 +32,7 @@
 
 #returnToEnd {
   position: absolute;
-  inset-inline-end: var(--workspace-gutter);
+  inset-inline-end: var(--conversation-gutter);
   inset-block-end: var(--space-2);
 }
 
