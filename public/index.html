@@ -126,12 +126,14 @@
             ></textarea>
             <div id="mentionSuggestions" class="mention-suggestions" role="listbox" aria-label="Agent mentions" hidden></div>
           </div>
-          <label class="composer__target" for="target">
-            Send to
+          <div class="composer__target">
+            <div class="composer__target-caption">
+              <label for="target">Send to</label>
+              <output id="targetPreview" class="hint composer__preview" aria-live="polite"></output>
+            </div>
             <select id="target" title="Who receives your message"></select>
-          </label>
+          </div>
           <button id="send" class="btn btn--primary composer__send" title="Enter to send, Shift+Enter for a new line">Send</button>
-          <output id="targetPreview" class="hint composer__preview" aria-live="polite"></output>
         </div>
       </footer>
     </div>

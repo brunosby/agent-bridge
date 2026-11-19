@@ -5,6 +5,7 @@ import { addSys } from './conversation-log.js';
 import { store } from '../core/store.js';
 const input = $('input');
 const target = $('target');
+const targetPreview = $('targetPreview');
 const list = $('mentionSuggestions');
 const drafts = new Map();
 let conversationId = null;
@@ -55,16 +56,18 @@ export function updateComposer() {
   previewKey = key;
   const version = ++previewVersion;
   clearTimeout(previewTimer);
-  $('targetPreview').textContent = '';
+  targetPreview.textContent = '';
   previewTimer = setTimeout(async () => {
     try {
-      const { targets } = await api('previewTarget', { target: target.value, prefix });
+      const { targets, changedByMention } = await api('previewTarget', { target: target.value, prefix });
       if (version !== previewVersion) return;
-      $('targetPreview').textContent = targets.length
-        ? 'To ' + targets.map((agent) => agent.name + (agent.available ? '' : ' (unavailable)')).join(', ')
-        : 'No recipient';
+      if (!targets.length) {
+        targetPreview.textContent = 'No recipient';
+      } else if (changedByMention || targets.some((agent) => !agent.available)) {
+        targetPreview.textContent = 'To ' + targets.map((agent) => agent.name + (agent.available ? '' : ' (unavailable)')).join(', ');
+      }
     } catch {
-      if (version === previewVersion) $('targetPreview').textContent = 'Recipient preview unavailable';
+      if (version === previewVersion) targetPreview.textContent = 'Recipient preview unavailable';
     }
   }, 120);
 }

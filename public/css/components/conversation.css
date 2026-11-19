@@ -63,13 +63,21 @@
   min-width: 0;
 }
 
+.composer__target-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-2);
+}
+
 .composer__preview {
-  grid-column: 1 / -1;
+  min-width: 0;
   overflow-wrap: anywhere;
+  font-weight: 400;
 }
 
 .composer__preview:empty {
-  display: none;
+  position: absolute;
 }
 
 .mention-suggestions {

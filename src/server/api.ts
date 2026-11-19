@@ -44,14 +44,19 @@ export async function api(action: string, body: Record<string, any>): Promise<un
         settings: settingsView(),
         settingsSchema: SETTINGS,
       };
-    case 'previewTarget':
+    case 'previewTarget': {
+      const prefix = typeof body.prefix === 'string' ? body.prefix : '';
+      const ids = userTargets(body.target, prefix);
+      const selection = prefix ? userTargets(body.target) : ids;
       return {
-        targets: userTargets(body.target, typeof body.prefix === 'string' ? body.prefix : '').map((id) => ({
+        changedByMention: ids.length !== selection.length || ids.some((id, index) => id !== selection[index]),
+        targets: ids.map((id) => ({
           id,
           name: agentName(id),
           available: agents[id].available !== false && !providerBlocked(S.conv.team.find((a) => a.id === id)?.driver),
         })),
       };
+    }
     case 'send':
       if (body.conversationId && body.conversationId !== S.conv.id) throw new Error('conversation changed before sending');
       if (!body.text?.trim()) throw new Error('empty message');
