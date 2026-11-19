@@ -2,9 +2,6 @@
 export const $ = (id) => document.getElementById(id);
 export const log = $('log');
 
-export function nearBottom() {
-  return log.scrollHeight - log.scrollTop - log.clientHeight < 120;
-}
 export function h(tag, cls, text) {
   const el = document.createElement(tag);
   if (cls) el.className = cls;

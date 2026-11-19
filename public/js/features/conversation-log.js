@@ -1,6 +1,6 @@
 // Convert incoming events to transcript entries and update their views in frame-sized batches.
 import { agentOf, approvals, driverOf, label, roleOf, store } from '../core/store.js';
-import { $, h, log, nearBottom, renderMarkdown, time } from '../core/dom.js';
+import { $, h, log, renderMarkdown, time } from '../core/dom.js';
 import { Transcript } from '../core/transcript.js';
 import { renderApproval, renderFinalReview, renderNeedRole, updatePending } from './approvals.js';
 import { renderState } from './agents.js';
@@ -14,6 +14,9 @@ let newNodes = document.createDocumentFragment();
 let frame = 0;
 let unread = 0;
 let replaying = true;
+let scrollToEndOnReplay = true;
+let follow = true;
+let previousScroll = scrollPosition();
 let results = null;
 let resultIndex = -1;
 let selected = null;
@@ -39,15 +42,28 @@ function resetResults() {
   $('searchPosition').textContent = '';
 }
 
+function scrollPosition() {
+  return { top: log.scrollTop, height: log.scrollHeight, viewport: log.clientHeight };
+}
+
+function scrollToEnd() {
+  log.scrollTop = log.scrollHeight;
+  previousScroll = scrollPosition();
+}
+
+function stopFollowing() {
+  follow = false;
+  showUnread();
+}
+
 function showUnread() {
-  $('returnToEnd').hidden = nearBottom() && unread === 0;
+  $('returnToEnd').hidden = follow;
   $('returnToEnd').textContent = unread ? 'Back to end · ' + unread + ' new' : 'Back to end';
 }
 
 function flush() {
   if (frame) cancelAnimationFrame(frame);
   frame = 0;
-  const stick = nearBottom();
   log.appendChild(newNodes);
   newNodes = document.createDocumentFragment();
   const filters = filterOptions();
@@ -56,7 +72,8 @@ function flush() {
     filterEntry(entry, filters);
   }
   dirty.clear();
-  if (stick) log.scrollTop = log.scrollHeight;
+  if (follow) scrollToEnd();
+  else previousScroll = scrollPosition();
   showUnread();
 }
 
@@ -116,7 +133,7 @@ function message(ev) {
   }
   transcript.update(entry, ev.kind === 'delta' ? entry.text + ev.text : ev.text);
   dirty.add(entry);
-  if (isNew && !replaying && transcript.matches(entry, ...filterOptions()) && !nearBottom()) unread += 1;
+  if (isNew && !replaying && !follow && transcript.matches(entry, ...filterOptions())) unread += 1;
   if (ev.final) {
     if (Number.isInteger(ev.seq)) transcript.bySequence.set(ev.seq, entry);
     views.get(entry).node.classList.remove('streaming');
@@ -154,6 +171,7 @@ export function jumpToSequence(seq) {
   const entry = transcript.bySequence.get(seq);
   if (!entry) return false;
   const view = views.get(entry);
+  stopFollowing();
   flush();
   if (view.group) {
     view.group.details.hidden = false;
@@ -162,6 +180,7 @@ export function jumpToSequence(seq) {
   view.node.hidden = false;
   view.node.scrollIntoView({ block: 'center' });
   view.node.focus({ preventScroll: true });
+  previousScroll = scrollPosition();
   return true;
 }
 
@@ -174,7 +193,12 @@ function seek(step) {
   if (selected) views.get(selected).node.classList.remove('search-match');
   resultIndex = resultIndex < 0 ? (step > 0 ? 0 : results.length - 1) : (resultIndex + step + results.length) % results.length;
   selected = results[resultIndex];
-  if (!jumpToSequence(selected.seq)) views.get(selected).node.scrollIntoView({ block: 'center' });
+  if (!jumpToSequence(selected.seq)) {
+    stopFollowing();
+    flush();
+    views.get(selected).node.scrollIntoView({ block: 'center' });
+    previousScroll = scrollPosition();
+  }
   views.get(selected).node.classList.add('search-match');
   $('searchPosition').textContent = resultIndex + 1 + ' / ' + results.length;
 }
@@ -194,14 +218,37 @@ for (const id of ['logSearch', 'logMode', 'logAgent', 'logCategory']) {
 }
 $('searchPrev').onclick = () => seek(-1);
 $('searchNext').onclick = () => seek(1);
-$('returnToEnd').onclick = () => {
-  flush();
+function returnToEnd() {
+  follow = true;
   unread = 0;
-  log.scrollTop = log.scrollHeight;
-  showUnread();
-};
+  flush();
+}
+
+$('returnToEnd').onclick = returnToEnd;
+log.addEventListener(
+  'wheel',
+  (event) => {
+    if (event.deltaY < 0 && !event.ctrlKey && log.scrollHeight > log.clientHeight) stopFollowing();
+  },
+  { passive: true },
+);
+log.addEventListener('keydown', (event) => {
+  if (event.defaultPrevented || event.altKey || event.target.closest('button, input, textarea, select, [contenteditable]')) return;
+  if (event.key === 'End') {
+    event.preventDefault();
+    returnToEnd();
+  } else if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) && log.scrollHeight > log.clientHeight) {
+    stopFollowing();
+  }
+});
 log.addEventListener('scroll', () => {
-  if (nearBottom()) unread = 0;
+  const position = scrollPosition();
+  const { top, height, viewport } = previousScroll;
+  previousScroll = position;
+  // A layout change can move the scroll position without a user gesture.
+  if (position.height !== height || position.viewport !== viewport || position.top === top) return;
+  follow = position.top > top && position.height - position.top - position.viewport <= 40;
+  if (follow) unread = 0;
   showUnread();
 });
 
@@ -226,6 +273,9 @@ export function handle(ev) {
       $('logCategory').value = '';
       unread = 0;
       replaying = true;
+      scrollToEndOnReplay = true;
+      follow = true;
+      previousScroll = scrollPosition();
       resetResults();
       approvals.clear();
       updatePending();
@@ -234,6 +284,14 @@ export function handle(ev) {
     }
     case 'replayComplete':
       replaying = false;
+      if (scrollToEndOnReplay) {
+        scrollToEndOnReplay = false;
+        follow = true;
+        unread = 0;
+        requestAnimationFrame(() => {
+          if (follow) scrollToEnd();
+        });
+      }
       flush();
       break;
     case 'state':
