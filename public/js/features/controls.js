@@ -145,13 +145,16 @@ input.addEventListener('input', () => {
   updateComposer();
 });
 input.addEventListener('keydown', (e) => {
-  if (e.isComposing) return;
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+  // keyCode 229: some browsers report IME composition only this way.
+  if (e.isComposing || e.keyCode === 229) return;
+  const enter = e.key === 'Enter';
+  if (enter && (e.shiftKey || e.altKey)) return;
+  if (enter && (e.ctrlKey || e.metaKey || !matches.length)) {
     e.preventDefault();
     sendMessage();
-  } else if (matches.length && ['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(e.key)) {
+  } else if (matches.length && !e.shiftKey && ['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(e.key)) {
     e.preventDefault();
-    if (e.key === 'Enter') insertMention(active);
+    if (enter) insertMention(active);
     else if (e.key === 'Escape') hideMentions();
     else selectMention((active + matches.length + (e.key === 'ArrowDown' ? 1 : -1)) % matches.length);
   }

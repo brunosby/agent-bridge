@@ -68,6 +68,27 @@ export function renderTargets() {
   t.value = [...t.options].some((o) => o.value === prev) ? prev : 'auto';
 }
 
+/**
+ * Model shown on the card: a short name for the second line and the full id for the tooltip.
+ * "Default" resolves to the model the provider actually runs, when it reports one.
+ */
+function modelInfo(a) {
+  const models = a.models || [];
+  const isDefault = !a.model || a.model === 'default';
+  const selected = isDefault
+    ? models.find((m) => m.value === 'default') || models.find((m) => m.isDefault)
+    : models.find((m) => m.value === a.model);
+  const selectedId = isDefault ? (selected?.value !== 'default' ? selected?.value : '') : a.model;
+  const full = (isDefault && a.resolvedModel) || selected?.resolved || selectedId || '';
+  const entry = isDefault ? models.find((m) => m.value !== 'default' && (m.value === full || m.resolved === full)) : selected;
+  const label = entry?.label && !/^default\b/i.test(entry.label) ? entry.label : full;
+  const short = label
+    .replace(/^[^:/]+:\s+|^[^:/\s]+\/(?=\S)/, '') // "Provider: Name" or "provider/model"
+    .replace(/\s*\((free|recommended)\)$/i, '')
+    .trim();
+  return { short, full };
+}
+
 export function renderCard(a) {
   let c = cards[a.id];
   if (!c) {
@@ -153,7 +174,12 @@ export function renderCard(a) {
   c.el.className = `card drv-${a.driver}${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${!a.available || a.account ? ' unavailable' : ''}`;
   c.details.classList.toggle('bypass-on', a.bypass);
   c.name.textContent = a.name;
-  c.roleName.textContent = roleOf(a.role)?.name || a.role;
+  const roleLabel = roleOf(a.role)?.name || a.role;
+  const shown = modelInfo(a);
+  c.roleName.textContent = shown.short ? `${roleLabel} · ${shown.short}` : roleLabel;
+  c.roleName.title = [shown.full && `Model: ${shown.full}`, `Effort: ${a.effort && a.effort !== 'default' ? a.effort : 'default'}`]
+    .filter(Boolean)
+    .join('\n');
   if (detailsDialog.open && detailsDialog.dataset.agent === a.id) $('agentDetailsTitle').textContent = a.name;
   c.drv.textContent = a.driverLabel;
   c.details.title = `${a.sessionId ? `Session: ${a.sessionId}` : 'No session yet'}${a.worktree ? `\nWorktree: ${a.cwd} (branch ${a.worktree.branch})` : ''}`;

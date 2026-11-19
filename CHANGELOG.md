@@ -17,6 +17,9 @@ All notable changes to this project are documented here. The format follows Keep
 
 - Source split into layers (`core`, `providers`, `server`, `config`, `cli`, `workspace`) and converted to strict TypeScript, run directly by Node 22.18+.
 - Page split into ES modules; CSS reorganised into cascade layers with design tokens and components.
+- The final Approve / Ask for changes card appears only when files changed since your last message (an agent used an edit tool, or the Git working tree changed). A plain answer ends without it.
+- Agent cards show the model next to the role (for example `Orchestrator · Opus 5.5`); the tooltip shows the full model id and the effort.
+- `Enter` sends the message and `Shift+Enter` adds a new line. While the `@` list is open, `Enter` picks the agent.
 - The conversation is the main workspace. Team, routing and usage appear in a sidebar on wide screens and in the **Workspace** panel on narrow screens. Agent messages align left and user messages align right.
 - Single entry point `bin/agent-bridge.mjs` for the launchers and `npm start`.
 - Personal settings are saved to `config.local.json`, which git ignores.

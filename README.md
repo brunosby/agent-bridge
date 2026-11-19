@@ -9,7 +9,7 @@ You talk to an orchestrator; it hands tasks to the other agents by role (coder, 
 1. **Requirements:** Windows, Node.js 22.18+, and the CLI of at least one provider: Claude Code, Codex or OpenCode (**Settings > Accounts** shows the install command for each). No `npm install` needed to use it.
 2. **Open:** double-click `Agent Bridge.vbs` and choose the project folder. The page opens in your browser; there is no console window.
 3. **Check your accounts:** **Settings > Accounts** shows, per provider, whether the CLI is installed and signed in, with the next step (install command or a **Sign in** button that opens the CLI's own login).
-4. **Write your request** in the box at the bottom and press `Ctrl+Enter`.
+4. **Write your request** in the box at the bottom and press `Enter` (`Shift+Enter` adds a new line).
 
 Use **Restart** and **Quit** at the top of the page to restart or close the app.
 
