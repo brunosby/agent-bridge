@@ -4,6 +4,7 @@
   "description": "A team of AI coding agents from different providers (Claude Code, Codex, OpenCode) working on one task, in a live local web page.",
   "type": "module",
   "private": true,
+  "license": "MIT",
   "engines": {
     "node": ">=22.18"
   },
