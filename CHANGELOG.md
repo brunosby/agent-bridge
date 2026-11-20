@@ -38,6 +38,7 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
+- The effort menu of a Codex agent stayed disabled when its models loaded before the agent was ready; it now unlocks as soon as the agent is ready.
 - OpenCode agents showed the model's reasoning and OpenCode's own context summary as if they were answers; now only the answer is shown, with a notice when OpenCode summarises the context.
 - OpenCode skill rules missed skills named without the plugin prefix.
 - OpenCode: the final answer passed to the chat and to other agents also skips compaction summaries and synthetic text.

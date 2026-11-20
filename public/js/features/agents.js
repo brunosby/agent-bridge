@@ -229,7 +229,7 @@ export function renderCard(a) {
   const selected = a.models.find((m) => m.value === a.model) || a.models.find((m) => m.value === 'default' || m.isDefault);
   const levels = selected?.efforts || [];
   if (document.activeElement !== c.effort) {
-    const sig = JSON.stringify([a.effort, levels, selected?.defaultEffort]);
+    const sig = JSON.stringify([a.effort, levels, selected?.defaultEffort, a.available]);
     if (c.effort.dataset.sig !== sig) {
       c.effort.dataset.sig = sig;
       c.effort.textContent = '';

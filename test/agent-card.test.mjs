@@ -70,6 +70,28 @@ test('agent card shows the role and a short model name, with the full id and eff
     renderCard({ ...agent, resolvedModel: null, models: [], effort: 'default' });
     assert.equal(role.textContent, 'Orchestrator');
     assert.equal(role.title, 'Effort: default');
+
+    // Codex lists its models (with effort levels) before it is ready; the effort menu must unlock once it is.
+    const codex = {
+      ...agent,
+      id: 'codex',
+      driver: 'codex',
+      name: 'Codex',
+      effort: 'default',
+      model: 'default',
+      resolvedModel: null,
+      available: false,
+      models: [{ value: 'gpt-6.2-sol', label: 'GPT-6.2-Sol', isDefault: true, efforts: ['low', 'high'], defaultEffort: 'low' }],
+    };
+    renderCard(codex);
+    const effort = cards.codex.effort;
+    assert.equal(effort.disabled, true);
+    renderCard({ ...codex, available: true });
+    assert.equal(effort.disabled, false);
+    assert.deepEqual(
+      [...effort.options].map((o) => o.value),
+      ['default', 'low', 'high'],
+    );
   } finally {
     await window.happyDOM.close();
   }
