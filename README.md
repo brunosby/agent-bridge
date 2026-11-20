@@ -14,6 +14,8 @@ Mixing providers means one model reviews another's work and each role can use th
 2. On Windows, double-click `Agent Bridge.vbs` and choose the project folder. The page opens in your browser.
 3. Check **Settings > Accounts**, then write your request and send it.
 
+Closing the page does not stop Agent Bridge: the agents keep working in the background, and reopening the page shows what happened. Use **Quit** at the top of the page to close the app and all its agents.
+
 ## Features
 
 - **Mixed team:** agents from different providers, each with its own role and model, working together.
