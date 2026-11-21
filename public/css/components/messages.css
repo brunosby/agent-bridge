@@ -1,6 +1,6 @@
 /* Conversation entries: message bubbles, tool lines, hand-offs, system lines and turn ends. */
 .msg {
-  --accent: var(--color-text-muted);
+  --accent: var(--agent-accent, var(--color-text-muted));
   align-self: flex-start;
   width: min(100%, var(--content-max));
   border: 1px solid var(--color-border);
@@ -27,18 +27,6 @@
 .msg .body {
   padding: var(--space-2) var(--space-3) var(--space-3);
   overflow-wrap: anywhere;
-}
-
-.msg.drv-claude {
-  --accent: var(--color-claude);
-}
-
-.msg.drv-codex {
-  --accent: var(--color-codex);
-}
-
-.msg.drv-opencode {
-  --accent: var(--color-opencode);
 }
 
 .msg.user {
@@ -74,6 +62,7 @@
 
 /* Recognized @mentions in message text. */
 .body .mention {
+  --accent: var(--agent-accent, var(--color-text-muted));
   padding: 0 0.3em;
   border-radius: var(--radius-sm, 4px);
   background: color-mix(in srgb, var(--accent) 22%, transparent);
@@ -108,24 +97,12 @@
 }
 
 .tool {
-  --accent: var(--color-text-muted);
+  --accent: var(--agent-accent, var(--color-text-muted));
   border-left: 2px solid color-mix(in srgb, var(--accent) 35%, var(--color-border));
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.tool.drv-claude {
-  --accent: var(--color-claude);
-}
-
-.tool.drv-codex {
-  --accent: var(--color-codex);
-}
-
-.tool.drv-opencode {
-  --accent: var(--color-opencode);
 }
 
 .tool .status {

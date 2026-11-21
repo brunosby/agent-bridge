@@ -25,6 +25,8 @@ import { parseRoleMarkers } from '../../public/js/core/role-markers.js';
 import { isTestCommand } from '../core/test-command.ts';
 import { captureProject } from './project.ts';
 import { buildMatcher } from '../core/safety.ts';
+import { toMentionIds } from '../core/recipients.ts';
+import { flushMentionStreams, recordMessageFragment } from './mention-stream.ts';
 export interface OpenOptions {
   workDir: string;
   restoreId?: string | null;
@@ -56,7 +58,9 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
     relay: { hops: 0, halted: Boolean(saved), userPaused: Boolean(saved) },
     team: [],
     agents: {},
-    nextAgent: 0,
+    nextAgent: saved?.lastAgentId || 0,
+    retiredAgents: saved?.retiredAgents || new Map(),
+    pendingAgentNames: new Set(),
     rosterVersion: 1,
     rosterSeen: {},
     pendingRoleNote: {},
@@ -81,7 +85,7 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
     const role = S.roles[t.role] ? t.role : 'coder';
     const spec = {
       id: t.id && /^a\d+$/.test(t.id) ? t.id : `a${S.conv.nextAgent + 1}`,
-      name: uniqueName(t.name || defaultName(driver, role)),
+      name: uniqueName(t.name || defaultName(driver, role), Boolean(saved)),
       driver,
       role,
       model: t.model && t.model !== 'default' ? t.model : null,
@@ -108,6 +112,7 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
 export async function closeConversation() {
   if (!S.conv) return;
   const old = S.conv;
+  flushMentionStreams(old);
   cancelMilestoneDecision(old, 'closed');
   S.conv = null as unknown as Conversation;
   for (const t of approvalTimers.values()) clearTimeout(t);
@@ -123,6 +128,13 @@ export function startAgents() {
 export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
   agent.on('event', (ev: AgentEvent) => {
     if (S.conv !== owner || owner.agents[id] !== agent) return; // late events from a closed conversation or removed agent
+    if (
+      (ev.kind === 'delta' || ev.kind === 'text') &&
+      typeof ev.key === 'string' &&
+      typeof ev.text === 'string' &&
+      !recordMessageFragment(owner, id, ev.key, ev.text, ev.kind === 'text' && ev.final ? 'final' : ev.kind)
+    )
+      return;
     if (ev.kind === 'stderr') {
       owner.transcript.write(JSON.stringify({ at: Date.now(), ...ev }) + '\n');
       if (/\b(error|panic|fatal|exception)\b/i.test(ev.text)) logError(agentName(id), `stderr: ${ev.text}`);
@@ -182,7 +194,7 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       publish({
         kind: 'error',
         agent: id,
-        text: `${agentName(id)} is unavailable: ${ev.reason} Its models are disabled until you press Retry.`,
+        text: `@${id} is unavailable: ${ev.reason} Its models are disabled until you press Retry.`,
       });
       publishState();
       return;
@@ -196,7 +208,7 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
         return;
       }
       if (hit) ev.warning = hit;
-      ev.title = ev.title.replace(/^(Claude|Codex|OpenCode)\b/, agentName(id));
+      ev.title = ev.title.replace(/^(Claude|Codex|OpenCode)\b/, '@' + id);
       armApprovalTimeout(id, ev);
     }
     if (ev.kind === 'approvalClosed') clearTimeout(approvalTimers.get(ev.requestId));
@@ -258,7 +270,9 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
     }
     const milestone = (ev.kind === 'text' || ev.kind === 'turnEnd') && typeof ev.text === 'string' ? parseMilestoneMarkers(ev.text) : null;
     const markers = milestone ? parseRoleMarkers(milestone.text) : null;
-    const clean = markers ? { ...ev, text: markers.text } : ev;
+    const text = markers ? toMentionIds(markers.text, owner.team) : undefined;
+    const clean = text !== undefined ? { ...ev, text } : ev;
+    if (lifecycle?.kind === 'turnEnd' || (lifecycle?.kind === 'tasksCancelled' && !agent.busy)) flushMentionStreams(owner, id);
     const published = publish(clean);
     if (ev.kind === 'text' && ev.final && published.seq) owner.lastAnswerSeq[id] = published.seq;
     if (lifecycle?.kind === 'turnEnd') {
@@ -270,7 +284,7 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       const delegatedReview =
         role === 'reviewer' &&
         finishedTasks.some(({ from }) => owner.team.some((member) => member.id === from && member.role === 'orchestrator'));
-      if (delegatedReview) observeMilestoneReview(owner, lifecycle.ok ? lifecycle.text : 'CHANGES REQUESTED');
+      if (delegatedReview) observeMilestoneReview(owner, lifecycle.ok ? (text ?? lifecycle.text) : 'CHANGES REQUESTED');
       if (milestone && owner.routingMode === 'orchestrator' && role === 'orchestrator' && finishedTasks.length && lifecycle.ok) {
         if (milestone.invalid) publish({ kind: 'info', agent: id, text: 'Ignored a malformed milestone declaration.' });
         else if (milestone.proposed) {
@@ -280,11 +294,11 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
             publish({ kind: 'info', agent: id, text: error instanceof Error ? error.message : 'Invalid milestone plan.' });
           }
         } else if (milestone.number !== null) {
-          void finishMilestone(owner, id, milestone.number, markers?.text.trim() || '');
+          void finishMilestone(owner, id, milestone.number, text?.trim() || '');
           return;
         }
       }
-      onTurnEnd(id, { ...lifecycle, text: markers?.text ?? lifecycle.text, seq: published.seq, sourceSeq });
+      onTurnEnd(id, { ...lifecycle, text: text ?? lifecycle.text, seq: published.seq, sourceSeq });
     }
     if (lifecycle?.kind === 'tasksCancelled') cancelBatchPart(owner, id, 'cancelled: provider interrupted the task', lifecycle.taskIds);
     if (ev.kind === 'taskStarted' || ev.kind === 'tasksCancelled') publishState();
@@ -335,7 +349,7 @@ export async function restoreConversation(id: string): Promise<void> {
   await closeConversation();
   const { saved } = openConversation({ workDir: process.cwd(), restoreId: id });
   resetClients();
-  const resumed = S.conv.team.filter((a) => a.sessionId).map((a) => a.name);
+  const resumed = S.conv.team.filter((a) => a.sessionId).map((a) => '@' + a.id);
   publish({
     kind: 'system',
     text: `Restored conversation from ${new Date(saved?.startedAt || Date.now()).toLocaleString()} in ${S.conv.workDir} with ${S.conv.team.length} agent(s). ${resumed.length ? `${resumed.join(', ')} continue their sessions.` : 'No agent sessions were saved, so the agents start fresh.'} Relay is paused until you send a message.`,
@@ -352,7 +366,7 @@ export async function newConversation(workDir?: string): Promise<void> {
   resetClients();
   publish({
     kind: 'system',
-    text: `New conversation in ${dir}. Team: ${S.conv.team.map((a) => `${a.name} (${S.roles[a.role]?.name})`).join(', ')}.`,
+    text: `New conversation in ${dir}. Team: ${S.conv.team.map((a) => `@${a.id} (${S.roles[a.role]?.name})`).join(', ')}.`,
   });
   startAgents();
   publishState();

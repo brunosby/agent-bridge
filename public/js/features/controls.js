@@ -3,6 +3,8 @@ import { $, closeDialog } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { addSys } from './conversation-log.js';
 import { store } from '../core/store.js';
+import { draftForSend, refreshSelectedMentions, selectDraftMention, updateDraft } from '../core/draft-mentions.js';
+import { leadingMentionTokens } from '../core/mentions.js';
 const input = $('input');
 const target = $('target');
 const targetPreview = $('targetPreview');
@@ -16,58 +18,89 @@ let matches = [];
 let active = -1;
 let mention = null;
 
-function draft(id, value) {
-  if (!id) return '';
-  const key = 'agent-bridge-draft:' + id;
-  if (value !== undefined) {
-    if (value) drafts.set(id, value);
-    else drafts.delete(id);
-    try {
-      if (value) sessionStorage.setItem(key, value);
-      else sessionStorage.removeItem(key);
-    } catch {}
-    return value;
-  }
+function draft(id) {
+  if (!id) return null;
+  if (drafts.has(id)) return drafts.get(id);
   try {
-    return drafts.get(id) ?? sessionStorage.getItem(key) ?? '';
+    const saved = sessionStorage.getItem('agent-bridge-draft:' + id) || '';
+    if (saved.startsWith('v2:')) {
+      const parsed = JSON.parse(saved.slice(3));
+      if (typeof parsed.text === 'string' && Array.isArray(parsed.bindings)) return parsed;
+    }
+    return updateDraft(null, saved, store.state?.team || []);
   } catch {
-    return drafts.get(id) || '';
+    return null;
   }
+}
+
+function rememberDraft(id, next) {
+  if (!id) return next;
+  const key = 'agent-bridge-draft:' + id;
+  if (next.text) drafts.set(id, next);
+  else drafts.delete(id);
+  try {
+    if (next.text) sessionStorage.setItem(key, 'v2:' + JSON.stringify(next));
+    else sessionStorage.removeItem(key);
+  } catch {}
+  return next;
+}
+
+function saveDraft(id, text) {
+  const previous = draft(id);
+  const next = updateDraft(previous, text, store.state?.team || []);
+  return previous === next ? next : rememberDraft(id, next);
 }
 
 export function updateComposer() {
   const state = store.state;
   if (!state) return;
   if (conversationId !== state.conversationId) {
-    draft(conversationId, input.value);
+    saveDraft(conversationId, input.value);
     conversationId = state.conversationId;
-    input.value = draft(conversationId);
+    input.value = draft(conversationId)?.text || '';
+    saveDraft(conversationId, input.value);
     hideMentions();
   }
-  const prefix = input.value.match(/^\s*(?:@[\w-]+[\s,:]*)+/)?.[0] || '';
+  const previous = saveDraft(conversationId, input.value);
+  const refreshed = refreshSelectedMentions(previous, state.team);
+  if (refreshed.changes.length) {
+    for (const { start, end, label } of refreshed.changes.toReversed()) input.setRangeText(label, start, end, 'preserve');
+    rememberDraft(conversationId, refreshed.draft);
+    hideMentions();
+  }
+  const current = draftForSend(refreshed.draft, state.team, target.value);
+  const prefix = current.text.slice(0, leadingMentionTokens(current.text).at(-1)?.end || 0);
   const key = JSON.stringify([
     conversationId,
     state.routingMode,
     target.value,
     prefix,
+    current.problem,
+    current.checks,
     state.team.map((agent) => [agent.id, agent.name, agent.role, agent.available, agent.account?.state]),
   ]);
   if (key === previewKey) return;
   previewKey = key;
   const version = ++previewVersion;
   clearTimeout(previewTimer);
-  targetPreview.textContent = '';
+  targetPreview.textContent = current.problem;
+  if (current.problem) return;
   previewTimer = setTimeout(async () => {
     try {
-      const { targets, changedByMention } = await api('previewTarget', { target: target.value, prefix });
+      const { targets, changedByMention } = await api('previewTarget', {
+        target: target.value,
+        prefix,
+        conversationId,
+        mentionChecks: current.checks,
+      });
       if (version !== previewVersion) return;
       if (!targets.length) {
         targetPreview.textContent = 'No recipient';
       } else if (changedByMention || targets.some((agent) => !agent.available)) {
         targetPreview.textContent = 'To ' + targets.map((agent) => agent.name + (agent.available ? '' : ' (unavailable)')).join(', ');
       }
-    } catch {
-      if (version === previewVersion) targetPreview.textContent = 'Recipient preview unavailable';
+    } catch (error) {
+      if (version === previewVersion) targetPreview.textContent = error.message || 'Recipient preview unavailable';
     }
   }, 120);
 }
@@ -91,8 +124,10 @@ function insertMention(index) {
   const agent = matches[index];
   if (!mention || !agent) return;
   const end = input.selectionStart + (input.value.slice(input.selectionStart).match(/^[\w-]+/)?.[0].length || 0);
-  input.setRangeText('@' + agent.name + ' ', mention.start, end, 'end');
-  draft(conversationId, input.value);
+  const start = mention.start;
+  input.setRangeText('@' + agent.name + ' ', start, end, 'end');
+  const next = saveDraft(conversationId, input.value);
+  rememberDraft(conversationId, selectDraftMention(next, start, agent.id));
   hideMentions();
   updateComposer();
 }
@@ -122,10 +157,15 @@ export async function sendMessage() {
   const text = input.value;
   const id = conversationId;
   if (!text.trim() || $('send').disabled) return;
+  const current = draftForSend(saveDraft(id, text), store.state?.team || [], target.value);
+  if (current.problem) {
+    targetPreview.textContent = current.problem;
+    return;
+  }
   $('send').disabled = true;
   try {
-    await api('send', { text, target: target.value, conversationId: id });
-    if (draft(id) === text) draft(id, '');
+    await api('send', { text: current.text, target: target.value, conversationId: id, mentionChecks: current.checks });
+    if (draft(id)?.text === text) saveDraft(id, '');
     if (conversationId === id && input.value === text) {
       input.value = '';
       hideMentions();
@@ -143,7 +183,7 @@ $('send').onclick = sendMessage;
 target.addEventListener('change', updateComposer);
 input.addEventListener('blur', hideMentions);
 input.addEventListener('input', () => {
-  draft(conversationId, input.value);
+  saveDraft(conversationId, input.value);
   showMentions();
   updateComposer();
 });

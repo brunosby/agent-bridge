@@ -139,6 +139,7 @@ export interface Agent extends EventEmitter {
   restart(): Promise<void>;
   shutdown(): Promise<void>;
   setInstructions?(text: string): void;
+  syncThreadName?(): Promise<void>;
 }
 
 export type AgentClass = new (opts: AgentOptions) => Agent;
@@ -235,6 +236,8 @@ export type MilestoneEvent =
   | { kind: 'milestoneDecisionClosed'; requestId: string; action: string }
   | { kind: 'milestoneProgress'; milestones: MilestoneView[] };
 
+export type AgentIdentity = Pick<AgentSpec, 'id' | 'name' | 'driver' | 'role'>;
+
 export interface Conversation {
   id: string;
   runDir: string;
@@ -245,6 +248,8 @@ export interface Conversation {
   team: AgentSpec[];
   agents: Record<string, Agent>;
   nextAgent: number;
+  retiredAgents: Map<string, AgentIdentity>;
+  pendingAgentNames: Set<string>;
   rosterVersion: number;
   rosterSeen: Record<string, number>;
   pendingRoleNote: Record<string, string>;

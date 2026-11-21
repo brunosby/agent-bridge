@@ -49,6 +49,8 @@ export class CodexAgent extends EventEmitter implements Agent {
   resolvedModel: string | null = null;
   proc: JsonlProcess | null = null;
   stopping = false;
+  private threadNamePending = false;
+  private threadNameUpdate = Promise.resolve();
 
   get sessionId(): string | null {
     return this.threadId;
@@ -200,14 +202,29 @@ export class CodexAgent extends EventEmitter implements Agent {
     this.threadId = res.thread.id;
     if (reviewUrl) await this.request('mcpServerStatus/list', { threadId: this.threadId }).catch(() => {});
     this.resolvedModel = res.model || null;
-    // A readable title in Codex's thread list (and the ChatGPT app) instead of the first relayed message.
-    if (!res.thread.name)
-      this.request('thread/name/set', { threadId: this.threadId, name: `Agent Bridge · ${path.basename(this.cwd)} · ${this.name}` }).catch(
-        () => {},
-      );
+    if (!res.thread.name || this.threadNamePending) void this.syncThreadName().catch(() => {});
     this.emitEvent('session', { sessionId: this.threadId, model: res.model });
     this.loadModels().catch((err) => this.emitEvent('info', { text: `model/list failed: ${errorText(err)}` }));
     this.emitEvent('status', { busy: this.busy });
+  }
+
+  setInstructions(text: string): void {
+    this.instructions = text;
+  }
+
+  syncThreadName(): Promise<void> {
+    this.threadNamePending = true;
+    const update = this.threadNameUpdate
+      .catch(() => {})
+      .then(async () => {
+        const threadId = this.threadId;
+        if (!threadId || !this.proc || this.stopping || !this.threadNamePending) return;
+        const name = this.name;
+        await this.request('thread/name/set', { threadId, name: 'Agent Bridge \u00b7 ' + path.basename(this.cwd) + ' \u00b7 ' + name });
+        if (this.threadId === threadId && this.name === name) this.threadNamePending = false;
+      });
+    this.threadNameUpdate = update;
+    return update;
   }
 
   /** Models available to this account, from the app-server `model/list` method. */

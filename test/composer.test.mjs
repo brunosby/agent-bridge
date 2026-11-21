@@ -8,8 +8,8 @@ test('the composer handles keyboard input and displays only useful recipient pre
   const window = new Window({ url: 'http://localhost' });
   window.document.write(readFileSync(new URL('../public/index.html', import.meta.url), 'utf8').replace(/<script[^>]+><\/script>/g, ''));
   const sent = [];
-  const claude = { id: 'claude', name: 'Claude', role: 'orchestrator', available: true };
-  const codex = { id: 'codex', name: 'Codex', role: 'coder', available: true };
+  const claude = { id: 'a1', name: 'Claude', role: 'orchestrator', available: true };
+  const codex = { id: 'a2', name: 'Codex', role: 'coder', available: true };
   let preview = { targets: [claude], changedByMention: false };
   Object.assign(globalThis, {
     document: window.document,
@@ -68,7 +68,7 @@ test('the composer handles keyboard input and displays only useful recipient pre
     assert.equal(suggestions.hidden, false);
     assert.equal(key({ ctrlKey: true }), true, 'Ctrl+Enter still sends with suggestions open');
     await settle();
-    assert.deepEqual(sent, ['first line\nsecond line', '@Claude\n@Claude']);
+    assert.deepEqual(sent, ['first line\nsecond line', '@a1\n@a1']);
 
     const output = window.document.getElementById('targetPreview');
     const flushPreview = async () => {
@@ -98,6 +98,31 @@ test('the composer handles keyboard input and displays only useful recipient pre
     updateComposer();
     await flushPreview();
     assert.equal(output.textContent, 'To Claude (unavailable)');
+
+    type('@Cod');
+    assert.equal(key(), true);
+    assert.equal(input.value, '@Codex ');
+    const renamed = { ...codex, name: 'Reviewer' };
+    store.state.team = [claude, renamed];
+    preview = { targets: [renamed], changedByMention: true };
+    updateComposer();
+    assert.equal(input.value, '@Reviewer ');
+    await flushPreview();
+    assert.equal(output.textContent, 'To Reviewer');
+    assert.equal(key(), true);
+    await settle();
+    assert.equal(sent.at(-1), '@a2 ');
+
+    type('@Reviewer please check');
+    const count = sent.length;
+    const different = { ...codex, id: 'a3', name: 'Reviewer' };
+    store.state.team = [claude, { ...renamed, name: 'Other' }, different];
+    updateComposer();
+    assert.match(output.textContent, /Check the mention @Reviewer/);
+    assert.equal(key(), true);
+    await settle();
+    assert.equal(sent.length, count);
+    assert.equal(input.value, '@Reviewer please check');
   } finally {
     await window.happyDOM.close();
   }

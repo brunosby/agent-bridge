@@ -188,7 +188,7 @@ $('addConfirm').onclick = async () => {
     await api('addAgent', {
       driver: $('addDriver').value,
       role: $('addRole').value,
-      name: $('addName').value.trim() || undefined,
+      name: nameEdited ? $('addName').value.trim() : undefined,
       model: $('addModel').value,
       effort: $('addEffort').value,
       bypass: $('addBypass').checked,

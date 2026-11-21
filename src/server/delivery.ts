@@ -5,7 +5,7 @@ import { reviewChanges } from '../workspace/git-context.ts';
 import { closeReview, openReview } from './review-mcp.ts';
 import { randomUUID } from 'node:crypto';
 import { config, setting } from '../config/settings.ts';
-import { agentName, publish } from './events.ts';
+import { publish } from './events.ts';
 import { statusFor } from './team.ts';
 import { S } from './state.ts';
 
@@ -71,7 +71,7 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
   const status = statusFor(owner, toId);
   if (!agent || !canReceiveWork(status)) {
     const reason = status.reason || status.availability;
-    publish({ kind: 'error', agent: toId, text: agentName(toId) + ' is unavailable: ' + reason + '.' });
+    publish({ kind: 'error', agent: toId, text: '@' + toId + ' is unavailable: ' + reason + '.' });
     discarded?.(reason);
     return;
   }

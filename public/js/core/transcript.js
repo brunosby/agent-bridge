@@ -42,9 +42,9 @@ export class Transcript {
     );
   }
 
-  update(entry, text) {
+  update(entry, text, displayedText = text) {
     entry.text = text;
-    entry.searchable = text.toLowerCase();
+    entry.searchable = displayedText.toLowerCase();
   }
 
   track(agent, entry) {

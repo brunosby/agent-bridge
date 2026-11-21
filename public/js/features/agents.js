@@ -1,3 +1,4 @@
+import { applyAgentAccent } from '../core/agent-accent.js';
 import { agentWarnings, describeAgent, modelInfo, sortModels } from '../core/agent-view.js';
 // Header: agent cards (role, model, effort, bypass), relay status and the message target menu.
 import { $, fmtTokens, h } from '../core/dom.js';
@@ -74,6 +75,7 @@ export function renderCard(a) {
   if (!c) {
     const el = h('button', 'card');
     el.type = 'button';
+    applyAgentAccent(el, a.id);
     el.setAttribute('aria-haspopup', 'dialog');
     const name = h('span', 'name');
     const roleName = h('span', 'card-role');
@@ -87,7 +89,8 @@ export function renderCard(a) {
     const remove = h('button', 'btn btn--danger', 'Remove agent');
     remove.title = 'Remove this agent from the conversation';
     remove.onclick = () => {
-      if (confirm(`Remove ${a.name} from the conversation?`)) api('removeAgent', { agent: a.id }).catch((e) => alert(e.message));
+      if (confirm(`Remove ${agentOf(a.id)?.name || a.id} from the conversation?`))
+        api('removeAgent', { agent: a.id }).catch((e) => alert(e.message));
     };
     el.append(name, roleName, status);
 
@@ -129,6 +132,33 @@ export function renderCard(a) {
     bypassLabel.append(bypass, document.createTextNode(' Bypass'));
     row.append(role, model, effort, bypassLabel);
 
+    const rename = h('form', 'agent-details__rename');
+    const renameLabel = h('label', null, 'Name');
+    const nameInput = h('input');
+    nameInput.required = true;
+    nameInput.maxLength = 24;
+    nameInput.pattern = '[A-Za-z0-9_\\-]+';
+    renameLabel.appendChild(nameInput);
+    const saveName = h('button', 'btn', 'Save name');
+    const renameError = h('output', 'hint');
+    renameError.setAttribute('aria-live', 'polite');
+    nameInput.oninput = () => {
+      renameError.textContent = '';
+    };
+    rename.onsubmit = async (event) => {
+      event.preventDefault();
+      saveName.disabled = true;
+      renameError.textContent = '';
+      try {
+        await api('rename', { agent: a.id, name: nameInput.value });
+      } catch (error) {
+        renameError.textContent = error.message;
+      } finally {
+        saveName.disabled = false;
+      }
+    };
+    rename.append(renameLabel, saveName, renameError);
+
     const rec = h('div', 'rec');
     const warn = h('div', 'card-warn');
     const details = h('div', 'agent-details');
@@ -141,18 +171,38 @@ export function renderCard(a) {
     meta.append(drv, tokens, taskLink);
     const actions = h('div', 'agent-details__actions');
     actions.append(stop, retry, remove);
-    details.append(meta, warn, row, rec, actions);
+    details.append(meta, warn, rename, row, rec, actions);
 
     el.onclick = () => {
       detailsDialog.dataset.agent = a.id;
       $('agentDetailsTitle').textContent = name.textContent;
+      nameInput.value = name.textContent;
+      renameError.textContent = '';
       $('agentDetailsBody').replaceChildren(details);
       detailsDialog.showModal();
     };
-    c = cards[a.id] = { el, name, roleName, details, taskLink, drv, status, tokens, stop, retry, role, model, effort, bypass, rec, warn };
+    c = cards[a.id] = {
+      el,
+      name,
+      roleName,
+      details,
+      taskLink,
+      drv,
+      status,
+      tokens,
+      stop,
+      retry,
+      role,
+      model,
+      effort,
+      bypass,
+      rec,
+      warn,
+      nameInput,
+    };
   }
   const availability = describeAgent(a);
-  c.el.className = `card drv-${a.driver}${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${!availability.available ? ' unavailable' : ''}`;
+  c.el.className = `card${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${!availability.available ? ' unavailable' : ''}`;
   c.details.classList.toggle('bypass-on', a.bypass);
   c.name.textContent = a.name;
   const roleLabel = roleOf(a.role)?.name || a.role;
@@ -162,6 +212,8 @@ export function renderCard(a) {
     .filter(Boolean)
     .join('\n');
   if (detailsDialog.open && detailsDialog.dataset.agent === a.id) $('agentDetailsTitle').textContent = a.name;
+  if (document.activeElement !== c.nameInput && c.nameInput.value === c.nameInput.defaultValue) c.nameInput.value = a.name;
+  c.nameInput.defaultValue = a.name;
   c.drv.textContent = a.driverLabel;
   c.details.title = `${a.sessionId ? `Session: ${a.sessionId}` : 'No session yet'}${a.worktree ? `\nWorktree: ${a.cwd} (branch ${a.worktree.branch})` : ''}`;
   c.status.textContent = availability.label;

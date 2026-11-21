@@ -1,3 +1,5 @@
+import { applyAgentAccent } from './agent-accent.js';
+import { mentionTokens } from './mentions.js';
 // DOM helpers: element creation, scrolling the conversation, time and number formats, safe markdown.
 export const $ = (id) => document.getElementById(id);
 export const log = $('log');
@@ -42,8 +44,6 @@ export function renderMarkdown(container, text, findAgent = null) {
   });
 }
 
-const MENTION = /(@[\p{L}\p{N}_.-]*[\p{L}\p{N}_])/u;
-
 function appendInline(parent, text, findAgent) {
   for (const seg of text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/)) {
     if (!seg) continue;
@@ -56,25 +56,23 @@ function appendInline(parent, text, findAgent) {
   }
 }
 
-function chipFor(text, agent) {
-  const chip = h('span', 'mention', text);
-  chip.style.setProperty('--accent', `var(--color-${agent.driver}, var(--color-text-muted))`);
-  chip.title = `${agent.name}${agent.role ? ` (${agent.role})` : ''}`;
+function chipFor(agent) {
+  const chip = h('span', 'mention', '@' + agent.name + (agent.removed ? ' (removed)' : ''));
+  applyAgentAccent(chip, agent.removed ? null : agent.id);
+  chip.title = [agent.name, agent.role, agent.removed ? 'Removed from the conversation' : null].filter(Boolean).join(' \u00b7 ');
   return chip;
 }
 
-function appendMentions(parent, text, findAgent) {
-  if (!findAgent) {
-    parent.appendChild(document.createTextNode(text));
-    return;
-  }
-  for (const seg of text.split(MENTION)) {
-    if (!seg) continue;
-    const agent = seg.startsWith('@') ? findAgent(seg.slice(1)) : null;
-    if (!agent) {
-      parent.appendChild(document.createTextNode(seg));
-      continue;
+export function appendMentions(parent, text, findAgent) {
+  let offset = 0;
+  if (findAgent) {
+    for (const { name, start, end } of mentionTokens(text)) {
+      const agent = findAgent(name);
+      if (!agent) continue;
+      if (start > offset) parent.appendChild(document.createTextNode(text.slice(offset, start)));
+      parent.appendChild(chipFor(agent));
+      offset = end;
     }
-    parent.appendChild(chipFor(seg, agent));
   }
+  if (offset < text.length) parent.appendChild(document.createTextNode(text.slice(offset)));
 }

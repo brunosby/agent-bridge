@@ -27,7 +27,7 @@ h3 {
 }
 
 a {
-  color: var(--color-codex);
+  color: var(--color-link);
 }
 
 code,
@@ -61,7 +61,7 @@ textarea {
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-codex);
+  outline: 2px solid var(--color-link);
   outline-offset: 1px;
 }
 

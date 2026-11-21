@@ -1,3 +1,4 @@
+import { validateMentionChecks } from '../core/recipients.ts';
 import { cancelMilestoneDecision, resolveMilestoneCommit, resolveMilestonePlan } from './milestones.ts';
 // API actions called by the page.
 import type { Agent, RoutingMode } from '../core/types.ts';
@@ -25,6 +26,7 @@ import {
   listDriverModels,
   providerBlocked,
   removeAgent,
+  renameAgent,
   roleProfile,
   setRole,
   startAgent,
@@ -69,6 +71,8 @@ export async function api(action: string, body: Record<string, any>): Promise<un
         settingsSchema: SETTINGS,
       };
     case 'previewTarget': {
+      if (body.conversationId && body.conversationId !== S.conv.id) throw new Error('conversation changed before previewing');
+      validateMentionChecks(S.conv.team, body.mentionChecks);
       const prefix = typeof body.prefix === 'string' ? body.prefix : '';
       const ids = userTargets(body.target, prefix);
       const selection = prefix ? userTargets(body.target) : ids;
@@ -86,7 +90,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       textField(body.conversationId, 'conversation ID', true);
       if (body.conversationId && body.conversationId !== S.conv.id) throw new Error('conversation changed before sending');
       if (typeof body.text !== 'string' || !body.text.trim()) throw new Error('empty message');
-      await userSend(body.text, body.target);
+      await userSend(body.text, body.target, body.mentionChecks);
       return { ok: true };
     case 'relay':
       for (const key of ['auto', 'resume', 'pause']) optionalBoolean(body[key], key);
@@ -208,7 +212,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       } else cancelBatchPart(owner, body.agent, 'cancelled: stopped by the user');
       await Promise.all(ids.map((id) => agents[id]?.interrupt()));
       if (S.conv === owner) {
-        publish({ kind: 'system', text: 'Stopped ' + ids.map(agentName).join(', ') + (body.agent ? '.' : '. Relay paused.') });
+        publish({ kind: 'system', text: 'Stopped ' + ids.map((id) => '@' + id).join(', ') + (body.agent ? '.' : '. Relay paused.') });
         publishState();
       }
       return { ok: true };
@@ -245,7 +249,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       }
       await agent.setEffort(effort);
       spec.effort = effort === 'default' ? null : effort;
-      publish({ kind: 'system', text: `${spec.name}: effort ${effort}.` });
+      publish({ kind: 'system', text: `@${spec.id}: effort ${effort}.` });
       publishState();
       return { ok: true };
     }
@@ -260,8 +264,8 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       publish({
         kind: 'system',
         text: spec.bypass
-          ? `Bypass on for ${spec.name}: approvals are accepted automatically, except destructive actions and deletions outside the project folder.`
-          : `Bypass off for ${spec.name}.`,
+          ? `Bypass on for @${spec.id}: approvals are accepted automatically, except destructive actions and deletions outside the project folder.`
+          : `Bypass off for @${spec.id}.`,
       });
       publishState();
       return { ok: true };
@@ -299,6 +303,10 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       optionalBoolean(body.bypass, 'bypass');
       optionalBoolean(body.worktree, 'worktree');
       return { ok: true, agent: await addAgent(body as AddAgentInput) };
+    case 'rename': {
+      renameAgent(textField(body.agent, 'agent ID') || '', textField(body.name, 'agent name') || '');
+      return { ok: true };
+    }
     case 'removeAgent': {
       const owner = S.conv;
       await removeAgent(body.agent);
@@ -307,7 +315,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
     }
     case 'retry': {
       const agent = agentOf(body.agent);
-      publish({ kind: 'system', text: `Retrying ${agentName(body.agent)}...` });
+      publish({ kind: 'system', text: `Retrying @${body.agent}...` });
       await startAgent(agent, () => agent.restart());
       return { ok: true };
     }

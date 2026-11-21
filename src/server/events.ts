@@ -1,3 +1,4 @@
+import { mapMentions } from '../../public/js/core/mentions.js';
 import { milestoneCommitAvailable, milestoneViews } from './milestones.ts';
 // Event bus: everything the page shows goes through publish() and the state snapshot.
 import type { Agent, AgentSpec, BridgeEvent, ModelInfo } from '../core/types.ts';
@@ -18,7 +19,14 @@ export function publish(ev: BridgeEvent): BridgeEvent {
   if (S.history.length > 20000) S.history.splice(0, S.history.length - 20000);
   const saved = full.kind === 'milestonePlanProposed' ? { ...full, command: '', commandSaved: false } : full;
   S.conv?.transcript.write(JSON.stringify(saved) + '\n');
-  if (full.kind === 'error') logError(full.agent ? agentName(full.agent) : 'bridge', full.text);
+  if (full.kind === 'error')
+    logError(
+      full.agent ? agentName(full.agent) : 'bridge',
+      mapMentions(String(full.text), (id: string) => {
+        const name = agentName(id);
+        return name === id ? undefined : '@' + name;
+      }),
+    );
   const line = `data: ${JSON.stringify(full)}\n\n`;
   if (full.kind !== 'projectBaseline') for (const res of clients) res.write(line);
   return full;
@@ -37,7 +45,7 @@ export function logError(source: string, text: unknown): void {
   }
 }
 
-export const agentName = (id: string): string => S.conv?.team.find((a) => a.id === id)?.name || id;
+export const agentName = (id: string): string => S.conv?.team.find((a) => a.id === id)?.name || S.conv?.retiredAgents.get(id)?.name || id;
 
 export function decorateModels(spec: AgentSpec, agent: Agent): ModelInfo[] {
   const role = S.roles[spec.role];
@@ -93,6 +101,11 @@ export function stateEvent() {
     conversationId: S.conv.id,
     workDir: S.conv.workDir,
     routingMode: S.conv.routingMode,
+    lastAgentId: S.conv.nextAgent,
+    knownAgents: [
+      ...[...S.conv.retiredAgents.values()].map((member) => ({ ...member, removed: true })),
+      ...team.map(({ id, name, driver, role }) => ({ id, name, driver, role, removed: false })),
+    ],
     relay: { ...relay, ...S.conv.relay },
     tokenLimit: Number(setting('tokenLimit')),
     totalTokens: team.reduce((s, a) => s + a.tokens, 0),

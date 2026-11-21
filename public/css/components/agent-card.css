@@ -1,6 +1,6 @@
 /* Compact team rail and the settings shown in the agent details dialog. */
 .card {
-  --accent: var(--color-text-muted);
+  --accent: var(--agent-accent, var(--color-text-muted));
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -10,22 +10,6 @@
   text-align: start;
   border-inline-start: 3px solid var(--accent);
   background: var(--color-surface-2);
-}
-
-.card.drv-claude {
-  --accent: var(--color-claude);
-}
-
-.card.drv-codex {
-  --accent: var(--color-codex);
-}
-
-.card.drv-opencode {
-  --accent: var(--color-opencode);
-}
-
-.card.drv-fake {
-  --accent: var(--color-fake);
 }
 
 .card .name,
@@ -81,6 +65,24 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+}
+
+.agent-details__rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-2);
+}
+
+.agent-details__rename label {
+  display: grid;
+  flex: 1 1 10rem;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.agent-details__rename output:not(:empty) {
+  flex: 1 0 100%;
 }
 
 .agent-details__meta {

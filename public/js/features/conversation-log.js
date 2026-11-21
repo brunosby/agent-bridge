@@ -1,10 +1,19 @@
+import { applyAgentAccent } from '../core/agent-accent.js';
 import { parseMilestoneMarkers } from '../core/milestone-markers.js';
 import { milestoneCommitCard, milestonePlanCard, renderMilestoneProgress } from './milestones.js';
 // Convert incoming events to transcript entries and update their views in frame-sized batches.
-import { agentOf, approvals, driverOf, label, roleOf, store } from '../core/store.js';
-import { $, h, log, renderMarkdown, time } from '../core/dom.js';
+import { approvals, findMentionAgent, historyAgentOf, label, roleOf, store } from '../core/store.js';
+import { $, appendMentions, h, log, renderMarkdown, time } from '../core/dom.js';
 import { Transcript } from '../core/transcript.js';
-import { renderApproval, renderFinalReview, renderNeedRole, renderRoleRecommendation, updatePending } from './approvals.js';
+import { mapMentions } from '../core/mentions.js';
+import {
+  renderApproval,
+  renderFinalReview,
+  renderNeedRole,
+  renderRoleRecommendation,
+  refreshApprovalNames,
+  updatePending,
+} from './approvals.js';
 import { renderState } from './agents.js';
 import { updateComposer } from './controls.js';
 import { bindSavedSearch } from './transcript-search.js';
@@ -24,6 +33,7 @@ let previousScroll = scrollPosition();
 let results = null;
 let resultIndex = -1;
 let selected = null;
+let identityKey = null;
 const resetSavedSearch = bindSavedSearch({ isLoaded: (seq) => transcript.bySequence.has(seq), open: jumpToSequence });
 
 function filterOptions() {
@@ -73,7 +83,7 @@ function flush() {
   newNodes = document.createDocumentFragment();
   const filters = filterOptions();
   for (const entry of dirty) {
-    renderMarkdown(views.get(entry).body, entry.text, findAgent);
+    renderMarkdown(views.get(entry).body, entry.text, findMentionAgent);
     filterEntry(entry, filters);
   }
   dirty.clear();
@@ -86,8 +96,8 @@ function schedule() {
   if (!frame) frame = requestAnimationFrame(flush);
 }
 
-function mount(entry, node, body = null) {
-  views.set(entry, { node, body, group: null });
+function mount(entry, node, body = null, refresh = null) {
+  views.set(entry, { node, body, refresh, group: null });
   node.tabIndex = -1;
   newNodes.appendChild(node);
   filterEntry(entry);
@@ -103,7 +113,14 @@ function mount(entry, node, body = null) {
 
 function addLine(event, category, classes, text, agents = []) {
   const entry = transcript.add(event, text, category, agents);
-  mount(entry, h('div', classes, text));
+  const node = h('div', classes);
+  const refresh = () => {
+    node.replaceChildren();
+    appendMentions(node, entry.text, findMentionAgent);
+    updateSearchText(entry);
+  };
+  refresh();
+  mount(entry, node, null, refresh);
   return entry;
 }
 
@@ -111,11 +128,47 @@ export function addSys(text, isError = false) {
   addLine({}, isError ? 'error' : 'system', isError ? 'sys error' : 'sys', text);
 }
 
-export function findAgent(name) {
-  const n = name.toLowerCase();
-  if (n === 'all' || n === 'everyone') return { name: 'everyone', driver: 'all', role: null };
-  const a = store.state?.team.find((x) => x.name.toLowerCase() === n);
-  return a ? { name: a.name, driver: a.driver, role: roleOf(a.role)?.name || null } : null;
+function reference(id) {
+  return /^a\d+$/.test(id) ? '@' + id : label(id);
+}
+
+function updateSearchText(entry) {
+  transcript.update(
+    entry,
+    entry.text,
+    mapMentions(entry.text, (name) => {
+      const member = findMentionAgent(name);
+      return member ? '@' + member.name : undefined;
+    }),
+  );
+}
+
+function refreshNames(state) {
+  const key = JSON.stringify(
+    [state.team, state.knownAgents].map((members) => (members || []).map(({ id, name, driver }) => [id, name, driver])),
+  );
+  if (key === identityKey) return;
+  if (identityKey !== null) resetSavedSearch();
+  identityKey = key;
+  resetResults();
+  const groups = new Set();
+  const filters = filterOptions();
+  for (const entry of transcript.entries) {
+    const view = views.get(entry);
+    view.refresh?.();
+    if (view.body) {
+      updateSearchText(entry);
+      dirty.add(entry);
+    }
+    filterEntry(entry, filters);
+    if (view.group) groups.add(view.group);
+  }
+  for (const group of groups) refreshToolGroup(group);
+  for (const option of $('logAgent').options) {
+    if (option.value) option.textContent = label(option.value);
+  }
+  refreshApprovalNames();
+  schedule();
 }
 
 function message(ev) {
@@ -125,25 +178,37 @@ function message(ev) {
   const isNew = !entry;
   if (!entry) {
     entry = transcript.add(ev, '', 'message', user ? ev.to || [] : [ev.agent], key);
-    const node = h('div', user ? 'msg user' : 'msg agent drv-' + driverOf(ev.agent));
+    const node = h('div', user ? 'msg user' : 'msg agent');
+    if (!user) applyAgentAccent(node, ev.agent);
     if (!user) node.classList.add('streaming');
     const head = h('div', 'head');
-    const role = roleOf(agentOf(ev.agent)?.role)?.name;
-    const meta = user ? '→ ' + (ev.to || []).map(label).join(' + ') + ' · ' : role ? role + ' · ' : '';
-    head.append(h('span', 'who', user ? 'You' : label(ev.agent)), h('span', null, meta + time(ev.at)));
+
+    const role = roleOf(historyAgentOf(ev.agent)?.role)?.name;
+    const who = h('span', 'who');
+    const meta = h('span');
+    const refresh = () => {
+      who.textContent = user ? 'You' : label(ev.agent);
+      const detail = user ? '\u2192 ' + (ev.to || []).map(label).join(' + ') + ' \u00b7 ' : role ? role + ' \u00b7 ' : '';
+      meta.textContent = detail + time(ev.at);
+    };
+    refresh();
+    head.append(who, meta);
     const body = h('div', 'body');
     node.append(head, body);
     if (!user) transcript.track(ev.agent, entry);
-    mount(entry, node, body);
+    mount(entry, node, body, refresh);
   }
+  if (entry.finalized && !(ev.kind === 'text' && ev.final)) return;
   if (user) transcript.update(entry, ev.text);
   else {
     entry.rawMessage = ev.kind === 'delta' ? (entry.rawMessage || '') + ev.text : ev.text;
     transcript.update(entry, parseRoleMarkers(parseMilestoneMarkers(entry.rawMessage).text).text);
   }
+  updateSearchText(entry);
   dirty.add(entry);
   if (isNew && !replaying && !follow && transcript.matches(entry, ...filterOptions())) unread += 1;
   if (ev.final) {
+    entry.finalized = true;
     if (Number.isInteger(ev.seq)) transcript.bySequence.set(ev.seq, entry);
     views.get(entry).node.classList.remove('streaming');
   }
@@ -168,12 +233,17 @@ function groupTools(entries) {
     }
     group.entries.push(entry);
     group.details.appendChild(view.node);
-    group.summary.textContent =
-      label(entry.agents[0]) + ' · ' + group.entries.length + ' successful tool ' + (group.entries.length === 1 ? 'call' : 'calls');
     view.group = group;
     previous = entry;
   }
-  for (const grouped of groups) filterGroup(grouped);
+  for (const grouped of groups) refreshToolGroup(grouped);
+}
+
+function refreshToolGroup(group) {
+  const count = group.entries.length;
+  group.summary.textContent =
+    label(group.entries[0].agents[0]) + ' \u00b7 ' + count + ' successful tool ' + (count === 1 ? 'call' : 'calls');
+  filterGroup(group);
 }
 
 export function jumpToSequence(seq) {
@@ -275,6 +345,7 @@ export function handle(ev) {
       views.clear();
       dirty.clear();
       agentOptions.clear();
+      identityKey = null;
       const allAgents = h('option', null, 'All agents');
       allAgents.value = '';
       $('logAgent').replaceChildren(allAgents);
@@ -307,6 +378,7 @@ export function handle(ev) {
       break;
     case 'state':
       store.state = ev;
+      refreshNames(ev);
       renderMilestoneProgress(ev.milestones);
       renderState();
       updateComposer();
@@ -318,20 +390,28 @@ export function handle(ev) {
       if (ev.kind === 'delta' && $('logSearch').value) results = null;
       break;
     case 'routed':
-      if (ev.relayed) addLine(ev, 'route', 'route', label(ev.from) + ' → ' + label(ev.to) + ' (hand-off ' + ev.hop + ')', [ev.from, ev.to]);
+      if (ev.relayed)
+        addLine(ev, 'route', 'route', reference(ev.from) + ' → ' + reference(ev.to) + ' (hand-off ' + ev.hop + ')', [ev.from, ev.to]);
       break;
     case 'tool': {
       const entry = transcript.add(
         ev,
-        label(ev.agent) + ' · ' + ev.title + (ev.detail ? ': ' + ev.detail : ''),
+        reference(ev.agent) + ' · ' + ev.title + (ev.detail ? ': ' + ev.detail : ''),
         'tool',
         [ev.agent],
         ev.agent + '|tool|' + ev.key,
       );
       transcript.track(ev.agent, entry);
-      const node = h('div', 'tool drv-' + driverOf(ev.agent));
-      node.append(h('span', 'status', '…'), document.createTextNode(entry.text));
-      mount(entry, node);
+      const node = h('div', 'tool');
+      applyAgentAccent(node, ev.agent);
+      const actor = document.createTextNode('');
+      const refresh = () => {
+        actor.textContent = label(ev.agent) + ' \u00b7 ';
+        updateSearchText(entry);
+      };
+      refresh();
+      node.append(h('span', 'status', '\u2026'), actor, document.createTextNode(ev.title + (ev.detail ? ': ' + ev.detail : '')));
+      mount(entry, node, null, refresh);
       break;
     }
     case 'toolResult': {
@@ -344,6 +424,7 @@ export function handle(ev) {
       if (!ev.ok && ev.detail) {
         node.appendChild(h('span', 'err', ev.detail));
         transcript.update(entry, entry.text + ' ' + ev.detail);
+        updateSearchText(entry);
       }
       filterEntry(entry);
       break;
@@ -353,19 +434,19 @@ export function handle(ev) {
       for (const entry of entries) views.get(entry).node.classList.remove('streaming');
       groupTools(entries);
       const detail = !ev.ok && ev.detail ? ' · ' + ev.detail : '';
-      addLine(ev, 'turn', 'turn-end' + (ev.ok ? '' : ' fail'), label(ev.agent) + ' finished its turn' + detail, [ev.agent]);
+      addLine(ev, 'turn', 'turn-end' + (ev.ok ? '' : ' fail'), reference(ev.agent) + ' finished its turn' + detail, [ev.agent]);
       break;
     }
     case 'autoApproved':
-      addLine(ev, 'approval', 'tool ok', label(ev.agent) + ' auto-approved: ' + (ev.detail?.split('\n')[0] || ev.title), [ev.agent]);
+      addLine(ev, 'approval', 'tool ok', reference(ev.agent) + ' auto-approved: ' + (ev.detail?.split('\n')[0] || ev.title), [ev.agent]);
       break;
     case 'approval':
       renderApproval(ev);
-      addLine(ev, 'approval', 'sys', label(ev.agent) + ' · ' + ev.title + ' · waiting for approval', [ev.agent]);
+      addLine(ev, 'approval', 'sys', reference(ev.agent) + ' · ' + ev.title + ' · waiting for approval', [ev.agent]);
       break;
     case 'needRole':
       renderNeedRole(ev);
-      addLine(ev, 'approval', 'sys', label(ev.agent) + ' asked for ' + ev.roleName, [ev.agent]);
+      addLine(ev, 'approval', 'sys', reference(ev.agent) + ' asked for ' + ev.roleName, [ev.agent]);
       break;
     case 'milestonePlanProposed':
     case 'milestoneCommitProposed': {
@@ -377,11 +458,11 @@ export function handle(ev) {
     }
     case 'recommendRoles':
       renderRoleRecommendation(ev);
-      addLine(ev, 'approval', 'sys', label(ev.agent) + ' suggested additional roles', [ev.agent]);
+      addLine(ev, 'approval', 'sys', reference(ev.agent) + ' suggested additional roles', [ev.agent]);
       break;
     case 'finalReview':
       renderFinalReview(ev);
-      addLine(ev, 'approval', 'sys', label(ev.agent) + ' requested final confirmation', [ev.agent]);
+      addLine(ev, 'approval', 'sys', reference(ev.agent) + ' requested final confirmation', [ev.agent]);
       break;
     case 'finalReviewClosed':
     case 'needRoleClosed':
@@ -405,7 +486,7 @@ export function handle(ev) {
     }
     case 'tasksCancelled':
       if (!ev.taskIds?.length) break;
-      addLine(ev, 'system', 'sys', label(ev.agent) + ' · ' + ev.taskIds.length + ' task(s) interrupted', [ev.agent]);
+      addLine(ev, 'system', 'sys', reference(ev.agent) + ' · ' + ev.taskIds.length + ' task(s) interrupted', [ev.agent]);
       break;
     case 'batchProgress':
       addLine(ev, 'system', 'sys', ev.text, [ev.agent, ...ev.pending]);
@@ -417,7 +498,7 @@ export function handle(ev) {
         ev,
         ev.kind === 'error' ? 'error' : 'system',
         ev.kind === 'error' ? 'sys error' : 'sys',
-        (ev.agent ? label(ev.agent) + ': ' : '') + ev.text,
+        (ev.agent ? reference(ev.agent) + ': ' : '') + ev.text,
         ev.agent ? [ev.agent] : [],
       );
       break;

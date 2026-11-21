@@ -25,11 +25,19 @@
   --color-warning-border: #8a6d2f;
   --color-alert: #ff9c7a;
 
-  /* one accent per provider */
-  --color-claude: #e08a5a;
-  --color-codex: #5aa7e0;
-  --color-opencode: #b48ae0;
-  --color-fake: #9097a6;
+  --color-link: #5aa7e0;
+
+  /* Conversation agent accents. */
+  --color-agent-1: #f0a37d;
+  --color-agent-2: #75bafa;
+  --color-agent-3: #c79cf4;
+  --color-agent-4: #76c9a2;
+  --color-agent-5: #e5bf63;
+  --color-agent-6: #f598bb;
+  --color-agent-7: #73cbd4;
+  --color-agent-8: #bdcf79;
+  --agent-accent-lightness: 0.78;
+  --agent-accent-chroma: 0.12;
 
   /* type */
   --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -68,6 +76,17 @@
     --color-border: #d6dae2;
     --color-text: #1d2129;
     --color-text-muted: #5d6573;
+    --color-link: #215e98;
+    --color-agent-1: #8d431a;
+    --color-agent-2: #215e98;
+    --color-agent-3: #66399a;
+    --color-agent-4: #216946;
+    --color-agent-5: #735410;
+    --color-agent-6: #98345f;
+    --color-agent-7: #20676f;
+    --color-agent-8: #53671c;
+    --agent-accent-lightness: 0.43;
+    --agent-accent-chroma: 0.13;
     --color-success: #2e7d32;
     --color-success-bg: #eaf6ec;
     --color-success-border: #9bd1a1;

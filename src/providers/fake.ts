@@ -8,6 +8,7 @@ interface FakeRule {
   agent?: string;
   match?: string;
   reply: string;
+  streamAt?: number;
   /** Report a successful Edit tool call, or a failed one for regression tests. */
   edit?: boolean | 'failed';
   /** Write [file, content] in the working folder before the reply, without a tool event (like a shell edit). */
@@ -104,7 +105,13 @@ export class FakeAgent extends EventEmitter implements Agent {
         if (rule?.writeFile) fs.writeFileSync(path.join(this.cwd, rule.writeFile[0]), rule.writeFile[1]);
         this.tokens += 100;
         this.emitEvent('usage', { tokens: this.tokens });
-        this.emitEvent('text', { key: `${this.id}-${n}`, text: reply, final: true });
+        const key = this.id + '-' + n;
+        if (rule?.streamAt !== undefined) {
+          this.emitEvent('delta', { key, text: reply.slice(0, rule.streamAt) });
+          this.emitEvent('delta', { key, text: reply.slice(rule.streamAt) });
+        } else {
+          this.emitEvent('text', { key, text: reply, final: true });
+        }
         this.busyCount -= 1;
         this.emitEvent('turnEnd', { taskIds, text: reply, ok: true });
         this.emitEvent('status', { busy: this.busy });

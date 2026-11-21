@@ -6,11 +6,11 @@ import type { Role, RoutingMode } from './types.ts';
 export const ROUTING_MODES: Record<RoutingMode, { label: string; rule: string }> = {
   orchestrator: {
     label: 'Orchestrator + mentions',
-    rule: 'The orchestrator delegates with @AgentName. Every other agent replies to the orchestrator only. When the orchestrator writes no @mention, its message goes to the user.',
+    rule: 'The orchestrator delegates with the @id shown in [Team]. Every other agent replies to the orchestrator only. When the orchestrator writes no @mention, its message goes to the user.',
   },
   mentions: {
     label: 'Free mentions',
-    rule: 'Any agent can hand work to another with @AgentName. A reply without @mention goes back to whoever sent you the last message; if that was the user, it goes to the user.',
+    rule: 'Any agent can hand work to another with the @id shown in [Team]. A reply without @mention goes back to whoever sent you the last message; if that was the user, it goes to the user.',
   },
   pipeline: {
     label: 'Fixed pipeline',
@@ -48,8 +48,8 @@ export function buildInstructions({ name, role, routingMode, workDir, userName, 
     '',
     'How the conversation works:',
     `- ${userName} watches the whole conversation live and may write to any agent at any time.`,
-    `- Messages start with a header such as "[Message from ${userName}]" or "[Message from <AgentName>]".`,
-    '- "[Team]" blocks list the current agents with their roles and models. Use those exact names in @mentions.',
+    `- Messages start with a header such as "[Message from ${userName}]" or "[Message from @a2]".`,
+    '- "[Team]" blocks list the current agents with stable @ids, names, roles and models. Use those exact @ids when delegating.',
     `- Routing: ${mode.rule}`,
     '- Write your final message for its reader: short, concrete, with file paths and what you need.',
     `- When the whole task is complete, or only ${userName} can decide something, address ${userName} directly and end with a line containing only [[DONE]]. This stops the automatic hand-offs.`,
@@ -76,14 +76,14 @@ export function rosterText(team: RosterMember[], selfId: string, routingMode: st
   const unavailable = team.filter((a) => a.status && a.status.availability !== 'ready');
   const lines = ready.map(
     (a) =>
-      `- @${a.name}: ${a.roleName} (${edits[a.canEdit || 'all'] || 'edits files'})${a.model ? `, model ${a.model}` : ''}${a.id === selfId ? ' (you)' : ''}`,
+      `- @${a.id}: ${a.name} (${a.roleName}, ${edits[a.canEdit || 'all'] || 'edits files'})${a.model ? `, model ${a.model}` : ''}${a.id === selfId ? ' (you)' : ''}`,
   );
   const mode = ROUTING_MODES[routingMode as RoutingMode] || ROUTING_MODES.orchestrator;
   const noEditor = !ready.some((a) => a.canEdit === 'all');
   const note = noEditor
     ? '\nNo agent in this team can edit production code. Do not try to work around it: plan and review only, and tell the user to add a Coder (or another role that edits files) when the task needs code changes.'
     : '';
-  const blocked = unavailable.map((a) => '@' + a.name + ' (' + (a.status?.reason || a.status?.availability) + ')');
+  const blocked = unavailable.map((a) => '@' + a.id + ' (' + a.name + ': ' + (a.status?.reason || a.status?.availability) + ')');
   const warning = blocked.length ? '\nUnavailable: ' + blocked.join(', ') + '. Do not delegate to these agents.' : '';
   return '[Team]\n' + lines.join('\n') + warning + '\nRouting: ' + mode.label + '.' + note;
 }

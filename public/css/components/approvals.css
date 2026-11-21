@@ -1,6 +1,6 @@
 /* Cards pinned above the message box: approvals, missing roles and the final confirmation. */
 .approval {
-  --accent: var(--color-warning);
+  --accent: var(--agent-accent, var(--color-warning));
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-warning-border);
   border-radius: var(--radius-lg);
@@ -10,18 +10,6 @@
 .approval .title {
   color: var(--accent);
   font-weight: 600;
-}
-
-.approval.drv-claude {
-  --accent: var(--color-claude);
-}
-
-.approval.drv-codex {
-  --accent: var(--color-codex);
-}
-
-.approval.drv-opencode {
-  --accent: var(--color-opencode);
 }
 
 .approval pre {

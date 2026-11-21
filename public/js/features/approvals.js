@@ -1,8 +1,32 @@
+import { applyAgentAccent } from '../core/agent-accent.js';
 // Cards pinned above the message box: approvals, missing roles and the final confirmation.
-import { approvals, driverOf, label, store } from '../core/store.js';
-import { $, h, renderMarkdown, time } from '../core/dom.js';
+import { approvals, findMentionAgent, label, store } from '../core/store.js';
+import { $, appendMentions, h, renderMarkdown, time } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { addSys } from './conversation-log.js';
+
+const nameViews = new WeakMap();
+
+function agentText(tag, className, content, markdown = false) {
+  const el = h(tag, className);
+  el.classList.add('agent-name-text');
+  const refresh = () => {
+    const text = content();
+    if (markdown) renderMarkdown(el, text, findMentionAgent);
+    else {
+      el.replaceChildren();
+      appendMentions(el, text, findMentionAgent);
+    }
+  };
+  nameViews.set(el, refresh);
+  refresh();
+  return el;
+}
+
+export function refreshApprovalNames() {
+  for (const element of $('pending').querySelectorAll('.agent-name-text')) nameViews.get(element)?.();
+}
+
 /** Pending approvals stay pinned above the message box until answered. */
 export function updatePending() {
   const n = approvals.size;
@@ -23,11 +47,9 @@ $('pendingCount').onclick = () => {
 export function renderFinalReview(ev) {
   const el = h('div', 'approval final-review');
   el.dataset.title = 'Final confirmation';
-  el.appendChild(h('div', 'title', `${label(ev.agent)} finished the work · ${time(ev.at)}`));
+  el.appendChild(agentText('div', 'title', () => `${label(ev.agent)} finished the work · ${time(ev.at)}`));
   if (ev.summary) {
-    const body = h('div', 'body');
-    renderMarkdown(body, ev.summary.length > 1500 ? `${ev.summary.slice(0, 1500)}…` : ev.summary);
-    el.appendChild(body);
+    el.appendChild(agentText('div', 'body', () => (ev.summary.length > 1500 ? `${ev.summary.slice(0, 1500)}…` : ev.summary), true));
   }
   if (ev.project?.length || ev.tests?.length) {
     const evidence = h('details');
@@ -89,14 +111,20 @@ export function renderFinalReview(ev) {
 export function renderNeedRole(ev) {
   const el = h('div', 'approval need-role');
   el.dataset.title = `Missing role: ${ev.roleName}`;
-  el.appendChild(h('div', 'title', `${label(ev.agent)} needs a ${ev.roleName}, and nobody in the team has that role · ${time(ev.at)}`));
+  el.appendChild(
+    agentText('div', 'title', () => `${label(ev.agent)} needs a ${ev.roleName}, and nobody in the team has that role · ${time(ev.at)}`),
+  );
   el.appendChild(h('div', 'hint', 'The relay is paused until you choose. The default choice can be set in Settings.'));
   const actions = h('div', 'actions');
   const add = h('button', 'primary', `Add ${ev.roleName} (${ev.suggestion.driverLabel} · ${ev.suggestion.modelLabel})`);
   add.onclick = () => api('resolveRole', { requestId: ev.requestId, action: 'add' }).catch((e) => addSys(e.message, true));
   actions.appendChild(add);
   if (ev.closest) {
-    const near = h('button', null, `Continue with ${ev.closest.name} (${ev.closest.roleName}, closest)`);
+    const near = agentText(
+      'button',
+      null,
+      () => `Continue with ${findMentionAgent(ev.closest.id)?.name || ev.closest.name} (${ev.closest.roleName}, closest)`,
+    );
     near.onclick = () => api('resolveRole', { requestId: ev.requestId, action: 'closest' }).catch((e) => addSys(e.message, true));
     actions.appendChild(near);
   }
@@ -112,7 +140,7 @@ export function renderNeedRole(ev) {
 export function renderRoleRecommendation(ev) {
   const el = h('div', 'approval');
   el.dataset.title = 'Role recommendation';
-  el.append(h('div', 'title', label(ev.agent) + ' recommends adding roles'));
+  el.append(agentText('div', 'title', () => label(ev.agent) + ' recommends adding roles'));
   const fields = h('div', 'form');
   const choices = ev.roles.map(({ id, name, reason, suggestion }) => {
     const check = h('input');
@@ -121,7 +149,10 @@ export function renderRoleRecommendation(ev) {
     const row = h('label', 'check');
     const star = suggestion.model ? ' \u2605' : '';
     row.append(check, h('span', null, name + ' (' + suggestion.driverLabel + ' \u00b7 ' + suggestion.modelLabel + star + ')'));
-    fields.append(row, h('div', 'hint', reason));
+    fields.append(
+      row,
+      agentText('div', 'hint', () => reason),
+    );
     return { id, check };
   });
   el.append(fields);
@@ -149,18 +180,19 @@ export function renderRoleRecommendation(ev) {
 }
 
 export function renderApproval(ev) {
-  const el = h('div', `approval drv-${driverOf(ev.agent)}`);
+  const el = h('div', 'approval');
+  applyAgentAccent(el, ev.agent);
   el.dataset.title = ev.title;
   el.appendChild(
-    h(
+    agentText(
       'div',
       'title',
-      `${ev.title} · ${time(ev.at)}${ev.expiresAt ? ` · declined automatically at ${time(ev.expiresAt)} if unanswered` : ''}`,
+      () => `${ev.title} · ${time(ev.at)}${ev.expiresAt ? ` · declined automatically at ${time(ev.expiresAt)} if unanswered` : ''}`,
     ),
   );
   if (ev.warning) el.appendChild(h('div', 'warning', `⚠ ${ev.warning}`));
   const scope = ev.decisions.includes('acceptForSession') ? 'Once or for this session' : 'Once';
-  el.appendChild(h('div', 'hint', label(ev.agent) + ' · ' + scope + (ev.cwd ? ' · ' + ev.cwd : '')));
+  el.appendChild(agentText('div', 'hint', () => label(ev.agent) + ' · ' + scope + (ev.cwd ? ' · ' + ev.cwd : '')));
   if (ev.detail) {
     const details = h('details');
     details.append(h('summary', null, 'Technical details'), h('pre', null, ev.detail));

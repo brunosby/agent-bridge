@@ -1,4 +1,5 @@
 // The team: creating, adding, removing and reconfiguring agents; role profiles; model lists.
+import { flushMentionStreams } from './mention-stream.ts';
 import type { Agent, AgentEvent, AgentSpec, Conversation, ModelInfo, TaskEvent } from '../core/types.ts';
 import type { RuntimeStatus } from '../providers/accounts.ts';
 import { S } from './state.ts';
@@ -85,14 +86,33 @@ export function statusFor(owner: Conversation, id: string) {
   return statusOf(owner.agents[id], providerBlocked(owner.team.find((spec) => spec.id === id)?.driver));
 }
 
-export function uniqueName(base: string): string {
+const RESERVED_AGENT_NAME = /^a\d+$/i;
+const MAX_AGENT_NAME = 24;
+
+function nameTaken(name: string, except?: string): boolean {
+  const key = name.toLowerCase();
+  return S.conv.pendingAgentNames.has(key) || S.conv.team.some((member) => member.id !== except && member.name.toLowerCase() === key);
+}
+
+export function uniqueName(base: string, preserveLegacyName = false): string {
   const clean =
     String(base || 'Agent')
       .replace(/[^\w-]/g, '')
-      .slice(0, 24) || 'Agent';
-  const taken = new Set(S.conv.team.map((a) => a.name.toLowerCase()));
-  if (!taken.has(clean.toLowerCase())) return clean;
-  for (let i = 2; ; i++) if (!taken.has(`${clean}${i}`.toLowerCase())) return `${clean}${i}`;
+      .slice(0, MAX_AGENT_NAME) || 'Agent';
+  if (!nameTaken(clean) && (preserveLegacyName || !RESERVED_AGENT_NAME.test(clean))) return clean;
+  for (let i = 2; ; i++) {
+    const suffix = '-' + i;
+    const name = clean.slice(0, MAX_AGENT_NAME - suffix.length) + suffix;
+    if (!nameTaken(name)) return name;
+  }
+}
+
+function validAgentName(value: string, except?: string): string {
+  const name = value.trim();
+  if (!/^[\w-]{1,24}$/.test(name)) throw new Error('Enter an agent name of 1 to 24 letters, digits, underscores or hyphens.');
+  if (RESERVED_AGENT_NAME.test(name)) throw new Error('Names such as a2 are reserved for agent IDs.');
+  if (nameTaken(name, except)) throw new Error('An agent already uses that name.');
+  return name;
 }
 
 export function defaultName(driver: string, role: string): string {
@@ -197,8 +217,8 @@ export async function addAgent(
   if (!Object.hasOwn(DRIVERS, driver)) throw new Error(`unknown provider ${driver}`);
   if (!Object.hasOwn(S.roles, role)) throw new Error(`unknown role ${role}`);
   const spec: AgentSpec = {
-    id: `a${++S.conv.nextAgent}`,
-    name: uniqueName(name || defaultName(driver, role)),
+    name: name === undefined ? uniqueName(defaultName(driver, role)) : validAgentName(name),
+    id: `a${++owner.nextAgent}`,
     driver,
     role,
     model: model && model !== 'default' ? model : null,
@@ -206,13 +226,17 @@ export async function addAgent(
     bypass: bypass ?? Boolean(setting('bypassNewAgents')),
   };
   if (worktree) {
-    const wt = await createWorktree({ repoDir: S.conv.workDir, conversationId: S.conv.id, agentName: spec.name });
+    const key = spec.name.toLowerCase();
+    owner.pendingAgentNames.add(key);
+    const wt = await createWorktree({ repoDir: owner.workDir, conversationId: owner.id, agentName: spec.name }).finally(() =>
+      owner.pendingAgentNames.delete(key),
+    );
     if (S.conv !== owner) throw new Error('conversation changed while creating the worktree');
     spec.cwd = wt.path;
     spec.worktree = wt;
     captureProject(S.conv, wt.path, true);
     publish({ kind: 'projectBaseline', project: S.conv.project });
-    publish({ kind: 'system', text: `${spec.name} works in its own git worktree: ${wt.path} (branch ${wt.branch}).` });
+    publish({ kind: 'system', text: `@${spec.id} works in its own git worktree: ${wt.path} (branch ${wt.branch}).` });
   }
   S.conv.team.push(spec);
   S.conv.rosterVersion++;
@@ -220,7 +244,7 @@ export async function addAgent(
   const ready = startAgent(agent);
   if (waitUntilReady) await ready;
   if (S.conv !== owner || owner.agents[spec.id] !== agent) return spec;
-  publish({ kind: 'system', text: `Added ${spec.name} (${DRIVERS[driver].label}, ${S.roles[role].name}).` });
+  publish({ kind: 'system', text: `Added @${spec.id} (${DRIVERS[driver].label}, ${S.roles[role].name}).` });
   publishState();
   return spec;
 }
@@ -230,7 +254,9 @@ export async function removeAgent(id: string): Promise<void> {
   const idx = S.conv.team.findIndex((a) => a.id === id);
   if (idx < 0) throw new Error('unknown agent');
   if (S.conv.team.length === 1) throw new Error('a conversation needs at least one agent');
-  const [spec] = S.conv.team.splice(idx, 1);
+  flushMentionStreams(owner, id);
+  const [spec] = owner.team.splice(idx, 1);
+  owner.retiredAgents.set(id, { id, name: spec.name, driver: spec.driver, role: spec.role });
   const agent = S.conv.agents[id];
   revokeReviewClient(owner, id);
   delete S.conv.agents[id];
@@ -240,20 +266,15 @@ export async function removeAgent(id: string): Promise<void> {
   S.conv.rosterVersion++;
   await agent?.shutdown().catch(() => {});
   if (S.conv !== owner) return;
-  publish({ kind: 'system', text: `Removed ${spec.name}. Its session stays saved in the log.` });
+  publish({ kind: 'system', text: `Removed @${spec.id}. Its session stays saved in the log.` });
   publishState();
 }
 
-export async function setRole(id: string, roleId: string): Promise<void> {
-  const spec = S.conv.team.find((a) => a.id === id);
-  if (!spec || !Object.hasOwn(S.roles, roleId)) throw new Error('unknown agent or role');
-  spec.role = roleId;
-  const role = S.roles[roleId];
-  const agent = S.conv.agents[id];
-  // New instructions for drivers that read them at start; a message for the session that is running.
+function refreshAgentInstructions(spec: AgentSpec, agent: Agent): void {
+  const role = S.roles[spec.role];
   if (spec.driver === 'claude') {
     fs.writeFileSync(
-      path.join(S.conv.runDir, `instructions-${id}.txt`),
+      path.join(S.conv.runDir, `instructions-${spec.id}.txt`),
       buildInstructions({
         name: spec.name,
         role,
@@ -275,10 +296,43 @@ export async function setRole(id: string, roleId: string): Promise<void> {
       }),
     );
   }
+}
+
+export function renameAgent(id: string, value: string): void {
+  const owner = S.conv;
+  const spec = owner.team.find((member) => member.id === id);
+  const agent = owner.agents[id];
+  if (!spec || !agent) throw new Error('unknown agent');
+  const name = validAgentName(value, id);
+  if (spec.name === name) return;
+  refreshAgentInstructions({ ...spec, name }, agent);
+  spec.name = agent.name = name;
+  owner.rosterVersion++;
+  owner.pendingRoleNote[id] = [
+    owner.pendingRoleNote[id],
+    '[Name update] Your display name is now ' + name + '. Your mention ID remains @' + id + '.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  publish({ kind: 'system', text: 'Renamed @' + id + '.', agent: id });
+  publishState();
+  void agent.syncThreadName?.().catch((error: unknown) => {
+    if (S.conv === owner && owner.agents[id] === agent)
+      publish({ kind: 'info', agent: id, text: 'Could not update the Codex thread title: ' + String(error) });
+  });
+}
+
+export async function setRole(id: string, roleId: string): Promise<void> {
+  const spec = S.conv.team.find((a) => a.id === id);
+  if (!spec || !Object.hasOwn(S.roles, roleId)) throw new Error('unknown agent or role');
+  spec.role = roleId;
+  const role = S.roles[roleId];
+  const agent = S.conv.agents[id];
+  refreshAgentInstructions(spec, agent);
   await agent.reconfigure({ readOnly: role.canEdit === 'none', maxTurns: role.maxTurns || null, ...roleProfile(roleId) });
   S.conv.pendingRoleNote[id] = `[Role change] From now on your role is ${role.name}. ${role.summary}\n${role.instructions}`;
   S.conv.rosterVersion++;
-  publish({ kind: 'system', text: `${spec.name} is now ${role.name}.` });
+  publish({ kind: 'system', text: `@${spec.id} is now ${role.name}.` });
   publishState();
 }
 

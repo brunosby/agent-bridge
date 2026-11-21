@@ -119,7 +119,7 @@ test('automatic milestones need a passing check and approval from any configured
         reply: withReviewer ? '@Rev review model' : 'Finished.\n[[MILESTONE_DONE: 1]]',
         writeFile: scenario === 'no changes' ? undefined : ['model.txt', 'step'],
       },
-      { agent: 'Lead', match: 'Message from Rev', reply: 'Finished.\n[[MILESTONE_DONE: 1]]' },
+      { agent: 'Lead', match: 'Message from @a2', reply: 'Finished.\n[[MILESTONE_DONE: 1]]' },
       { agent: 'Lead', match: 'large objective', reply: proposal },
       { agent: 'Rev', reply: scenario === 'reviewer approved' ? 'APPROVED' : 'CHANGES REQUESTED\n- incomplete work' },
     ];

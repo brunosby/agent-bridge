@@ -60,7 +60,7 @@ test('prompts: the team list says when nobody can edit code', () => {
     'a1',
     'orchestrator',
   );
-  assert.match(t, /@Lead: Orchestrator \(read-only\).*\(you\)/);
+  assert.match(t, /@a1: Lead \(Orchestrator, read-only\).*\(you\)/);
   assert.match(t, /No agent in this team can edit production code/);
 });
 

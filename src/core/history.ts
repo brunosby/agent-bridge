@@ -1,7 +1,7 @@
 import { taskIdsFromLog } from './task-events.ts';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AgentSpec, BridgeEvent } from './types.ts';
+import type { AgentIdentity, AgentSpec, BridgeEvent } from './types.ts';
 
 /** One saved conversation, as shown in the Conversations list. */
 export interface ConversationSummary {
@@ -138,12 +138,44 @@ export function removeConversation(logsDir: string, id: string): void {
  * Load a conversation for replay: the events the page shows (without old state snapshots and CLI
  * noise), plus closing events for anything that was still open when the app stopped.
  */
-export function loadConversation(logsDir: string, id: string): ConversationSummary & { events: BridgeEvent[]; lastSeq: number } {
+export function loadConversation(
+  logsDir: string,
+  id: string,
+): ConversationSummary & {
+  events: BridgeEvent[];
+  lastSeq: number;
+  lastAgentId: number;
+  retiredAgents: Map<string, AgentIdentity>;
+} {
   if (!ID_PATTERN.test(id)) throw new Error('invalid conversation id');
   const file = path.join(logsDir, id, 'transcript.jsonl');
   if (!fs.existsSync(file)) throw new Error(`conversation ${id} not found`);
   const all = readEvents(file);
   const summary = summarize(id, all);
+
+  let lastAgentId = 0;
+  function rememberId(id: unknown) {
+    if (typeof id !== 'string' || !/^a\d+$/.test(id)) return;
+    const ordinal = Number(id.slice(1));
+    if (Number.isSafeInteger(ordinal)) lastAgentId = Math.max(lastAgentId, ordinal);
+  }
+
+  const retiredAgents = new Map<string, AgentIdentity>();
+  for (const event of all) {
+    rememberId(event.agent);
+    if (event.kind !== 'state') continue;
+    if (Number.isSafeInteger(event.lastAgentId)) lastAgentId = Math.max(lastAgentId, event.lastAgentId);
+    for (const members of [event.knownAgents, event.team]) {
+      if (!Array.isArray(members)) continue;
+      for (const member of members) {
+        if (!member || typeof member.id !== 'string' || typeof member.name !== 'string') continue;
+        const { id, name, driver, role } = member;
+        rememberId(id);
+        retiredAgents.set(id, { id, name, driver, role });
+      }
+    }
+  }
+  for (const spec of summary.team) retiredAgents.delete(spec.id);
   const events = all.filter((e) => typeof e.seq === 'number' && e.kind !== 'state' && e.kind !== 'stderr');
   let lastSeq = events.reduce((m, e) => Math.max(m, e.seq ?? 0), 0);
   const lastAt = summary.lastAt || Date.now();
@@ -200,5 +232,5 @@ export function loadConversation(logsDir: string, id: string): ConversationSumma
   for (const [agent, taskIds] of interrupted) {
     events.push({ seq: ++lastSeq, at: lastAt, kind: 'tasksCancelled', agent, taskIds });
   }
-  return { ...summary, events, lastSeq };
+  return { ...summary, events, lastSeq, lastAgentId, retiredAgents };
 }

@@ -56,8 +56,8 @@ test('review loop stops after the configured number of rounds', async () => {
     settings: { maxReviewRounds: 1, maxHops: 50 },
     rules: [
       { agent: 'Lead', match: 'limit \\(1\\) reached', reply: 'Open findings remain.\n[[DONE]]' },
-      { agent: 'Lead', match: 'Message from Rev', reply: '@Dev fix the findings' },
-      { agent: 'Lead', match: 'Message from Dev', reply: '@Rev review it' },
+      { agent: 'Lead', match: 'Message from @a3', reply: '@Dev fix the findings' },
+      { agent: 'Lead', match: 'Message from @a2', reply: '@Rev review it' },
       { agent: 'Lead', match: 'Message from Tester', reply: '@Dev build it' },
       { agent: 'Dev', reply: 'done', edit: true },
       { agent: 'Rev', reply: 'CHANGES REQUESTED\n- fix x' },

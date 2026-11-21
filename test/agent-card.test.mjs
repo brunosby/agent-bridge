@@ -25,7 +25,7 @@ test('agent card shows the role and a short model name, with the full id and eff
     store.state = { tasks: [] };
     store.catalog.roles = [{ id: 'orchestrator', name: 'Orchestrator' }];
     const agent = {
-      id: 'agent',
+      id: 'a1',
       driver: 'claude',
       name: 'Claude',
       role: 'orchestrator',
@@ -92,6 +92,49 @@ test('agent card shows the role and a short model name, with the full id and eff
       [...effort.options].map((o) => o.value),
       ['default', 'low', 'high'],
     );
+
+    const { handle } = await import('../public/js/features/conversation-log.js');
+    const lead = { ...codex, id: 'a1', name: 'Lead', model: 'gpt-6.2-sol', available: true };
+    const peer = { ...lead, id: 'a2', name: 'Peer' };
+    const tone = (node) => node.style.getPropertyValue('--agent-accent');
+    const state = {
+      kind: 'state',
+      conversationId: 'test',
+      team: [lead, peer],
+      knownAgents: [],
+      relay: { auto: false, hops: 0, maxHops: 8 },
+      routingMode: 'orchestrator',
+      totalTokens: 0,
+    };
+    handle(state);
+    assert.notEqual(tone(cards.a1.el), tone(cards.a2.el));
+    const peerColor = tone(cards.a2.el);
+    handle({ kind: 'delta', agent: 'a1', key: 'stream', text: '@Pe' });
+    handle({ kind: 'delta', agent: 'a1', key: 'stream', text: 'er draft' });
+    handle({ kind: 'text', agent: 'a1', key: 'stream', text: '@a2 final answer', final: true });
+    handle({ kind: 'delta', agent: 'a1', key: 'stream', text: ' stale text' });
+    handle({ kind: 'text', agent: 'a2', key: 'second', text: 'second message', final: true });
+    handle({ kind: 'replayComplete' });
+    const log = window.document.getElementById('log');
+    const messages = [...log.querySelectorAll('.msg.agent')];
+    assert.deepEqual(messages.map(tone), [tone(cards.a1.el), peerColor]);
+    assert.match(messages[0].textContent, /@Peer final answer/);
+    assert.doesNotMatch(messages[0].textContent, /draft|stale/);
+    assert.equal(tone(messages[0].querySelector('.mention')), peerColor);
+
+    const renamed = { ...peer, name: 'Quality', model: 'default' };
+    handle({ ...state, team: [lead, renamed] });
+    handle({ kind: 'replayComplete' });
+    assert.equal(tone(cards.a2.el), peerColor);
+    assert.equal(messages[0].querySelector('.mention').textContent, '@Quality');
+    assert.equal(messages[1].querySelector('.who').textContent, 'Quality');
+    assert.equal(window.document.querySelector('#logAgent option[value="a2"]').textContent, 'Quality');
+
+    handle({ ...state, team: [lead], knownAgents: [{ ...renamed, removed: true }] });
+    handle({ kind: 'replayComplete' });
+    const removed = messages[0].querySelector('.mention');
+    assert.equal(removed.textContent, '@Quality (removed)');
+    assert.equal(tone(removed), 'var(--color-text-muted)');
   } finally {
     await window.happyDOM.close();
   }

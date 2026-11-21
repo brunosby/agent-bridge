@@ -2,7 +2,7 @@ import { cancelMilestoneDecision, hasActiveMilestones, milestoneInstructions } f
 // Routing: who receives each message, review rounds, missing roles, delivery to agents.
 import type { AgentSpec, BatchEvent, Conversation, RoleDecisionEvent, RoleRecommendation, TurnEnded } from '../core/types.ts';
 import { S } from './state.ts';
-import { agentName, logError, publish, publishState } from './events.ts';
+import { logError, publish, publishState } from './events.ts';
 import { setting } from '../config/settings.ts';
 import { DONE_MARKER, relay } from './state.ts';
 import { checkTokenLimit } from './conversation.ts';
@@ -14,7 +14,7 @@ import { deliver } from './delivery.ts';
 import { driverModelCache } from './state.ts';
 import { isRecommended } from '../core/roles.ts';
 import { randomUUID } from 'node:crypto';
-import { resolveRecipients } from '../core/recipients.ts';
+import { mentionedAgents, resolveRecipients, toMentionIds, validateMentionChecks } from '../core/recipients.ts';
 import { changeFingerprint } from '../workspace/git-context.ts';
 import { publishFinalReview } from './final-review.ts';
 export function orchestratorId() {
@@ -23,13 +23,7 @@ export function orchestratorId() {
 
 /** @mentions of team members in a message, in order, without duplicates. */
 export function mentions(text: string, selfId: string | null): string[] {
-  const byName = new Map(S.conv.team.map((a) => [a.name.toLowerCase(), a.id]));
-  const out: string[] = [];
-  for (const m of String(text).matchAll(/@([\w-]+)/g)) {
-    const id = byName.get(m[1].toLowerCase());
-    if (id && id !== selfId && !out.includes(id)) out.push(id);
-  }
-  return out;
+  return mentionedAgents(text, S.conv.team).filter((id) => id !== selfId);
 }
 
 export function nextInOrder(fromId: string, wrap: boolean): string | null {
@@ -75,7 +69,7 @@ export function reviewNote(fromId: string, text: string): string {
   if (S.conv.reviewRounds > max) {
     publish({
       kind: 'system',
-      text: `The Reviewer still requests changes after ${max} fix round(s). ${agentName(orchestratorId())} will report to you instead of starting another round.`,
+      text: `The Reviewer still requests changes after ${max} fix round(s). @${orchestratorId()} will report to you instead of starting another round.`,
     });
     logError('bridge', `review round limit (${max}) reached`);
     return `${text}\n\n[Agent Bridge: review round limit (${max}) reached. Do not send this back to the coder. Summarize for the user what was done and the open findings, and end with [[DONE]].]`;
@@ -94,14 +88,14 @@ function completeBatch(owner: Conversation, agent: string, taskId: string, text:
       kind: 'batchProgress',
       agent,
       pending,
-      text: agentName(agent) + ' finished. Waiting for ' + pending.map(agentName).join(', ') + '.',
+      text: '@' + agent + ' finished. Waiting for ' + pending.map((id) => '@' + id).join(', ') + '.',
     } satisfies BatchEvent);
     return;
   }
   publish({ kind: 'batchCompleted', agents: batch.results.map((part) => part.from) } satisfies BatchEvent);
   if (!relay.auto || owner.relay.halted || checkTokenLimit() || !canReceiveWork(statusFor(owner, orch))) return;
   owner.relay.hops += 1;
-  const body = batch.results.map((item) => '[Message from ' + agentName(item.from) + ']\n' + item.text).join('\n\n');
+  const body = batch.results.map((item) => '[Message from @' + item.from + ']\n' + item.text).join('\n\n');
   const intro = batch.results.length > 1 ? '[Results from ' + batch.results.length + ' agents]\n\n' : '';
   deliver(orch, intro + body, {
     from: batch.results[0].from,
@@ -138,7 +132,7 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
   }
   if (DONE_MARKER.test(text) && closes) {
     S.conv.relay.halted = true;
-    publish({ kind: 'system', text: `${agentName(fromId)} marked the work as done. Waiting for you.` });
+    publish({ kind: 'system', text: `@${fromId} marked the work as done. Waiting for you.` });
     // Final confirmation: the user approves the result or asks for changes, only when files changed.
     if (setting('finalConfirmation') && S.conv.routingMode === 'orchestrator') void offerFinalReview(fromId, text);
     S.conv.reviewRounds = 0;
@@ -151,7 +145,7 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
   const targets = requested.filter((id) => canReceiveWork(statusFor(owner, id)) && !owner.batch?.pending.has(id));
   const blocked = requested.filter((id) => !canReceiveWork(statusFor(owner, id)));
   const note = blocked.length
-    ? 'Unavailable: ' + blocked.map(agentName).join(', ') + '. Choose available agents or explain what cannot proceed.'
+    ? 'Unavailable: ' + blocked.map((id) => '@' + id).join(', ') + '. Choose available agents or explain what cannot proceed.'
     : '';
   if (note) publish({ kind: 'system', text: note });
   if (!targets.length) {
@@ -162,7 +156,7 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
       }
       return;
     }
-    publish({ kind: 'system', text: `${agentName(fromId)} replied to you.` });
+    publish({ kind: 'system', text: `@${fromId} replied to you.` });
     return;
   }
   if (S.conv.relay.hops + targets.length > relay.maxHops) {
@@ -180,7 +174,7 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
   }));
   for (const { to, taskId } of deliveries) {
     owner.relay.hops += 1;
-    deliver(to, '[Message from ' + agentName(fromId) + ']\n' + text, {
+    deliver(to, '[Message from @' + fromId + ']\n' + text, {
       from: fromId,
       sourceSeq: ev.sourceSeq ?? ev.seq,
       taskId,
@@ -277,7 +271,7 @@ export async function resolveRecommendedRoles(requestId: string, selected: strin
   owner.relay.halted = owner.relay.userPaused;
   const ready = owner.team
     .filter((agent) => canReceiveWork(statusFor(owner, agent.id)))
-    .map((agent) => '@' + agent.name + ' (' + agent.role + ')');
+    .map((agent) => '@' + agent.id + ' (' + agent.role + ')');
   const refused = request.roles.filter((role) => !choices.has(role.id)).map((role) => role.name);
   const failed = results.filter((result) => !result.ok).map((result) => result.role + ' (' + result.reason + ')');
   const added = results.filter((result) => result.ok).map((result) => result.role);
@@ -371,8 +365,9 @@ export async function resolveMissingRole(roleId: string, action: 'add' | 'closes
     if (S.conv !== owner || owner.roleDecisionVersion !== version) return;
     const status = statusFor(owner, spec.id);
     const message = canReceiveWork(status)
-      ? 'I added @' + spec.name + ' as ' + role.name + '. Continue and delegate that work to it.'
-      : spec.name +
+      ? 'I added @' + spec.id + ' as ' + role.name + '. Continue and delegate that work to it.'
+      : '@' +
+        spec.id +
         ' could not start as ' +
         role.name +
         ': ' +
@@ -387,7 +382,7 @@ export async function resolveMissingRole(roleId: string, action: 'add' | 'closes
       role.name +
       ' will be added. ' +
       (closest && closest.id !== orch
-        ? 'Give that work to @' + closest.name + ' (' + S.roles[closest.role]?.name + '), the closest role in the team.'
+        ? 'Give that work to @' + closest.id + ' (' + S.roles[closest.role]?.name + '), the closest role in the team.'
         : 'Handle that part yourself as far as your role allows, and tell me what is left.');
     publish({ kind: 'system', text: message });
     sendRoleDecision(owner, message);
@@ -435,30 +430,34 @@ export function userTargets(target?: string, prefix?: string) {
 
 const pendingUserSends = new WeakMap<Conversation, Promise<void>>();
 
-export async function userSend(text: string, target?: string): Promise<void> {
+export async function userSend(text: string, target?: string, mentionChecks?: unknown): Promise<void> {
   const owner = S.conv;
   const previous = pendingUserSends.get(owner);
   const delivery = (previous ?? Promise.resolve())
     .catch(() => {})
     .then(async () => {
       if (S.conv !== owner) throw new Error('conversation changed before sending');
-      const targets = userTargets(target, text);
+      validateMentionChecks(owner.team, mentionChecks);
+      const canonical = toMentionIds(text, owner.team);
+      if (!userTargets(target, canonical).length) throw new Error('no agent to receive this message');
+      const checkFiles = setting('finalConfirmation') && owner.routingMode === 'orchestrator';
+      const mark = checkFiles ? await captureChangeMark(owner) : null;
+      if (S.conv !== owner) throw new Error('conversation changed before sending');
+      validateMentionChecks(owner.team, mentionChecks);
+      const targets = userTargets(target, canonical);
       if (!targets.length) throw new Error('no agent to receive this message');
       clearRoleDecisions(owner, 'new message');
       cancelMilestoneDecision(owner, 'new message');
       owner.relay.userPaused = false;
-      const checkFiles = setting('finalConfirmation') && owner.routingMode === 'orchestrator';
-      const mark = checkFiles ? await captureChangeMark(owner) : null;
-      if (S.conv !== owner) throw new Error('conversation changed before sending');
-      owner.lastUserText = text;
+      owner.lastUserText = canonical;
       owner.changeMark = mark;
       owner.relay.hops = 0;
       owner.relay.halted = owner.relay.userPaused;
-      const source = publish({ kind: 'user', text, to: targets });
+      const source = publish({ kind: 'user', text: canonical, to: targets });
       const note = targets.length > 1 ? ' (sent to ' + targets.length + ' agents)' : '';
       for (const to of targets) {
         const instructions = to === orchestratorId() ? milestoneInstructions(owner) : '';
-        const message = '[Message from ' + setting('userName') + ']' + note + '\n' + text;
+        const message = '[Message from ' + setting('userName') + ']' + note + '\n' + canonical;
         deliver(to, instructions ? instructions + '\n\n' + message : message, { from: 'user', sourceSeq: source.seq });
       }
       publishState();
