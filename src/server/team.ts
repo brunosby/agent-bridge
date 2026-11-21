@@ -1,3 +1,4 @@
+import { projectSnapshot } from '../workspace/git-context.ts';
 // The team: creating, adding, removing and reconfiguring agents; role profiles; model lists.
 import { flushMentionStreams } from './mention-stream.ts';
 import type { Agent, AgentEvent, AgentSpec, Conversation, ModelInfo, TaskEvent } from '../core/types.ts';
@@ -209,6 +210,33 @@ export interface AddAgentInput {
   worktree?: boolean;
 }
 
+export async function validateAgentChoice(owner: Conversation, input: Record<string, unknown>): Promise<AddAgentInput> {
+  const { driver, role, name, model, effort, bypass, worktree } = input;
+  if (typeof driver !== 'string' || !Object.hasOwn(DRIVERS, driver)) throw new Error('Unknown provider.');
+  if (typeof role !== 'string' || !Object.hasOwn(S.roles, role)) throw new Error('Unknown role.');
+  if (name !== undefined && typeof name !== 'string') throw new Error('Invalid agent name.');
+  if (model != null && (typeof model !== 'string' || !model.trim())) throw new Error('Invalid model.');
+  if (effort != null && (typeof effort !== 'string' || !effort.trim())) throw new Error('Invalid effort.');
+  if (bypass !== undefined && typeof bypass !== 'boolean') throw new Error('Invalid bypass choice.');
+  if (worktree !== undefined && typeof worktree !== 'boolean') throw new Error('Invalid worktree choice.');
+  if (worktree && !projectSnapshot(owner.workDir)?.head) throw new Error('A separate worktree needs a Git repository with a commit.');
+
+  const modelId = model === 'default' ? null : model;
+  const level = effort === 'default' ? null : effort;
+  if (modelId || level) {
+    const models = await listDriverModels(driver);
+    const blocked = providerBlocked(driver);
+    if (blocked) throw new Error(blocked.detail || 'This provider is currently unavailable.');
+    const entry = modelId
+      ? models.find((item) => item.value === modelId)
+      : models.find((item) => item.value === 'default' || item.isDefault);
+    if (modelId && (!entry || entry.disabled)) throw new Error('The selected model is unavailable for this provider.');
+    if (level && !entry?.efforts?.includes(level)) throw new Error('The selected model does not support this effort.');
+  }
+  if (S.conv !== owner) throw new Error('The conversation changed while validating this agent.');
+  return { driver, role, name: name === undefined ? undefined : validAgentName(name), model: modelId, effort: level, bypass, worktree };
+}
+
 export async function addAgent(
   { driver, role, name, model, effort, bypass, worktree }: AddAgentInput,
   waitUntilReady = false,
@@ -228,7 +256,7 @@ export async function addAgent(
   if (worktree) {
     const key = spec.name.toLowerCase();
     owner.pendingAgentNames.add(key);
-    const wt = await createWorktree({ repoDir: owner.workDir, conversationId: owner.id, agentName: spec.name }).finally(() =>
+    const wt = await createWorktree({ repoDir: owner.workDir, conversationId: owner.id, agentId: spec.id }).finally(() =>
       owner.pendingAgentNames.delete(key),
     );
     if (S.conv !== owner) throw new Error('conversation changed while creating the worktree');

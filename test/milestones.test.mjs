@@ -1,3 +1,4 @@
+import { createWorktree } from '../src/workspace/worktree.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -221,5 +222,52 @@ test('a pending agent task blocks a milestone even when its files are ready', as
     assert.equal(project.git('rev-parse', 'HEAD'), project.head);
   } finally {
     await bridge.stop();
+  }
+});
+
+test('worktree identity uses the full conversation ID and the immutable agent ID', async () => {
+  const project = fixture();
+  try {
+    const first = await createWorktree({ repoDir: project.work, conversationId: '2026-11-21T17-06-11-100Z', agentId: 'a2' });
+    const sameConversation = await createWorktree({ repoDir: project.work, conversationId: '2026-11-21T17-06-11-100Z', agentId: 'a3' });
+    const sameSecond = await createWorktree({ repoDir: project.work, conversationId: '2026-11-21T17-06-11-900Z', agentId: 'a2' });
+    assert.equal(new Set([first.path, sameConversation.path, sameSecond.path]).size, 3);
+    assert.equal(new Set([first.branch, sameConversation.branch, sameSecond.branch]).size, 3);
+    await assert.rejects(
+      createWorktree({ repoDir: project.work, conversationId: '2026-11-21T17-06-11-100Z', agentId: 'a2' }),
+      /already exists/,
+    );
+  } finally {
+    fs.rmSync(project.dir, { recursive: true, force: true });
+  }
+});
+
+test('restore keeps a legacy worktree path and branch that were saved by name', async () => {
+  const project = fixture();
+  let bridge;
+  try {
+    const legacy = path.join(project.dir, 'legacy-reviewer');
+    const branch = 'agent-bridge/legacy/Reviewer';
+    project.git('worktree', 'add', '-b', branch, legacy);
+    const logs = path.join(project.dir, 'logs', 'legacy');
+    fs.mkdirSync(logs, { recursive: true });
+    const member = {
+      id: 'a1',
+      name: 'Reviewer',
+      driver: 'fake',
+      role: 'orchestrator',
+      cwd: legacy,
+      worktree: { path: legacy, root: legacy, branch },
+    };
+    const state = { kind: 'state', seq: 1, workDir: project.work, team: [member] };
+    const message = { kind: 'user', seq: 2, text: 'keep my branch', to: ['a1'] };
+    fs.writeFileSync(path.join(logs, 'transcript.jsonl'), JSON.stringify(state) + '\n' + JSON.stringify(message) + '\n');
+    bridge = await startBridge({ team: [], rules: [], dir: project.dir, resume: 'legacy' });
+    const restored = await bridge.waitFor((event) => event.kind === 'state' && event.conversationId === 'legacy');
+    assert.equal(restored.team[0].cwd, legacy);
+    assert.deepEqual(restored.team[0].worktree, member.worktree);
+  } finally {
+    if (bridge) await bridge.stop();
+    fs.rmSync(project.dir, { recursive: true, force: true });
   }
 });

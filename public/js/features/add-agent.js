@@ -3,7 +3,13 @@ import { matchesRole, sortModels } from '../core/agent-view.js';
 import { $, closeDialog } from '../core/dom.js';
 import { roleOf, store } from '../core/store.js';
 import { api } from '../core/api.js';
-export function openAddDialog() {
+let customization = null;
+
+export function openAddDialog(options = {}) {
+  customization = options.mode === 'customize' ? options : null;
+  const preset = customization?.preset;
+  $('addTitle').textContent = customization ? 'Customize agent' : 'Add agent';
+  $('addConfirm').textContent = customization ? 'Use these values' : 'Add agent';
   const d = $('addDriver');
   d.textContent = '';
   for (const drv of store.catalog.drivers) {
@@ -12,18 +18,22 @@ export function openAddDialog() {
     o.title = drv.reason || '';
     d.appendChild(o);
   }
-  d.value = store.catalog.drivers.find((x) => x.available)?.id || '';
+  d.value = [...d.options].some((option) => option.value === preset?.driver)
+    ? preset.driver
+    : store.catalog.drivers.find((x) => x.available)?.id || '';
   const r = $('addRole');
   r.textContent = '';
   for (const role of store.catalog.roles) r.appendChild(new Option(role.name, role.id));
-  r.value = 'coder';
-  nameEdited = false;
-  modelChosen = false;
-  $('addBypass').checked = Boolean(store.catalog.settings.bypassNewAgents);
-  $('addWorktree').checked = false;
+  r.value = customization?.role || 'coder';
+  r.disabled = Boolean(customization);
+  nameEdited = Boolean(preset?.name);
+  $('addName').value = preset?.name || '';
+  modelChosen = Boolean(customization);
+  $('addBypass').checked = preset?.bypass ?? Boolean(store.catalog.settings.bypassNewAgents);
+  $('addWorktree').checked = Boolean(preset?.worktree);
   updateAddHints();
   refreshName();
-  loadAddModels();
+  loadAddModels(preset?.model ?? 'default', preset?.effort ?? 'default');
   $('addDialog').showModal();
 }
 
@@ -52,13 +62,16 @@ export let addModels = [];
 export let modelChosen = false; // true once the user picks a model by hand
 export let addModelsReq = 0;
 
-export async function loadAddModels() {
+export async function loadAddModels(model, effort) {
   const req = ++addModelsReq;
   const sel = $('addModel');
   sel.textContent = '';
   sel.appendChild(new Option('Loading models…', 'default'));
   sel.disabled = true;
+  $('addConfirm').disabled = true;
+  addModels = [];
   renderAddEffort();
+  let error = '';
   try {
     const { models } = await api('driverModels', { driver: $('addDriver').value });
     if (req !== addModelsReq) return; // provider changed meanwhile
@@ -66,14 +79,16 @@ export async function loadAddModels() {
   } catch (e) {
     if (req !== addModelsReq) return;
     addModels = [];
-    $('addModelHint').textContent = `Could not load the models: ${e.message}. The agent will use the provider's default model.`;
+    error = `Could not load models: ${e.message}. The provider default is available to select.`;
   }
-  renderAddModels();
+  renderAddModels(model, effort);
+  if (error) $('addModelHint').textContent = error;
+  $('addConfirm').disabled = false;
 }
 
-export function renderAddModels() {
+export function renderAddModels(preferred, effort) {
   const sel = $('addModel');
-  const prev = sel.value;
+  const prev = preferred ?? sel.value;
   const role = roleOf($('addRole').value);
   sel.textContent = '';
   const def = addModels.find((m) => m.value === 'default' || m.isDefault);
@@ -90,17 +105,17 @@ export function renderAddModels() {
   // Keep the user's choice; otherwise pick the first recommended model that is available.
   const keep = modelChosen && [...sel.options].find((o) => o.value === prev && !o.disabled);
   const firstRec = list.find((m) => m.recommended && !m.disabled);
-  sel.value = keep ? prev : firstRec ? firstRec.value : 'default';
+  sel.value = keep ? prev : !customization && firstRec ? firstRec.value : 'default';
   sel.disabled = false;
-  renderAddEffort();
+  renderAddEffort(effort);
   renderAddRoles();
 }
 
-export function renderAddEffort() {
+export function renderAddEffort(preferred) {
   const sel = $('addEffort');
   const chosen = addModels.find((m) => m.value === $('addModel').value) || addModels.find((m) => m.value === 'default' || m.isDefault);
   const levels = chosen?.efforts || [];
-  const prev = sel.value;
+  const prev = preferred ?? sel.value;
   sel.textContent = '';
   sel.appendChild(
     new Option(
@@ -174,7 +189,8 @@ $('addWorktree').onchange = updateAddHints;
 $('addDriver').onchange = () => {
   updateAddHints();
   refreshName();
-  loadAddModels();
+  modelChosen = Boolean(customization);
+  loadAddModels('default', 'default');
 };
 $('addRole').onchange = () => {
   updateAddHints();
@@ -185,7 +201,7 @@ $('addConfirm').onclick = async () => {
   const b = $('addConfirm');
   b.disabled = true;
   try {
-    await api('addAgent', {
+    const choice = {
       driver: $('addDriver').value,
       role: $('addRole').value,
       name: nameEdited ? $('addName').value.trim() : undefined,
@@ -193,7 +209,11 @@ $('addConfirm').onclick = async () => {
       effort: $('addEffort').value,
       bypass: $('addBypass').checked,
       worktree: $('addWorktree').checked,
-    });
+    };
+    if (customization) {
+      const modelLabel = choice.model === 'default' ? 'default model' : addModels.find((model) => model.value === choice.model)?.label;
+      customization.onConfirm(choice, modelLabel);
+    } else await api('addAgent', choice);
     closeDialog('addDialog');
   } catch (e) {
     alert(e.message);

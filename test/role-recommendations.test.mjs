@@ -113,3 +113,59 @@ test('a declined role is not offered again and the recommendation setting suppre
     await bridge.stop();
   }
 });
+
+test('customized recommendations validate the whole batch and keep invalid requests open', async () => {
+  const bridge = await startBridge({
+    team,
+    rules: [{ agent: 'Lead', match: 'substantial objective', reply: recommendation }],
+  });
+  try {
+    await bridge.api('send', { text: 'substantial objective' });
+    const request = await bridge.waitFor((event) => event.kind === 'recommendRoles');
+    const resolve = (selected) => bridge.api('resolveRecommendedRoles', { requestId: request.requestId, selected });
+    const duplicate = await resolve([
+      { role: 'reviewer', name: 'Peer' },
+      { role: 'tester', name: 'peer' },
+    ]);
+    assert.equal(duplicate.invalid.role, 'tester');
+    assert.match(duplicate.invalid.reason, /same name/);
+    const unsupported = await resolve([
+      { role: 'reviewer', name: 'Peer' },
+      { role: 'tester', model: 'fake-small', effort: 'high' },
+    ]);
+    assert.equal(unsupported.invalid.role, 'tester');
+    assert.match(unsupported.invalid.reason, /does not support this effort/);
+    assert.equal(bridge.state().team.length, team.length);
+    assert.ok(!bridge.events.some((event) => event.kind === 'recommendRolesClosed'));
+    await assert.rejects(bridge.api('addAgent', { role: 'reviewer', driver: 'fake', model: 'missing' }), /selected model is unavailable/);
+    const chosen = { role: 'reviewer', name: 'Peer', model: 'fake-large', effort: 'high', bypass: true };
+    const { results } = await resolve([chosen, { role: 'tester' }]);
+    assert.ok(results.every((item) => item.ok));
+    const state = await bridge.waitFor((event) => event.kind === 'state' && event.team.some((agent) => agent.name === 'Peer'));
+    const member = state.team.find((agent) => agent.name === 'Peer');
+    for (const [key, value] of Object.entries(chosen)) assert.equal(member[key], value);
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('a missing-role request stays open when choices are invalid and accepts corrected values', async () => {
+  const bridge = await startBridge({
+    team,
+    rules: [{ agent: 'Lead', match: 'need a check', reply: '[[NEED_ROLE: reviewer]]' }],
+  });
+  try {
+    await bridge.api('send', { text: 'need a check' });
+    const request = await bridge.waitFor((event) => event.kind === 'needRole');
+    const decide = (choice) => bridge.api('resolveRole', { requestId: request.requestId, action: 'add', ...choice });
+    const bad = await decide({ name: 'Lead' });
+    assert.equal(bad.invalid.role, 'reviewer');
+    assert.equal(bridge.state().team.length, team.length);
+    assert.ok(!bridge.events.some((event) => event.kind === 'needRoleClosed'));
+    await decide({ name: 'Quality', model: 'fake-large', effort: 'low' });
+    const state = await bridge.waitFor((event) => event.kind === 'state' && event.team.some((agent) => agent.name === 'Quality'));
+    assert.equal(state.team.find((agent) => agent.name === 'Quality').effort, 'low');
+  } finally {
+    await bridge.stop();
+  }
+});

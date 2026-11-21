@@ -1,3 +1,4 @@
+import { openAddDialog } from './add-agent.js';
 import { applyAgentAccent } from '../core/agent-accent.js';
 // Cards pinned above the message box: approvals, missing roles and the final confirmation.
 import { approvals, findMentionAgent, label, store } from '../core/store.js';
@@ -107,6 +108,37 @@ export function renderFinalReview(ev) {
   updatePending();
 }
 
+function suggestedAgent(card, role, suggestion, show) {
+  let preset = null;
+  const customize = h('button', 'btn', 'Customize');
+  const reset = h('button', 'btn', 'Restore suggestion');
+  const error = h('div', 'hint');
+  error.setAttribute('aria-live', 'polite');
+  reset.hidden = true;
+  function update(choice, modelLabel) {
+    preset = choice;
+    reset.hidden = !choice;
+    error.textContent = '';
+    const driver = store.catalog.drivers.find((item) => item.id === choice?.driver);
+    const label = choice
+      ? [driver?.label || choice.driver, modelLabel || choice.model, choice.name].filter(Boolean)
+      : [suggestion.driverLabel, suggestion.modelLabel, suggestion.name].filter(Boolean);
+    show(label.join(' \u00b7 '));
+  }
+  customize.onclick = () =>
+    openAddDialog({
+      mode: 'customize',
+      role,
+      preset: preset || suggestion,
+      onConfirm: (choice, modelLabel) => {
+        if (card.isConnected) update(choice, modelLabel);
+      },
+    });
+  reset.onclick = () => update(null);
+  update(null);
+  return { customize, reset, error, options: () => preset || { role } };
+}
+
 /** The orchestrator needs a role nobody in the team has: add it (with a recommended model) or use the closest agent. */
 export function renderNeedRole(ev) {
   const el = h('div', 'approval need-role');
@@ -116,9 +148,24 @@ export function renderNeedRole(ev) {
   );
   el.appendChild(h('div', 'hint', 'The relay is paused until you choose. The default choice can be set in Settings.'));
   const actions = h('div', 'actions');
-  const add = h('button', 'primary', `Add ${ev.roleName} (${ev.suggestion.driverLabel} · ${ev.suggestion.modelLabel})`);
-  add.onclick = () => api('resolveRole', { requestId: ev.requestId, action: 'add' }).catch((e) => addSys(e.message, true));
-  actions.appendChild(add);
+  const add = h('button', 'primary');
+  const choice = suggestedAgent(el, ev.role, ev.suggestion, (summary) => {
+    add.textContent = 'Add ' + ev.roleName + ' (' + summary + ')';
+  });
+  add.onclick = async () => {
+    const controls = [...actions.querySelectorAll('button')];
+    for (const control of controls) control.disabled = true;
+    choice.error.textContent = '';
+    try {
+      const result = await api('resolveRole', { ...choice.options(), requestId: ev.requestId, action: 'add' });
+      if (result.invalid) choice.error.textContent = result.invalid.reason;
+    } catch (error) {
+      choice.error.textContent = error.message;
+    } finally {
+      for (const control of controls) control.disabled = false;
+    }
+  };
+  actions.append(add, choice.customize, choice.reset);
   if (ev.closest) {
     const near = agentText(
       'button',
@@ -131,7 +178,7 @@ export function renderNeedRole(ev) {
   const dismiss = h('button', 'danger', 'Dismiss');
   dismiss.onclick = () => api('resolveRole', { requestId: ev.requestId, action: 'dismiss' }).catch((e) => addSys(e.message, true));
   actions.appendChild(dismiss);
-  el.appendChild(actions);
+  el.append(actions, choice.error);
   approvals.set(ev.requestId, el);
   $('pending').appendChild(el);
   updatePending();
@@ -147,13 +194,21 @@ export function renderRoleRecommendation(ev) {
     check.type = 'checkbox';
     check.checked = true;
     const row = h('label', 'check');
-    const star = suggestion.model ? ' \u2605' : '';
-    row.append(check, h('span', null, name + ' (' + suggestion.driverLabel + ' \u00b7 ' + suggestion.modelLabel + star + ')'));
+
+    const title = h('span');
+    const choice = suggestedAgent(el, id, suggestion, (summary) => {
+      title.textContent = name + ' (' + summary + ')';
+    });
+    const options = h('div', 'actions');
+    options.append(choice.customize, choice.reset);
+    row.append(check, title);
     fields.append(
       row,
       agentText('div', 'hint', () => reason),
+      options,
+      choice.error,
     );
-    return { id, check };
+    return { id, check, ...choice };
   });
   el.append(fields);
   const actions = h('div', 'actions');
@@ -161,16 +216,24 @@ export function renderRoleRecommendation(ev) {
   const keep = h('button', '', 'Keep current team');
   async function resolve(selected) {
     add.disabled = keep.disabled = true;
-    for (const choice of choices) choice.check.disabled = true;
+    for (const choice of choices) {
+      choice.check.disabled = choice.customize.disabled = choice.reset.disabled = true;
+      choice.error.textContent = '';
+    }
     try {
-      await api('resolveRecommendedRoles', { requestId: ev.requestId, selected });
+      const result = await api('resolveRecommendedRoles', { requestId: ev.requestId, selected });
+      if (result.invalid) {
+        const choice = choices.find(({ id }) => id === result.invalid.role);
+        if (choice) choice.error.textContent = result.invalid.reason;
+      }
     } catch (error) {
       addSys(error.message, true);
+    } finally {
       add.disabled = keep.disabled = false;
-      for (const choice of choices) choice.check.disabled = false;
+      for (const choice of choices) choice.check.disabled = choice.customize.disabled = choice.reset.disabled = false;
     }
   }
-  add.onclick = () => resolve(choices.filter(({ check }) => check.checked).map(({ id }) => id));
+  add.onclick = () => resolve(choices.filter(({ check }) => check.checked).map((choice) => choice.options()));
   keep.onclick = () => resolve([]);
   actions.append(add, keep);
   el.append(actions);

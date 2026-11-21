@@ -13,8 +13,8 @@ function git(cwd: string, args: string[]): Promise<string> {
 
 /**
  * Give an agent its own git worktree so coders do not edit the same files at the same time.
- * Created next to the repository: <repo>-agent-worktrees/<conversation>/<agent>, on a new branch
- * agent-bridge/<conversation>/<agent>. Nothing is deleted automatically; merge or remove it with git.
+ * Created next to the repository: <repo>-agent-worktrees/<conversation-id>/<agent-id>, on a new branch
+ * agent-bridge/<conversation-id>/<agent-id>. Nothing is deleted automatically; merge or remove it with git.
  */
 export interface Worktree {
   path: string;
@@ -26,11 +26,11 @@ export interface Worktree {
 export async function createWorktree({
   repoDir,
   conversationId,
-  agentName,
+  agentId,
 }: {
   repoDir: string;
   conversationId: string;
-  agentName: string;
+  agentId: string;
 }): Promise<Worktree> {
   let top: string;
   try {
@@ -38,15 +38,15 @@ export async function createWorktree({
   } catch {
     throw new Error('The project folder is not a git repository, so a separate worktree cannot be created.');
   }
-  const conv = conversationId.slice(0, 19).replace(/[^\w-]/g, '-');
-  const safeName = agentName.replace(/[^\w-]/g, '-');
+  if (!/^[\w-]+$/.test(conversationId) || !/^a[1-9]\d*$/.test(agentId)) throw new Error('Invalid worktree identity.');
+  const conv = conversationId;
   const base = path.join(path.dirname(top), `${path.basename(top)}-agent-worktrees`, conv);
-  const dir = path.join(base, safeName);
-  const branch = `agent-bridge/${conv}/${safeName}`;
+  const dir = path.join(base, agentId);
+  const branch = `agent-bridge/${conv}/${agentId}`;
   // Keep the agent in the same sub-folder of the repository as the conversation.
   const sub = path.relative(top, repoDir);
   const agentDir = path.join(dir, sub);
-  if (fs.existsSync(dir)) return { path: agentDir, root: dir, branch, reused: true };
+  if (fs.existsSync(dir)) throw new Error('A worktree already exists for this agent identity.');
   fs.mkdirSync(base, { recursive: true });
   await git(top, ['worktree', 'add', '-b', branch, dir]);
   return { path: agentDir, root: dir, branch };

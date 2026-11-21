@@ -106,7 +106,7 @@ export function stateEvent() {
       ...[...S.conv.retiredAgents.values()].map((member) => ({ ...member, removed: true })),
       ...team.map(({ id, name, driver, role }) => ({ id, name, driver, role, removed: false })),
     ],
-    relay: { ...relay, ...S.conv.relay },
+    relay: { ...relay, ...S.conv.relay, held: S.conv.heldRelays.length },
     tokenLimit: Number(setting('tokenLimit')),
     totalTokens: team.reduce((s, a) => s + a.tokens, 0),
     totalCachedTokens: team.reduce((s, a) => s + a.cachedTokens, 0),

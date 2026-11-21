@@ -193,11 +193,21 @@ export interface GitSnapshot {
   files: { path: string; status: string }[];
 }
 
+export interface RoleSuggestion {
+  driver: string;
+  driverLabel: string;
+  model: string | null;
+  modelLabel: string;
+  name: string;
+  bypass: boolean;
+  worktree: boolean;
+}
+
 export interface RoleRecommendation {
   id: string;
   name: string;
   reason: string;
-  suggestion: { driver: string; driverLabel: string; model: string | null; modelLabel: string };
+  suggestion: RoleSuggestion;
 }
 
 export type RoleDecisionEvent =
@@ -238,13 +248,22 @@ export type MilestoneEvent =
 
 export type AgentIdentity = Pick<AgentSpec, 'id' | 'name' | 'driver' | 'role'>;
 
+export interface HeldRelay {
+  from: string;
+  text: string;
+  targets: string[];
+  sourceSeq?: number;
+  kind: 'reply' | 'batch';
+}
+
 export interface Conversation {
   id: string;
   runDir: string;
   transcript: WriteStream;
   workDir: string;
   routingMode: RoutingMode;
-  relay: { hops: number; halted: boolean; userPaused: boolean };
+  relay: { hops: number; halted: boolean; userPaused: boolean; limitPause?: 'tokens' | 'hops' };
+  heldRelays: HeldRelay[];
   team: AgentSpec[];
   agents: Record<string, Agent>;
   nextAgent: number;
@@ -262,7 +281,7 @@ export interface Conversation {
   lastAnswerSeq: Record<string, number>;
   batch?: DeliveryBatch | null;
   reviewRounds?: number;
-  pendingRoleRequest?: { requestId: string; roleId: string } | null;
+  pendingRoleRequest?: { requestId: string; roleId: string; suggestion: RoleSuggestion; resolving: boolean } | null;
   pendingRecommendation?: { requestId: string; roles: RoleRecommendation[]; resolving: boolean } | null;
   roleDecisionVersion: number;
   refusedRoles: Set<string>;

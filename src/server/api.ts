@@ -11,7 +11,8 @@ import { canReceiveWork } from '../core/agent-status.ts';
 import { newConversation, restoreConversation, saveSettings, settingsView } from './conversation.ts';
 import {
   cancelBatchPart,
-  clearRoleDecisions,
+  discardHeldRelays,
+  resumeRelay,
   dismissRoleDecision,
   resolveMissingRole,
   resolveRecommendedRoles,
@@ -20,7 +21,6 @@ import {
 } from './routing.ts';
 import { approvalTimers, cliCache, providerRuntime, relay } from './state.ts';
 import {
-  type AddAgentInput,
   addAgent,
   installedSkills,
   listDriverModels,
@@ -31,6 +31,7 @@ import {
   setRole,
   startAgent,
   statusFor,
+  validateAgentChoice,
 } from './team.ts';
 import { loadRoles } from '../core/roles.ts';
 import { PROVIDERS, cliStatus, mergeStatus, nextStep, openLoginTerminal } from '../providers/accounts.ts';
@@ -98,12 +99,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       if (body.maxHops !== undefined && (!Number.isFinite(body.maxHops) || body.maxHops < 0)) throw new Error('invalid maxHops');
       if (typeof body.auto === 'boolean') relay.auto = body.auto;
       if (Number.isFinite(body.maxHops) && body.maxHops >= 0) relay.maxHops = body.maxHops;
-      if (body.resume) {
-        clearRoleDecisions(S.conv, 'resume');
-        cancelMilestoneDecision(S.conv, 'resume');
-        S.conv.relay.halted = S.conv.relay.userPaused = false;
-        S.conv.relay.hops = 0;
-      }
+      if (body.resume) resumeRelay(S.conv);
       if (body.pause) S.conv.relay.halted = S.conv.relay.userPaused = true;
       publishState();
       return { ok: true };
@@ -181,16 +177,27 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       if (typeof requestedId !== 'string' || !requestedId) throw new Error('missing role request id');
       if (!S.conv.pendingRoleRequest || S.conv.pendingRoleRequest.requestId !== requestedId)
         throw new Error('this request is no longer pending');
-      const { roleId } = S.conv.pendingRoleRequest;
+      const { roleId, resolving } = S.conv.pendingRoleRequest;
+      if (resolving) throw new Error('this request is already being resolved');
       if (decision === 'dismiss') dismissRoleDecision(S.conv);
-      else await resolveMissingRole(roleId, decision);
+      else {
+        if (body.role !== undefined && body.role !== roleId) throw new Error('invalid role for this request');
+        const result = await resolveMissingRole(roleId, decision, body);
+        if (result?.invalid) return result;
+      }
       return { ok: true };
     }
     case 'resolveRecommendedRoles': {
       const { requestId, selected } = body;
-      if (typeof requestId !== 'string' || !Array.isArray(selected) || selected.length > 3 || selected.some((id) => typeof id !== 'string'))
+      if (typeof requestId !== 'string' || !Array.isArray(selected) || selected.length > 3)
         throw new Error('invalid recommendation decision');
-      return resolveRecommendedRoles(requestId, selected);
+      const choices = selected.map((item: unknown) => {
+        if (typeof item === 'string') return { role: item };
+        if (!item || typeof item !== 'object' || !('role' in item) || typeof item.role !== 'string')
+          throw new Error('invalid recommendation decision');
+        return item as Record<string, unknown>;
+      });
+      return resolveRecommendedRoles(requestId, choices);
     }
     case 'resolveMilestonePlan':
     case 'resolveMilestoneCommit': {
@@ -207,6 +214,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       const ids = body.agent ? [agentOf(body.agent).id] : Object.keys(agents);
       if (!body.agent) {
         owner.batch = null;
+        discardHeldRelays(owner, 'The conversation was stopped.');
         owner.relay.halted = owner.relay.userPaused = true;
         cancelMilestoneDecision(owner, 'stop');
       } else cancelBatchPart(owner, body.agent, 'cancelled: stopped by the user');
@@ -294,15 +302,10 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       }));
       return { models };
     }
-    case 'addAgent':
-      textField(body.driver, 'provider');
-      textField(body.role, 'role');
-      if (body.name !== undefined && typeof body.name !== 'string') throw new Error('invalid agent name');
-      if (body.model !== null) textField(body.model, 'model', true);
-      if (body.effort !== null) textField(body.effort, 'effort', true);
-      optionalBoolean(body.bypass, 'bypass');
-      optionalBoolean(body.worktree, 'worktree');
-      return { ok: true, agent: await addAgent(body as AddAgentInput) };
+    case 'addAgent': {
+      const choice = await validateAgentChoice(S.conv, body);
+      return { ok: true, agent: await addAgent(choice) };
+    }
     case 'rename': {
       renameAgent(textField(body.agent, 'agent ID') || '', textField(body.name, 'agent name') || '');
       return { ok: true };

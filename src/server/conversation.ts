@@ -56,6 +56,7 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
     workDir,
     routingMode: (routingMode && routingMode in ROUTING_MODES ? routingMode : setting('routingMode')) as RoutingMode,
     relay: { hops: 0, halted: Boolean(saved), userPaused: Boolean(saved) },
+    heldRelays: [],
     team: [],
     agents: {},
     nextAgent: saved?.lastAgentId || 0,
@@ -331,14 +332,19 @@ export function totalTokens() {
   return Object.values(S.conv.agents).reduce((s, a) => s + (a.tokens || 0), 0);
 }
 
+export function tokenLimitReached() {
+  const limit = Number(setting('tokenLimit'));
+  return limit > 0 && totalTokens() >= limit;
+}
+
 export function checkTokenLimit() {
   const limit = Number(setting('tokenLimit'));
-  if (!(limit > 0) || S.conv.relay.halted) return false;
-  if (totalTokens() < limit) return false;
+  if (S.conv.relay.halted || !tokenLimitReached()) return false;
   S.conv.relay.halted = true;
+  S.conv.relay.limitPause = 'tokens';
   publish({
     kind: 'system',
-    text: `Token limit reached (${totalTokens().toLocaleString()} of ${limit.toLocaleString()}). Hand-offs are paused; send a message or press Resume to continue.`,
+    text: `Token limit reached (${totalTokens().toLocaleString()} of ${limit.toLocaleString()}). Hand-offs are paused. Increase the limit or send a new message to continue.`,
   });
   publishState();
   return true;
