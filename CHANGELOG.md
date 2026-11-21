@@ -6,11 +6,13 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Added
 
+- Rename an agent from its details while it works. Mentions keep their agent ID, and saved history shows the current name.
+
 - Tests: end-to-end conversation tests with a scripted provider (no CLIs or tokens needed) and unit tests; CI on Windows and Linux.
 - Tooling: ESLint (typescript-eslint), Prettier, EditorConfig, type checking, npm scripts (`check`, `lint`, `typecheck`, `test`, `format`).
 - Light theme (follows the system setting) and a responsive layout for phones and tablets.
 - `docs/architecture.md`.
-- Inline `@mentions` of team members are highlighted in their provider colour.
+- Inline `@mentions` use the referenced agent’s colour. Each agent keeps the same colour across the workspace, chat and history, even when agents share a provider or model.
 - Researcher card warns when the model's context window is small for research.
 - The orchestrator can recommend roles for substantial work. A card lists up to three roles with the reason and the recommended model, and nothing is added without your choice (**Settings > General > Recommend roles**).
 - **Search saved history** finds messages from the whole saved conversation, including those outside the loaded history, with one result per message.
