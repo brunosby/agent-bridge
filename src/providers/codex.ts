@@ -1,3 +1,5 @@
+import { wrappedShellCommand } from '../core/read-only-shell.ts';
+import { randomUUID } from 'node:crypto';
 import { cancelQueuedTasks, inputTaskIds } from './task-queue.ts';
 import type { ProviderEventArgs } from '../core/types.ts';
 import { EventEmitter } from 'node:events';
@@ -49,6 +51,7 @@ export class CodexAgent extends EventEmitter implements Agent {
   resolvedModel: string | null = null;
   proc: JsonlProcess | null = null;
   stopping = false;
+  private approvalGeneration = randomUUID();
   private threadNamePending = false;
   private threadNameUpdate = Promise.resolve();
 
@@ -126,6 +129,7 @@ export class CodexAgent extends EventEmitter implements Agent {
     // codex is usually an npm .cmd shim on Windows, so it runs through cmd.exe. Args come from config, not from the UI.
     const isWin = process.platform === 'win32';
     const review = this.config.reviewMcp?.();
+    this.approvalGeneration = randomUUID();
     this.proc = spawnJsonl(isWin ? 'cmd.exe' : command, isWin ? ['/d', '/s', '/c', command, ...args] : args, {
       cwd: this.cwd,
       env: review ? { ...process.env, AGENT_BRIDGE_REVIEW_TOKEN: review.token } : process.env,
@@ -409,7 +413,8 @@ export class CodexAgent extends EventEmitter implements Agent {
     const a = this.approvals.get(requestId);
     if (!a) return false;
     this.approvals.delete(requestId);
-    this.proc?.write({ id: a.rpcId, result: { decision } });
+    const reply = a.method === 'item/commandExecution/requestApproval' && decision === 'acceptForSession' ? 'accept' : decision;
+    this.proc?.write({ id: a.rpcId, result: { decision: reply } });
     this.emitEvent('status', { busy: this.busy });
     return true;
   }
@@ -448,16 +453,22 @@ export class CodexAgent extends EventEmitter implements Agent {
     this.handleNotification(m.method, m.params || {});
   }
 
+  private approvalKey(id: string | number): string {
+    return `codex-${this.id}-${this.approvalGeneration}-${JSON.stringify(id)}`;
+  }
+
   handleServerRequest(m: any): void {
     const p = m.params || {};
     if (m.method === 'item/commandExecution/requestApproval' || m.method === 'item/fileChange/requestApproval') {
-      const key = `codex-${m.id}`;
+      const key = this.approvalKey(m.id);
       this.approvals.set(key, { rpcId: m.id, method: m.method });
       const isCommand = m.method.startsWith('item/commandExecution');
       this.emitEvent('approval', {
         requestId: key,
         title: isCommand ? 'Codex wants to run a command' : 'Codex wants to change files',
         matchText: isCommand ? String(p.command || '') : '',
+        commandApproval: isCommand,
+        shellCommand: isCommand ? wrappedShellCommand(p.command) : null,
         cwd: p.cwd || undefined,
         // Files this patch deletes (fileChange items are announced before their approval request).
         deletePaths: isCommand
@@ -599,7 +610,7 @@ export class CodexAgent extends EventEmitter implements Agent {
         break;
 
       case 'serverRequest/resolved': {
-        const key = `codex-${p.requestId}`;
+        const key = this.approvalKey(p.requestId);
         this.approvals.delete(key);
         this.emitEvent('approvalClosed', { requestId: key });
         this.emitEvent('status', { busy: this.busy });

@@ -135,6 +135,7 @@ export interface Agent extends EventEmitter {
   setEffort(effort: string | null): Promise<void>;
   reconfigure(opts: ReconfigureOptions): Promise<void>;
   respondApproval(requestId: string, decision: string, reason?: string): boolean;
+  approveShellCommand?(requestId: string, command: string): boolean;
   interrupt(): Promise<void>;
   restart(): Promise<void>;
   shutdown(): Promise<void>;

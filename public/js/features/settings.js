@@ -12,6 +12,10 @@ export const SETTING_LABELS = {
   tokenLimit: ['Token limit per conversation', 'Pause hand-offs when all agents together pass this many tokens (0 = no limit).'],
   approvalTimeoutSec: ['Approval timeout (seconds)', 'Decline an unanswered approval after this time (0 = wait forever).'],
   bypassNewAgents: ['Bypass on for new agents', 'New agents start with bypass mode on.'],
+  autoApproveReadOnly: [
+    'Automatically approve read-only commands',
+    'Allow supported literal reads in the workspace. Unrecognized commands still ask.',
+  ],
   warnOnExtraAgents: ['Warn about token use when adding agents', ''],
   reviewDiffMaxChars: [
     'Maximum Reviewer diff size (characters)',

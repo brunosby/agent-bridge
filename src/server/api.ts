@@ -1,3 +1,4 @@
+import { answerApproval } from './shell-approvals.ts';
 import { validateMentionChecks } from '../core/recipients.ts';
 import { cancelMilestoneDecision, resolveMilestoneCommit, resolveMilestonePlan } from './milestones.ts';
 // API actions called by the page.
@@ -284,7 +285,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       textField(body.requestId, 'approval request ID');
       const owner = Object.keys(agents).find((id) => agents[id].approvals?.has(body.requestId));
       if (!owner) throw new Error('this request is no longer pending');
-      agents[owner].respondApproval(body.requestId, body.decision);
+      if (!answerApproval(S.conv, agents[owner], body.requestId, body.decision)) throw new Error('this request is no longer pending');
       clearTimeout(approvalTimers.get(body.requestId));
       approvalTimers.delete(body.requestId);
       publish({ kind: 'approvalClosed', requestId: body.requestId, decision: body.decision });

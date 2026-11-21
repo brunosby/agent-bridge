@@ -39,7 +39,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
   unavailableReason: string | null;
   models: ModelInfo[];
   resolvedModel: string | null;
-  approvals: Map<string, { permissionId: string }>;
+  approvals: Map<string, { permissionId: string; command?: boolean }>;
   queue: AgentInput[];
   activeBatch: AgentInput[] | null = null;
   running: boolean;
@@ -434,14 +434,15 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
       // { id, sessionID, permission: "bash" | "edit" | ..., patterns[], metadata: { command, filepath, ... }, always[] }
       const key = `oc${this.id}-${p.id}`;
       if (this.approvals.has(key)) return;
-      this.approvals.set(key, { permissionId: p.id });
       const what = p.permission || 'an action';
       const patterns = (p.patterns || []).join(' ');
       const command = p.metadata?.command;
       const file = p.metadata?.filepath || p.metadata?.filePath;
+      this.approvals.set(key, { permissionId: p.id, command: what === 'bash' });
       this.emitEvent('approval', {
         requestId: key,
         title: `OpenCode wants to use ${what}`,
+        commandApproval: what === 'bash',
         matchText: what === 'bash' ? command || patterns : `${what} ${file || patterns}`,
         detail: [
           command && `$ ${command}`,
@@ -502,7 +503,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     const a = this.approvals.get(requestId);
     if (!a) return false;
     this.approvals.delete(requestId);
-    const response = decision === 'accept' ? 'once' : decision === 'acceptForSession' ? 'always' : 'reject';
+    const response = decision === 'accept' ? 'once' : decision === 'acceptForSession' ? (a.command ? 'once' : 'always') : 'reject';
     this.http('POST', `/session/${encodeURIComponent(this.sessionId || '')}/permissions/${encodeURIComponent(a.permissionId)}`, {
       response,
     }).catch((err) => this.emitEvent('error', { text: `Could not answer the OpenCode permission request: ${errorText(err)}` }));

@@ -1,3 +1,4 @@
+import { closeShellApproval, processShellApproval } from './shell-approvals.ts';
 import { parseMilestoneMarkers } from '../../public/js/core/milestone-markers.js';
 import {
   cancelMilestoneDecision,
@@ -208,11 +209,20 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
         publish({ kind: 'autoApproved', agent: id, title: ev.title, detail: ev.detail });
         return;
       }
+      const approved = processShellApproval(owner, agent, ev, Boolean(hit));
+      if (approved) {
+        publish({ kind: 'autoApproved', agent: id, title: approved, detail: approved });
+        return;
+      }
       if (hit) ev.warning = hit;
       ev.title = ev.title.replace(/^(Claude|Codex|OpenCode)\b/, '@' + id);
       armApprovalTimeout(id, ev);
     }
-    if (ev.kind === 'approvalClosed') clearTimeout(approvalTimers.get(ev.requestId));
+    if (ev.kind === 'approvalClosed') {
+      closeShellApproval(owner, ev.requestId);
+      clearTimeout(approvalTimers.get(ev.requestId));
+      approvalTimers.delete(ev.requestId);
+    }
     const lifecycle = isTaskLifecycleKind(ev.kind) ? readAgentTaskEvent(ev) : null;
     if (isTaskLifecycleKind(ev.kind) && !lifecycle) {
       publish({ kind: 'info', agent: id, text: 'Ignored a malformed provider task event.' });
@@ -313,6 +323,7 @@ export function armApprovalTimeout(agentId: string, ev: AgentEvent): void {
   const owner = S.conv;
   const timer = setTimeout(() => {
     approvalTimers.delete(ev.requestId);
+    closeShellApproval(owner, ev.requestId);
     if (S.conv !== owner || !S.conv.agents[agentId]) return;
     if (
       S.conv.agents[agentId].respondApproval(

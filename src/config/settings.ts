@@ -44,6 +44,7 @@ export const SETTINGS: Record<string, SettingDef> = {
   tokenLimit: { type: 'number', min: 0, default: 0 },
   approvalTimeoutSec: { type: 'number', min: 0, default: 120 },
   bypassNewAgents: { type: 'boolean', default: false },
+  autoApproveReadOnly: { type: 'boolean', default: true },
   warnOnExtraAgents: { type: 'boolean', default: true },
   missingRolePolicy: { type: 'enum', values: ['ask', 'closest'], default: 'ask' },
   recommendRoles: { type: 'enum', values: ['ask', 'off'], default: 'ask' },

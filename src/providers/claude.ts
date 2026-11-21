@@ -89,13 +89,13 @@ export class ClaudeAgent extends EventEmitter implements Agent {
   }
 
   /** Answer a permission prompt shown in the page. decision: accept | acceptForSession | decline */
-  respondApproval(requestId: string, decision: string, reason?: string): boolean {
+  respondApproval(requestId: string, decision: string, reason?: string, command?: string): boolean {
     const a = this.approvals.get(requestId);
     if (!a) return false;
     this.approvals.delete(requestId);
     let response: Record<string, unknown>;
     if (decision === 'accept' || decision === 'acceptForSession') {
-      response = { behavior: 'allow', updatedInput: a.input };
+      response = { behavior: 'allow', updatedInput: command && a.input && typeof a.input === 'object' ? { ...a.input, command } : a.input };
       if (decision === 'acceptForSession') {
         // Keep "always allow" in memory for this session only; never write the project's settings files.
         const rules = (a.suggestions || []).filter((s) => s.type === 'addRules' && s.behavior === 'allow');
@@ -107,6 +107,10 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     this.proc?.write({ type: 'control_response', response: { subtype: 'success', request_id: a.rpcId, response } });
     this.emitEvent('status', { busy: this.busy });
     return true;
+  }
+
+  approveShellCommand(requestId: string, command: string): boolean {
+    return this.respondApproval(requestId, 'accept', undefined, command);
   }
 
   closeApprovals() {
@@ -132,11 +136,16 @@ export class ClaudeAgent extends EventEmitter implements Agent {
         return;
       }
       const key = `claude-${m.request_id}`;
-      this.approvals.set(key, { rpcId: m.request_id, input: r.input, suggestions: r.permission_suggestions });
-      const hasRule = (r.permission_suggestions || []).some((s: { type: string }) => s.type === 'addRules');
+      const shell = r.tool_name === 'Bash' ? 'bash' : r.tool_name === 'PowerShell' ? 'powershell' : undefined;
+      const suggestions = shell ? [] : r.permission_suggestions;
+      this.approvals.set(key, { rpcId: m.request_id, input: r.input, suggestions });
+      const hasRule = (suggestions || []).some((s: { type: string }) => s.type === 'addRules');
       this.emitEvent('approval', {
         requestId: key,
         title: `Claude wants to use ${r.display_name || r.tool_name}`,
+        commandApproval: Boolean(shell),
+        shellCommand: shell && typeof r.input?.command === 'string' ? { shell, text: r.input.command } : null,
+        cwd: typeof r.input?.cwd === 'string' ? r.input.cwd : undefined,
         matchText: `${r.tool_name} ${r.input?.command || r.input?.file_path || JSON.stringify(r.input || {})}`,
         detail: [
           toolDetail(r.tool_name, r.input),

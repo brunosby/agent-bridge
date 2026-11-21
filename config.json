@@ -24,6 +24,7 @@
   },
   "routingMode": "orchestrator",
   "tokenLimit": 0,
+  "autoApproveReadOnly": true,
   "bypassNewAgents": false,
   "warnOnExtraAgents": true,
   "opencode": {
