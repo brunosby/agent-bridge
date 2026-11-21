@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Added
 
+- Customize a suggested agent from a role card before adding it.
+- Automatically approve supported literal reads in the workspace and remember explicitly approved test commands for the current conversation.
+
 - Rename an agent from its details while it works. Mentions keep their agent ID, and saved history shows the current name.
 
 - Tests: end-to-end conversation tests with a scripted provider (no CLIs or tokens needed) and unit tests; CI on Windows and Linux.
@@ -40,6 +43,9 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
+- Resume delivers held hand-offs in order when the conversation limits allow it.
+- New worktrees use the full conversation ID and the agent ID to keep agents isolated.
+- Simultaneous Codex approval requests and requests after a restart have distinct IDs.
 - The effort menu of a Codex agent stayed disabled when its models loaded before the agent was ready; it now unlocks as soon as the agent is ready.
 - OpenCode agents showed the model's reasoning and OpenCode's own context summary as if they were answers; now only the answer is shown, with a notice when OpenCode summarises the context.
 - OpenCode skill rules missed skills named without the plugin prefix.
