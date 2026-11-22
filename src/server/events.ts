@@ -18,7 +18,7 @@ export function publish(ev: BridgeEvent): BridgeEvent {
   S.history.push(full);
   if (S.history.length > 20000) S.history.splice(0, S.history.length - 20000);
   const saved = full.kind === 'milestonePlanProposed' ? { ...full, command: '', commandSaved: false } : full;
-  S.conv?.transcript.write(JSON.stringify(saved) + '\n');
+  if (S.conv && !S.conv.transcript.destroyed) S.conv.transcript.write(JSON.stringify(saved) + '\n');
   if (full.kind === 'error')
     logError(
       full.agent ? agentName(full.agent) : 'bridge',

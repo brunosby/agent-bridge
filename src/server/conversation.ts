@@ -13,6 +13,7 @@ import { restoreProviderHandoffs, settleProviderHandoff } from './provider-hando
 import type { Agent, AgentEvent, AgentSpec, Conversation, RoutingMode } from '../core/types.ts';
 import { S } from './state.ts';
 import fs from 'node:fs';
+import { finished } from 'node:stream/promises';
 import path from 'node:path';
 import { listConversations, loadConversation } from '../core/history.ts';
 import { LOGS_DIR, SETTINGS, safeRegex, saveLocalConfig, setting } from '../config/settings.ts';
@@ -36,9 +37,7 @@ export interface OpenOptions {
   routingMode?: string;
 }
 
-export function openConversation({ workDir, restoreId, team, routingMode }: OpenOptions): {
-  saved: ReturnType<typeof loadConversation> | null;
-} {
+function prepareConversation({ workDir, restoreId, team, routingMode }: OpenOptions) {
   let saved = null;
   if (restoreId) {
     saved = loadConversation(LOGS_DIR, restoreId);
@@ -46,15 +45,17 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
     team = saved.team?.length ? saved.team : team;
     routingMode = saved.routingMode || routingMode;
   }
-  if (!fs.existsSync(workDir)) throw new Error(`Working directory does not exist: ${workDir}`);
+  if (!fs.statSync(workDir, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`Working directory does not exist: ${workDir}`);
   const id = restoreId || new Date().toISOString().replace(/[:.]/g, '-');
   const runDir = path.join(LOGS_DIR, id);
   fs.mkdirSync(runDir, { recursive: true });
 
-  S.conv = {
+  const file = path.join(runDir, 'transcript.jsonl');
+  const transcript = fs.createWriteStream(file, { fd: fs.openSync(file, 'a') });
+  const owner: Conversation = {
     id,
     runDir,
-    transcript: fs.createWriteStream(path.join(runDir, 'transcript.jsonl'), { flags: 'a' }),
+    transcript,
     workDir,
     routingMode: (routingMode && routingMode in ROUTING_MODES ? routingMode : setting('routingMode')) as RoutingMode,
     relay: { hops: 0, halted: Boolean(saved), userPaused: Boolean(saved) },
@@ -83,43 +84,61 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
     possibleTests: new Map(),
     lastAnswerSeq: {},
   };
+  transcript.once('error', (error) => {
+    const text = 'Conversation history could not be saved: ' + error.message;
+    console.error(text);
+    if (!S.conv || S.conv === owner) publish({ kind: 'error', text });
+  });
+  try {
+    for (const t of team || defaultTeam()) {
+      const driver = DRIVERS[t.driver] ? t.driver : 'claude';
+      const role = S.roles[t.role] ? t.role : 'coder';
+      const spec = {
+        id: t.id && /^a\d+$/.test(t.id) ? t.id : `a${owner.nextAgent + 1}`,
+        name: uniqueName(t.name || defaultName(driver, role), Boolean(saved), owner),
+        driver,
+        role,
+        model: t.model && t.model !== 'default' ? t.model : null,
+        effort: t.effort && t.effort !== 'default' ? t.effort : null,
+        bypass: Boolean(t.bypass),
+        sessionId: saved ? t.sessionId || null : null,
+        cachedTokens: saved ? t.cachedTokens || 0 : 0,
+        tokens: saved ? t.tokens || 0 : 0,
+        baseTokens: saved ? t.baseTokens : undefined,
+        baseCachedTokens: saved ? t.baseCachedTokens : undefined,
+        providerChangeId: saved ? t.providerChangeId : undefined,
+        cwd: t.cwd && t.worktree && fs.existsSync(t.cwd) ? t.cwd : undefined,
+        worktree: t.cwd && t.worktree && fs.existsSync(t.cwd) ? t.worktree : undefined,
+      };
+      owner.nextAgent = Math.max(owner.nextAgent, Number(spec.id.slice(1)));
+      owner.team.push(spec);
+      createAgent(spec, owner);
+    }
+    const activePaths = new Set([workDir, ...owner.team.flatMap((spec) => (spec.worktree && spec.cwd ? [spec.cwd] : []))]);
+    owner.project = Object.fromEntries(Object.entries(owner.project).filter(([cwd]) => activePaths.has(cwd)));
+    for (const cwd of activePaths) captureProject(owner, cwd, !saved);
+    if (saved) restoreMilestoneViews(owner, saved.events.findLast((event) => event.kind === 'milestoneProgress')?.milestones);
+    return { owner, saved };
+  } catch (error) {
+    transcript.destroy();
+    throw error;
+  }
+}
+
+function activateConversation({ owner, saved }: ReturnType<typeof prepareConversation>) {
+  S.conv = owner;
   S.history = saved ? saved.events : [];
   S.seq = Math.max(S.seq, saved?.lastSeq || 0);
-
-  for (const t of team || defaultTeam()) {
-    const driver = DRIVERS[t.driver] ? t.driver : 'claude';
-    const role = S.roles[t.role] ? t.role : 'coder';
-    const spec = {
-      id: t.id && /^a\d+$/.test(t.id) ? t.id : `a${S.conv.nextAgent + 1}`,
-      name: uniqueName(t.name || defaultName(driver, role), Boolean(saved)),
-      driver,
-      role,
-      model: t.model && t.model !== 'default' ? t.model : null,
-      effort: t.effort && t.effort !== 'default' ? t.effort : null,
-      bypass: Boolean(t.bypass),
-      sessionId: saved ? t.sessionId || null : null,
-      cachedTokens: saved ? t.cachedTokens || 0 : 0,
-      tokens: saved ? t.tokens || 0 : 0,
-      baseTokens: saved ? t.baseTokens : undefined,
-      baseCachedTokens: saved ? t.baseCachedTokens : undefined,
-      providerChangeId: saved ? t.providerChangeId : undefined,
-      cwd: t.cwd && t.worktree && fs.existsSync(t.cwd) ? t.cwd : undefined,
-      worktree: t.cwd && t.worktree && fs.existsSync(t.cwd) ? t.worktree : undefined,
-    };
-    S.conv.nextAgent = Math.max(S.conv.nextAgent, Number(spec.id.slice(1)));
-    S.conv.team.push(spec);
-    createAgent(spec);
-  }
-  const activePaths = new Set([workDir, ...S.conv.team.flatMap((spec) => (spec.worktree && spec.cwd ? [spec.cwd] : []))]);
-  S.conv.project = Object.fromEntries(Object.entries(S.conv.project).filter(([cwd]) => activePaths.has(cwd)));
-  for (const cwd of activePaths) captureProject(S.conv, cwd, !saved);
-  if (!saved) publish({ kind: 'projectBaseline', project: S.conv.project });
-  else restoreMilestoneViews(S.conv, saved.events.findLast((event) => event.kind === 'milestoneProgress')?.milestones);
+  if (!saved) publish({ kind: 'projectBaseline', project: owner.project });
   return { saved };
 }
 
-export async function closeConversation() {
-  if (!S.conv) return;
+export function openConversation(options: OpenOptions) {
+  return activateConversation(prepareConversation(options));
+}
+
+async function closeActiveConversation() {
+  if (!S.conv) return true;
   const old = S.conv;
   flushMentionStreams(old);
   cancelMilestoneDecision(old, 'closed');
@@ -127,7 +146,26 @@ export async function closeConversation() {
   for (const t of approvalTimers.values()) clearTimeout(t);
   approvalTimers.clear();
   await Promise.all(Object.values(old.agents).map((a) => a.shutdown().catch(() => {})));
+  const drained = finished(old.transcript, { cleanup: true });
   old.transcript.end();
+  return drained.then(
+    () => true,
+    () => false,
+  );
+}
+
+let transition: Promise<unknown> = Promise.resolve();
+let stopping = false;
+
+function serializeTransition<T>(operation: () => Promise<T>) {
+  const result = transition.then(operation);
+  transition = result.catch(() => {});
+  return result;
+}
+
+export function closeConversation() {
+  stopping = true;
+  return serializeTransition(closeActiveConversation);
 }
 
 export function startAgents() {
@@ -152,7 +190,7 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
     )
       return;
     if (ev.kind === 'stderr') {
-      owner.transcript.write(JSON.stringify({ at: Date.now(), ...ev }) + '\n');
+      if (!owner.transcript.destroyed) owner.transcript.write(JSON.stringify({ at: Date.now(), ...ev }) + '\n');
       if (/\b(error|panic|fatal|exception)\b/i.test(ev.text)) logError(agentName(id), `stderr: ${ev.text}`);
       return;
     }
@@ -377,32 +415,43 @@ export function checkTokenLimit() {
   return true;
 }
 
-export async function restoreConversation(id: string): Promise<void> {
-  if (!listConversations(LOGS_DIR).some((c) => c.id === id)) throw new Error(`conversation ${id} not found`);
-  await closeConversation();
-  const { saved } = openConversation({ workDir: process.cwd(), restoreId: id });
+async function switchConversation(options: OpenOptions) {
+  const next = prepareConversation(options);
+  const savedPrevious = await closeActiveConversation();
+  activateConversation(next);
   resetClients();
-  const resumed = S.conv.team.filter((a) => a.sessionId).map((a) => '@' + a.id);
-  publish({
-    kind: 'system',
-    text: `Restored conversation from ${new Date(saved?.startedAt || Date.now()).toLocaleString()} in ${S.conv.workDir} with ${S.conv.team.length} agent(s). ${resumed.length ? `${resumed.join(', ')} continue their sessions.` : 'No agent sessions were saved, so the agents start fresh.'} Relay is paused until you send a message.`,
-  });
-  startAgents();
-  publishState();
+  if (!savedPrevious) publish({ kind: 'error', text: 'The previous conversation history was not fully saved.' });
+  return next.saved;
 }
 
-export async function newConversation(workDir?: string): Promise<void> {
-  const dir = path.resolve(workDir || S.conv?.workDir || process.cwd());
-  if (!fs.existsSync(dir)) throw new Error(`Folder does not exist: ${dir}`);
-  await closeConversation();
-  openConversation({ workDir: dir });
-  resetClients();
-  publish({
-    kind: 'system',
-    text: `New conversation in ${dir}. Team: ${S.conv.team.map((a) => `@${a.id} (${S.roles[a.role]?.name})`).join(', ')}.`,
+export function restoreConversation(id: string) {
+  return serializeTransition(async () => {
+    if (stopping) throw new Error('Agent Bridge is shutting down.');
+    if (S.conv?.id === id) return;
+    if (!listConversations(LOGS_DIR).some((c) => c.id === id)) throw new Error(`conversation ${id} not found`);
+    const saved = await switchConversation({ workDir: process.cwd(), restoreId: id });
+    const resumed = S.conv.team.filter((a) => a.sessionId).map((a) => '@' + a.id);
+    publish({
+      kind: 'system',
+      text: `Restored conversation from ${new Date(saved?.startedAt || Date.now()).toLocaleString()} in ${S.conv.workDir} with ${S.conv.team.length} agent(s). ${resumed.length ? `${resumed.join(', ')} continue their sessions.` : 'No agent sessions were saved, so the agents start fresh.'} Relay is paused until you send a message.`,
+    });
+    startAgents();
+    publishState();
   });
-  startAgents();
-  publishState();
+}
+
+export function newConversation(workDir?: string) {
+  return serializeTransition(async () => {
+    if (stopping) throw new Error('Agent Bridge is shutting down.');
+    const dir = path.resolve(workDir || S.conv?.workDir || process.cwd());
+    await switchConversation({ workDir: dir });
+    publish({
+      kind: 'system',
+      text: `New conversation in ${dir}. Team: ${S.conv.team.map((a) => `@${a.id} (${S.roles[a.role]?.name})`).join(', ')}.`,
+    });
+    startAgents();
+    publishState();
+  });
 }
 
 export function settingsView() {

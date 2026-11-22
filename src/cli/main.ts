@@ -79,8 +79,8 @@ export async function shutdown() {
   // Stop accepting requests first, so the page sees the app as closed right away.
   server.close();
   for (const res of clients) res.end();
-  await closeConversation();
-  process.exit(0);
+  const saved = await closeConversation();
+  process.exit(saved ? 0 : 1);
 }
 
 /**

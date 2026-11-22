@@ -173,3 +173,49 @@ test('an answer without file changes ends without the final approval card', asyn
     await b.stop();
   }
 });
+
+test('a failed restore preserves the active session and concurrent switches finish in order', async () => {
+  const bridge = await startBridge({ team: [team3[0]], rules: [] });
+  try {
+    const { conversationId } = await bridge.waitFor((event) => event.kind === 'state');
+    const saved = path.join(bridge.logs, 'moved');
+    fs.mkdirSync(saved);
+    const rows = [
+      { kind: 'state', workDir: path.join(bridge.root, 'missing-folder'), team: [team3[0]] },
+      { kind: 'user', text: 'saved message' },
+    ];
+    fs.writeFileSync(path.join(saved, 'transcript.jsonl'), rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+    await assert.rejects(bridge.api('restore', { id: 'moved' }), /Working directory does not exist/);
+    assert.equal((await bridge.api('conversations')).current, conversationId);
+    await bridge.api('send', { text: 'still active' });
+    await bridge.waitFor((event) => event.kind === 'user' && event.text === 'still active');
+    const dirs = ['one', 'two'].map((name) => path.join(bridge.root, name));
+    for (const dir of dirs) fs.mkdirSync(dir);
+    await Promise.all(dirs.map((workDir) => bridge.api('new', { workDir })));
+    const current = (await bridge.api('conversations')).current;
+    const state = await bridge.waitFor((event) => event.kind === 'state' && event.conversationId === current);
+    assert.ok(dirs.includes(state.workDir));
+    const opened = bridge.events.filter((event) => event.kind === 'state' && dirs.includes(event.workDir));
+    assert.equal(new Set(opened.map((event) => event.conversationId)).size, 2);
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('graceful shutdown saves the final event before the process exits', async () => {
+  const bridge = await startBridge({ team: [team3[0]], rules: [] });
+  try {
+    const { conversationId } = await bridge.waitFor((event) => event.kind === 'state');
+    const exit = new Promise((resolve) => bridge.child.once('exit', resolve));
+    await bridge.api('quit');
+    assert.equal(await exit, 0);
+    const events = fs
+      .readFileSync(path.join(bridge.logs, conversationId, 'transcript.jsonl'), 'utf8')
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    assert.ok(events.some((event) => event.kind === 'system' && event.text.startsWith('Agent Bridge is closing.')));
+  } finally {
+    await bridge.stop();
+  }
+});

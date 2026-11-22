@@ -90,21 +90,21 @@ export function statusFor(owner: Conversation, id: string) {
 const RESERVED_AGENT_NAME = /^a\d+$/i;
 const MAX_AGENT_NAME = 24;
 
-function nameTaken(name: string, except?: string): boolean {
+function nameTaken(name: string, except?: string, owner = S.conv): boolean {
   const key = name.toLowerCase();
-  return S.conv.pendingAgentNames.has(key) || S.conv.team.some((member) => member.id !== except && member.name.toLowerCase() === key);
+  return owner.pendingAgentNames.has(key) || owner.team.some((member) => member.id !== except && member.name.toLowerCase() === key);
 }
 
-export function uniqueName(base: string, preserveLegacyName = false): string {
+export function uniqueName(base: string, preserveLegacyName = false, owner = S.conv): string {
   const clean =
     String(base || 'Agent')
       .replace(/[^\w-]/g, '')
       .slice(0, MAX_AGENT_NAME) || 'Agent';
-  if (!nameTaken(clean) && (preserveLegacyName || !RESERVED_AGENT_NAME.test(clean))) return clean;
+  if (!nameTaken(clean, undefined, owner) && (preserveLegacyName || !RESERVED_AGENT_NAME.test(clean))) return clean;
   for (let i = 2; ; i++) {
     const suffix = '-' + i;
     const name = clean.slice(0, MAX_AGENT_NAME - suffix.length) + suffix;
-    if (!nameTaken(name)) return name;
+    if (!nameTaken(name, undefined, owner)) return name;
   }
 }
 
@@ -123,8 +123,8 @@ export function defaultName(driver: string, role: string): string {
 }
 
 /** Create the agent process wrapper for one team member (the process itself starts lazily or on start()). */
-export function createAgent(spec: AgentSpec): Agent {
-  return installAgent(S.conv, buildAgent(S.conv, spec));
+export function createAgent(spec: AgentSpec, owner = S.conv): Agent {
+  return installAgent(owner, buildAgent(owner, spec));
 }
 
 export function buildAgent(owner: Conversation, spec: AgentSpec): Agent {

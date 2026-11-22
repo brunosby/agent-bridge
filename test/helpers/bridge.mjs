@@ -145,5 +145,5 @@ export async function startBridge({ team, rules, settings = {}, resume, dir }) {
     await sleep(100);
   }
 
-  return { api, events, waitFor, state, nameOf, stop, root, work, logs, port };
+  return { api, events, waitFor, state, nameOf, stop, root, work, logs, port, child };
 }
