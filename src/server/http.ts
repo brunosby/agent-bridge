@@ -2,12 +2,13 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import http, { type ServerResponse } from 'node:http';
 import { APP_DIR, PUBLIC_DIR } from '../config/settings.ts';
 import { logError, publish, publishState, replayHistory, snapshotLine } from './events.ts';
 import { clients, S } from './state.ts';
 import { serveReviewMcp } from './review-mcp.ts';
 import { api } from './api.ts';
+import { BodyTooLargeError, readJson } from './request-body.ts';
 export const token = crypto.randomBytes(18).toString('hex');
 export const SRC_DIR = path.join(APP_DIR, 'src');
 export const codeHash = () => {
@@ -43,6 +44,12 @@ export const MIME: Record<string, string> = {
 export const server = http.createServer(async (req, res) => {
   let pathname = '/';
   try {
+    const port = req.socket.localPort;
+    const suffix = port === 80 ? '' : ':' + port;
+    const host = req.headers.host?.toLowerCase();
+    if (!host || !['127.0.0.1', 'localhost'].some((name) => host === name + suffix || host === name + ':' + port))
+      return send(res, 403, 'forbidden');
+    if (req.headers.origin !== undefined && req.headers.origin !== 'http://' + host.replace(/:80$/, '')) return send(res, 403, 'forbidden');
     const url = new URL(req.url || '/', 'http://127.0.0.1');
     pathname = url.pathname;
     if (pathname === '/mcp/review')
@@ -72,7 +79,7 @@ export const server = http.createServer(async (req, res) => {
   } catch (err) {
     const e = err instanceof Error ? err : new Error(String(err));
     logError('bridge', `${req.method} ${pathname}: ${e.stack || e.message}`);
-    send(res, 400, JSON.stringify({ error: e.message }), 'application/json');
+    send(res, e instanceof BodyTooLargeError ? 413 : 400, JSON.stringify({ error: e.message }), 'application/json');
   }
 });
 
@@ -97,21 +104,4 @@ export function serveStatic(pathname: string, res: ServerResponse): void {
 export function send(res: ServerResponse, status: number, body: string | Buffer, type = 'text/plain; charset=utf-8'): void {
   res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
   res.end(body);
-}
-
-export function readJson(req: IncomingMessage): Promise<any> {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (c: Buffer) => {
-      data += c;
-      if (data.length > 1_000_000) reject(new Error('body too large'));
-    });
-    req.on('end', () => {
-      try {
-        resolve(data ? JSON.parse(data) : {});
-      } catch (e) {
-        reject(e);
-      }
-    });
-  });
 }

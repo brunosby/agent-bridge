@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { get } from 'node:http';
+import { PassThrough, Readable } from 'node:stream';
+import { BodyTooLargeError, readJson } from '../src/server/request-body.ts';
 import { startBridge } from './helpers/bridge.mjs';
 
 test('an invalid role decision preserves the pending request and logs no URL query', async () => {
@@ -29,4 +32,39 @@ test('an invalid role decision preserves the pending request and logs no URL que
   } finally {
     await bridge.stop();
   }
+});
+
+test('the local page requires its listening authority and a matching browser origin', async () => {
+  const bridge = await startBridge({ team: [{ driver: 'fake', role: 'coder', name: 'Dev' }], rules: [] });
+  const port = bridge.port;
+  const page = (headers) =>
+    new Promise((resolve, reject) => {
+      get({ hostname: '127.0.0.1', port, path: '/', headers }, (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      }).once('error', reject);
+    });
+  try {
+    assert.equal(await page({ host: 'localhost:' + port, origin: 'http://localhost:' + port }), 200);
+    assert.equal(await page({ host: 'example.invalid:' + port }), 403);
+    assert.equal(await page({ host: 'localhost:' + (port + 1) }), 403);
+    assert.equal(await page({ origin: 'http://example.invalid' }), 403);
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('JSON preserves fragmented UTF-8 and enforces the byte limit while streaming', async () => {
+  const data = Buffer.from(JSON.stringify('ação 🙂'));
+  assert.equal(await readJson(Readable.from(Array.from(data, (byte) => Buffer.from([byte])))), 'ação 🙂');
+  const exact = Buffer.from(JSON.stringify('é'.repeat(499999)));
+  assert.equal(exact.length, 1_000_000);
+  assert.equal((await readJson(Readable.from([exact]))).length, 499999);
+  const input = new PassThrough();
+  const rejected = assert.rejects(readJson(input), BodyTooLargeError);
+  input.write(exact);
+  input.write(Buffer.from(' '));
+  await rejected;
+  assert.equal(input.listenerCount('data'), 0);
+  input.end();
 });
