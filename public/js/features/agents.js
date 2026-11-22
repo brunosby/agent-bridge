@@ -4,6 +4,7 @@ import { agentWarnings, describeAgent, modelInfo, sortModels } from '../core/age
 import { $, fmtTokens, h } from '../core/dom.js';
 import { agentOf, cards, roleOf, store } from '../core/store.js';
 import { openAddDialog } from './add-agent.js';
+import { providerForm } from './agent-provider.js';
 import { updatePending } from './approvals.js';
 import { api } from '../core/api.js';
 import { addSys, jumpToSequence } from './conversation-log.js';
@@ -175,13 +176,17 @@ export function renderCard(a) {
     meta.append(drv, tokens, taskLink);
     const actions = h('div', 'agent-details__actions');
     actions.append(stop, retry, remove);
-    details.append(meta, warn, rename, row, rec, actions);
+    const switchProvider = providerForm(a.id, (show) => {
+      model.hidden = effort.hidden = !show;
+    });
+    details.append(meta, warn, rename, row, rec, switchProvider.form, actions);
 
     el.onclick = () => {
       detailsDialog.dataset.agent = a.id;
       $('agentDetailsTitle').textContent = name.textContent;
       nameInput.value = name.textContent;
       renameError.textContent = '';
+      switchProvider.open(agentOf(a.id));
       $('agentDetailsBody').replaceChildren(details);
       detailsDialog.showModal();
     };
@@ -196,6 +201,9 @@ export function renderCard(a) {
       tokens,
       stop,
       retry,
+      remove,
+      saveName,
+      switchProvider,
       role,
       model,
       effort,
@@ -206,7 +214,7 @@ export function renderCard(a) {
     };
   }
   const availability = describeAgent(a);
-  c.el.className = `card${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${!availability.available ? ' unavailable' : ''}`;
+  c.el.className = `card${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${!availability.available && !availability.switching ? ' unavailable' : ''}`;
   c.details.classList.toggle('bypass-on', a.bypass);
   c.name.textContent = a.name;
   const roleLabel = roleOf(a.role)?.name || a.role;
@@ -230,9 +238,14 @@ export function renderCard(a) {
   c.taskLink.hidden = !task?.sourceSeq;
   c.taskLink.dataset.seq = task?.sourceSeq || '';
   c.tokens.textContent = `${fmtTokens(a.tokens)} tok${a.cachedTokens ? ` (+${fmtTokens(a.cachedTokens)} cache)` : ''}`;
-  c.stop.disabled = !a.busy;
+  c.stop.disabled = availability.switching || (!a.busy && !a.waitingApproval);
   c.retry.hidden = !availability.retry;
+  c.role.disabled = c.bypass.disabled = c.remove.disabled = availability.switching;
+  if (availability.switching) c.saveName.disabled = true;
+  else if (c.saveName.dataset.switching) c.saveName.disabled = false;
+  c.saveName.dataset.switching = availability.switching ? 'true' : '';
   c.bypass.checked = a.bypass;
+  c.switchProvider.update(a);
 
   // role select
   if (document.activeElement !== c.role) {

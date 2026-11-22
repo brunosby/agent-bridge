@@ -39,8 +39,18 @@ export function sortModels(models) {
     );
 }
 
+export const ACCOUNT_STATUS_TEXT = {
+  ok: ['Ready', 'ok'],
+  not_installed: ['Not installed', 'bad'],
+  logged_out: ['Installed, not signed in', 'warn'],
+  no_access: ['Signed in, no access', 'bad'],
+  rate_limited: ['Usage limit reached', 'warn'],
+  unknown: ['Unknown', 'warn'],
+};
+
 const labels = {
   starting: 'starting',
+  switching_provider: 'switching provider',
   startup_failed: 'failed to start',
   unavailable: 'unavailable',
   logged_out: 'not signed in',
@@ -56,7 +66,8 @@ export function describeAgent(agent) {
   const activity = agent.status?.activity || (agent.waitingApproval ? 'waiting' : agent.busy ? 'working' : 'idle');
   return {
     available: availability === 'ready',
-    retry: availability !== 'ready' && availability !== 'starting',
+    switching: availability === 'switching_provider',
+    retry: !['ready', 'starting', 'switching_provider'].includes(availability),
     label: labels[availability === 'ready' ? activity : availability] || labels.unavailable,
     activity,
   };

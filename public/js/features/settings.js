@@ -1,5 +1,6 @@
 // Settings dialog: general settings, accounts and roles.
 import { $, h } from '../core/dom.js';
+import { ACCOUNT_STATUS_TEXT } from '../core/agent-view.js';
 import { store } from '../core/store.js';
 import { api } from '../core/api.js';
 import { loadCatalog } from '../main.js';
@@ -104,15 +105,6 @@ $('saveSettings').onclick = async () => {
   }
 };
 
-export const STATE_TEXT = {
-  ok: ['Ready', 'ok'],
-  not_installed: ['Not installed', 'bad'],
-  logged_out: ['Installed, not signed in', 'warn'],
-  no_access: ['Signed in, no access', 'bad'],
-  rate_limited: ['Usage limit reached', 'warn'],
-  unknown: ['Unknown', 'warn'],
-};
-
 export async function renderAccounts(refresh = false) {
   const list = $('accountList');
   list.textContent = 'Checking…';
@@ -121,7 +113,7 @@ export async function renderAccounts(refresh = false) {
     list.textContent = '';
     for (const acc of accounts) {
       const row = h('div', 'account');
-      const [text, cls] = STATE_TEXT[acc.state] || [acc.state, 'warn'];
+      const [text, cls] = ACCOUNT_STATUS_TEXT[acc.state] || [acc.state, 'warn'];
       const head = h('div', 'acc-head');
       head.append(h('strong', null, acc.label), h('span', `state ${cls}`, text));
       if (acc.version) head.appendChild(h('span', 'hint', acc.version));

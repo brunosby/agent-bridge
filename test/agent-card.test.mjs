@@ -130,6 +130,53 @@ test('agent card shows the role and a short model name, with the full id and eff
     assert.equal(messages[1].querySelector('.who').textContent, 'Quality');
     assert.equal(window.document.querySelector('#logAgent option[value="a2"]').textContent, 'Quality');
 
+    store.catalog.drivers = [
+      { id: 'codex', label: 'Codex' },
+      { id: 'claude', label: 'Claude Code' },
+    ];
+    const calls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push([url, body]);
+      if (url === '/api/accounts') return { ok: true, json: async () => ({ accounts: [{ state: 'ok', detail: 'Fixture account' }] }) };
+      if (url === '/api/driverModels') {
+        return { ok: true, json: async () => ({ models: [{ value: 'opus', label: 'Opus', efforts: ['high'] }] }) };
+      }
+      assert.equal(url, '/api/changeProvider');
+      const updated = { ...renamed, driver: 'claude', driverLabel: 'Claude Code' };
+      handle({ ...state, team: [lead, updated] });
+      return { ok: true, json: async () => ({ ready: true }) };
+    };
+    try {
+      const provider = cards.a2.switchProvider;
+      provider.open(renamed);
+      const [driver, targetModel, targetEffort] = provider.form.querySelectorAll('select');
+      const submit = provider.form.querySelector('button[type=submit]');
+      driver.value = 'claude';
+      await driver.onchange();
+      assert.match(provider.form.textContent, /fresh session/);
+      assert.match(provider.form.textContent, /Ready - Fixture account/);
+      assert.equal(cards.a2.model.hidden, true);
+      targetModel.value = 'opus';
+      targetModel.onchange();
+      targetEffort.value = 'high';
+      provider.update({ ...renamed, waitingApproval: 1 });
+      assert.equal(submit.disabled, true);
+      assert.match(provider.form.textContent, /Use Stop/);
+      provider.update(renamed);
+      assert.equal(submit.disabled, false);
+      await provider.form.onsubmit({ preventDefault() {} });
+      assert.deepEqual(calls, [
+        ['/api/accounts', { driver: 'claude' }],
+        ['/api/driverModels', { driver: 'claude' }],
+        ['/api/changeProvider', { agent: 'a2', driver: 'claude', model: 'opus', effort: 'high', conversationId: 'test' }],
+      ]);
+      assert.equal(tone(cards.a2.el), peerColor);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
     handle({ ...state, team: [lead], knownAgents: [{ ...renamed, removed: true }] });
     handle({ kind: 'replayComplete' });
     const removed = messages[0].querySelector('.mention');
