@@ -12,7 +12,6 @@ import {
   type MilestoneCommitCandidate,
   type MilestoneWorkspace,
 } from '../workspace/milestone-git.ts';
-import { changeFingerprint } from '../workspace/git-context.ts';
 import { publish, publishState } from './events.ts';
 import { relay, S } from './state.ts';
 import { deliver } from './delivery.ts';
@@ -285,7 +284,19 @@ export function observeMilestoneReview(owner: Conversation, text: string) {
   if (!flow || !active) return;
   if (/^\W*CHANGES REQUESTED\b/i.test(text)) delete flow.review;
   else if (/^\W*APPROVED\b/i.test(text)) {
-    flow.review = { number: active.number, fingerprints: Promise.all(flow.workspaces.map(({ root }) => changeFingerprint(root))) };
+    flow.review = {
+      number: active.number,
+      fingerprints: Promise.all(
+        flow.workspaces.map(async (workspace) => {
+          try {
+            const candidate = await findMilestoneChanges(workspace, config.reviewDiffExcludePatterns);
+            return candidate ? candidate.fingerprint + candidate.tree : null;
+          } catch {
+            return null;
+          }
+        }),
+      ),
+    };
   }
 }
 
@@ -378,7 +389,9 @@ export async function finishMilestone(owner: Conversation, agent: string, number
         after.length !== candidates.length ||
         after.some(
           (candidate, index) =>
-            candidate.fingerprint !== candidates[index].fingerprint || candidate.workspace !== candidates[index].workspace,
+            candidate.fingerprint !== candidates[index].fingerprint ||
+            candidate.tree !== candidates[index].tree ||
+            candidate.workspace !== candidates[index].workspace,
         )
       )
         throw new Error('Git files changed while verifying the milestone. Declare it again after reviewing the changes.');
@@ -389,7 +402,7 @@ export async function finishMilestone(owner: Conversation, agent: string, number
     if (reviewerRequired) {
       if (flow.review?.number !== number) throw new Error('The Reviewer has not approved this milestone.');
       const approved = await flow.review.fingerprints;
-      if (candidates.some((candidate) => approved[flow.workspaces.indexOf(candidate.workspace)] !== candidate.fingerprint))
+      if (candidates.some((candidate) => approved[flow.workspaces.indexOf(candidate.workspace)] !== candidate.fingerprint + candidate.tree))
         throw new Error('Files changed after the Reviewer approved them. Request a fresh review.');
     }
     if (!current()) return;

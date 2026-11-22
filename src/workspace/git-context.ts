@@ -136,9 +136,9 @@ export function committedPaths(cwd: string, previous: string | null, current: st
 
 /**
  * Fingerprint of the working tree: HEAD, the diff against HEAD and the untracked files (size and time).
- * Two equal fingerprints mean no file changed in between. Null when the folder is not a Git repository.
+ * For activity detection, status is a fallback. Milestone approvals require a readable diff.
  */
-export async function changeFingerprint(cwd: string): Promise<string | null> {
+export async function changeFingerprint(cwd: string, requireDiff = false): Promise<string | null> {
   const status = await gitAsync(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   if (status === null) return null;
   const [head, diff, root] = await Promise.all([
@@ -146,6 +146,7 @@ export async function changeFingerprint(cwd: string): Promise<string | null> {
     gitAsync(cwd, ['diff', 'HEAD', '--no-ext-diff', '--binary']),
     gitAsync(cwd, ['rev-parse', '--show-toplevel']),
   ]);
+  if (requireDiff && diff === null) return null;
   const hash = createHash('sha256')
     .update(head || '')
     .update('\0')

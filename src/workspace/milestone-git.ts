@@ -20,13 +20,29 @@ async function git(cwd: string, args: string[], env = process.env): Promise<stri
 const hookRunner = fileURLToPath(new URL('./milestone-hook.mjs', import.meta.url)).replaceAll('\\', '/');
 const guardedHooks = ['pre-commit', 'prepare-commit-msg', 'commit-msg', 'post-commit', 'reference-transaction'];
 
-async function commitWithScopedHooks(root: string, base: string, paths: string[], message: string, current: () => boolean) {
+// Build the tree Git would commit without touching the user's index.
+async function candidateTree(root: string, base: string, paths: string[]) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agent-bridge-index-'));
+  const index = path.join(directory, 'index');
+  const env = { ...process.env, GIT_INDEX_FILE: index };
+  const run = (args: string[]) => git(root, ['-c', 'core.hooksPath=' + directory, ...args], env);
+  try {
+    await run(['read-tree', base]);
+    await run(['--literal-pathspecs', 'add', '-A', '--', ...paths]);
+    return (await run(['write-tree'])).trim();
+  } finally {
+    await rm(index, { force: true });
+    await rmdir(directory);
+  }
+}
+
+async function commitWithScopedHooks(root: string, tree: string, paths: string[], message: string, current: () => boolean) {
   const original = path.resolve(root, (await git(root, ['rev-parse', '--git-path', 'hooks'])).trim());
   const dir = await mkdtemp(path.join(os.tmpdir(), 'agent-bridge-milestone-hooks-'));
   const dataFile = path.join(dir, 'scope.json');
   const wrappers = guardedHooks.map((hook) => path.join(dir, hook));
   try {
-    await writeFile(dataFile, JSON.stringify({ hooks: original, base, paths }));
+    await writeFile(dataFile, JSON.stringify({ hooks: original, tree }));
     await Promise.all(
       guardedHooks.map((hook, index) =>
         writeFile(wrappers[index], '#!/bin/sh\nexec "$AGENT_BRIDGE_GIT_NODE" "$AGENT_BRIDGE_GIT_HOOK" ' + hook + ' "$@"\n', {
@@ -59,6 +75,7 @@ export interface MilestoneCommitCandidate {
   workspace: MilestoneWorkspace;
   paths: string[];
   fingerprint: string;
+  tree: string;
 }
 
 export async function captureMilestoneWorkspace(cwd: string, label: string): Promise<MilestoneWorkspace | null> {
@@ -97,13 +114,15 @@ export async function findMilestoneChanges(workspace: MilestoneWorkspace, exclus
     )
     .flatMap(({ names }) => names);
   if (!paths.length) return null;
-  const fingerprint = await changeFingerprint(root);
+  const selected = [...new Set(paths)].sort();
+  const fingerprint = await changeFingerprint(root, true);
   if (!fingerprint) throw new Error('Could not fingerprint the Git changes for ' + workspace.label + '.');
-  return { workspace, paths: [...new Set(paths)].sort(), fingerprint };
+  const tree = await candidateTree(root, snapshot.head, selected);
+  return { workspace, paths: selected, fingerprint, tree };
 }
 
 export async function commitMilestone(candidate: MilestoneCommitCandidate, message: string, current: () => boolean) {
-  const { workspace, paths, fingerprint } = candidate;
+  const { workspace, paths, fingerprint, tree } = candidate;
   const { root, initial } = workspace;
   const snapshot = projectSnapshot(root);
   if (
@@ -111,7 +130,7 @@ export async function commitMilestone(candidate: MilestoneCommitCandidate, messa
     !initial.head ||
     snapshot?.head !== initial.head ||
     snapshot?.branch !== initial.branch ||
-    (await changeFingerprint(root)) !== fingerprint
+    (await changeFingerprint(root, true)) !== fingerprint
   )
     throw new Error('The approved changes moved before the commit. Declare the milestone again.');
   const gitDir = path.resolve(root, (await git(root, ['rev-parse', '--absolute-git-dir'])).trim());
@@ -127,7 +146,7 @@ export async function commitMilestone(candidate: MilestoneCommitCandidate, messa
   try {
     if (newPaths.length) await git(root, ['--literal-pathspecs', 'add', '--intent-to-add', '--', ...newPaths]);
     if (!current()) throw new Error('This milestone is no longer active.');
-    await commitWithScopedHooks(root, initial.head, paths, message, current);
+    await commitWithScopedHooks(root, tree, paths, message, current);
   } catch {
     const after = projectSnapshot(root);
     if (after?.head === initial.head && newPaths.length) {

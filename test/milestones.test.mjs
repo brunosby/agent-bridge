@@ -271,3 +271,36 @@ test('restore keeps a legacy worktree path and branch that were saved by name', 
     fs.rmSync(project.dir, { recursive: true, force: true });
   }
 });
+
+test('milestone approval fails closed when the tracked diff exceeds the capture limit', async () => {
+  const project = fixture();
+  try {
+    const baseline = await captureMilestoneWorkspace(project.work, 'Project');
+    project.write('protected.txt', 'x'.repeat(21 * 1024 * 1024));
+    await assert.rejects(findMilestoneChanges(baseline, []), /Could not fingerprint/);
+    assert.equal(project.git('rev-parse', 'HEAD'), project.head);
+  } finally {
+    fs.rmSync(project.dir, { recursive: true, force: true });
+  }
+});
+
+test('a formatting hook cannot replace the approved content of the same file', async () => {
+  const project = fixture();
+  try {
+    const hooks = path.join(project.dir, 'format-hooks');
+    fs.mkdirSync(hooks);
+    project.git('config', 'core.hooksPath', hooks);
+    fs.writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\nprintf formatted > new.txt\ngit add -- new.txt\n', { mode: 0o755 });
+    const baseline = await captureMilestoneWorkspace(project.work, 'Project');
+    project.write('new.txt', 'approved');
+    const candidate = await findMilestoneChanges(baseline, []);
+    await assert.rejects(
+      commitMilestone(candidate, 'Milestone: format', () => true),
+      /could not commit/,
+    );
+    assert.equal(project.git('rev-parse', 'HEAD'), project.head);
+    assert.equal(project.git('diff', '--cached', '--name-only'), '');
+  } finally {
+    fs.rmSync(project.dir, { recursive: true, force: true });
+  }
+});
