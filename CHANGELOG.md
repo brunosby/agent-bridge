@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Added
 
+- Change the provider of an idle agent from its details. The agent keeps its name, mentions, history and worktree. The new provider gets a handoff summary, and incoming work waits for it to start.
 - Use **Customize** on a role recommendation or missing-role card to choose the agent’s name, provider, model and options before adding it.
 - **Settings > General > Automatically approve read-only commands** covers supported workspace reads. PowerShell support includes recursive listings and literal values for `Get-ChildItem -Depth`, `-Filter` and `-Include`.
 - **Allow for session** remembers approved, supported test commands for the same agent, directory and conversation. For Claude Code, this includes PowerShell test pipelines that start with a directory change inside the workspace and use filters such as `Select-String` and `Select -First`. Patterns with special characters must be single-quoted.
