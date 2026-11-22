@@ -6,11 +6,10 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Added
 
-- Customize a suggested agent from a role card before adding it.
-- Automatically approve supported literal reads in the workspace and remember explicitly approved test commands for the current conversation.
-
+- Use **Customize** on a role recommendation or missing-role card to choose the agent’s name, provider, model and options before adding it.
+- **Settings > General > Automatically approve read-only commands** covers supported workspace reads. PowerShell support includes recursive listings and literal values for `Get-ChildItem -Depth`, `-Filter` and `-Include`.
+- **Allow for session** remembers approved, supported test commands for the same agent, directory and conversation. For Claude Code, this includes PowerShell test pipelines that start with a directory change inside the workspace and use filters such as `Select-String` and `Select -First`. Patterns with special characters must be single-quoted.
 - Rename an agent from its details while it works. Mentions keep their agent ID, and saved history shows the current name.
-
 - Tests: end-to-end conversation tests with a scripted provider (no CLIs or tokens needed) and unit tests; CI on Windows and Linux.
 - Tooling: ESLint (typescript-eslint), Prettier, EditorConfig, type checking, npm scripts (`check`, `lint`, `typecheck`, `test`, `format`).
 - Light theme (follows the system setting) and a responsive layout for phones and tablets.
@@ -43,8 +42,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
-- Resume delivers held hand-offs in order when the conversation limits allow it.
-- New worktrees use the full conversation ID and the agent ID to keep agents isolated.
+- **Resume** delivers replies held at the token or hand-off limit in order, as the current limits allow. **Stop all** and a new user message clear the queue.
+- New worktrees use the full conversation ID and the agent ID to keep agents isolated. Restoring a conversation reuses its saved worktree path and branch.
 - Simultaneous Codex approval requests and requests after a restart have distinct IDs.
 - The effort menu of a Codex agent stayed disabled when its models loaded before the agent was ready; it now unlocks as soon as the agent is ready.
 - OpenCode agents showed the model's reasoning and OpenCode's own context summary as if they were answers; now only the answer is shown, with a notice when OpenCode summarises the context.
