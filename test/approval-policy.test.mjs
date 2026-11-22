@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { inspectShell, wrappedShellCommand } from '../src/core/read-only-shell.ts';
 import { config } from '../src/config/settings.ts';
-import { processShellApproval, answerApproval } from '../src/server/shell-approvals.ts';
+import { processShellApproval, answerApproval, revokeShellApprovals } from '../src/server/shell-approvals.ts';
 import { CodexAgent } from '../src/providers/codex.ts';
 
 test('read-only approvals require literal arguments and keep session grants in Bridge', () => {
@@ -60,6 +60,10 @@ test('read-only approvals require literal arguments and keep session grants in B
     assert.equal(answerApproval(owner, agent, 'first', 'acceptForSession'), true);
     assert.deepEqual(approvals.at(-1), ['first', 'accept']);
     assert.match(processShellApproval(owner, agent, request('again', testCommand + 'two'), false), /earlier/);
+    revokeShellApprovals(owner, agent.id);
+    const replacement = request('replacement', testCommand + 'two');
+    assert.equal(processShellApproval(owner, { ...agent }, replacement, false), undefined);
+    assert.ok(replacement.decisions.includes('acceptForSession'));
     assert.equal(
       processShellApproval(owner, agent, request('different', testCommand + 'two', path.join(root, 'subdir')), false),
       undefined,

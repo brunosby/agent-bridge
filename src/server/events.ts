@@ -28,7 +28,7 @@ export function publish(ev: BridgeEvent): BridgeEvent {
       }),
     );
   const line = `data: ${JSON.stringify(full)}\n\n`;
-  if (full.kind !== 'projectBaseline') for (const res of clients) res.write(line);
+  if (!isPrivateEvent(full)) for (const res of clients) res.write(line);
   return full;
 }
 
@@ -80,8 +80,11 @@ export function teamState() {
       effort: a?.effort || 'default',
       resolvedModel: a?.resolvedModel || null,
       models: a ? decorateModels(spec, a) : [],
-      tokens: a?.tokens || 0,
-      cachedTokens: a?.cachedTokens || 0,
+      tokens: (spec.baseTokens || 0) + (a?.tokens || 0),
+      cachedTokens: (spec.baseCachedTokens || 0) + (a?.cachedTokens || 0),
+      baseTokens: spec.baseTokens,
+      baseCachedTokens: spec.baseCachedTokens,
+      providerChangeId: spec.providerChangeId,
       status,
       available: canReceiveWork(status),
       unavailableReason: status.reason,
@@ -132,9 +135,13 @@ export function resetClients() {
   }
 }
 
+function isPrivateEvent(event: BridgeEvent): boolean {
+  return ['projectBaseline', 'providerHandoff', 'providerHandoffDelivered'].includes(event.kind);
+}
+
 export function replayHistory(res: ServerResponse): void {
   for (const ev of S.history) {
-    if (ev.kind === 'state' || ev.kind === 'projectBaseline') continue;
+    if (ev.kind === 'state' || isPrivateEvent(ev)) continue;
     res.write(`data: ${JSON.stringify(ev)}\n\n`);
   }
   res.write('data: {"kind":"replayComplete"}\n\n');

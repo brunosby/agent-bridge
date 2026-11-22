@@ -37,6 +37,15 @@ export function processShellApproval(owner: Conversation, agent: Agent, event: A
   event.decisions = key ? ['accept', 'acceptForSession', 'decline'] : ['accept', 'decline'];
 }
 
+export function revokeShellApprovals(owner: Conversation, agentId: string): void {
+  const session = sessions.get(owner);
+  if (!session) return;
+  session.permitted.delete(agentId);
+  for (const [requestId, pending] of session.pending) {
+    if (pending.agent === agentId) session.pending.delete(requestId);
+  }
+}
+
 export function closeShellApproval(owner: Conversation, requestId: string): void {
   sessions.get(owner)?.pending.delete(requestId);
 }

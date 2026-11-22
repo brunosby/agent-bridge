@@ -18,4 +18,7 @@ export const DRIVERS: Record<string, DriverEntry> = {
   opencode: { label: 'OpenCode', Agent: OpenCodeAgent, probe: (cfg) => OpenCodeAgent.probe(cfg) },
 };
 // Scripted provider for automated tests only.
-if (config.enableFakeProvider) DRIVERS.fake = { label: 'Fake (tests)', Agent: FakeAgent };
+if (config.enableFakeProvider) {
+  DRIVERS.fake = { label: 'Fake (tests)', Agent: FakeAgent };
+  DRIVERS['fake-alternate'] = { label: 'Alternate Fake (tests)', Agent: FakeAgent };
+}

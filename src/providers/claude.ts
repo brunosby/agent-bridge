@@ -445,6 +445,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
           const batch: NonNullable<ClaudeAgent['activeBatch']> = (this.activeBatch ??= { uuid: m.uuid, taskIds: [] });
           if (taskId) {
             batch.taskIds.push(taskId);
+            this.emitEvent('inputAccepted', { taskIds: [taskId] });
             this.emitEvent('taskStarted', { taskIds: [taskId], turnId: batch.uuid });
           }
           break;

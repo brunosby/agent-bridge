@@ -49,7 +49,7 @@ export function buildInstructions({ name, role, routingMode, workDir, userName, 
     'How the conversation works:',
     `- ${userName} watches the whole conversation live and may write to any agent at any time.`,
     `- Messages start with a header such as "[Message from ${userName}]" or "[Message from @a2]".`,
-    '- "[Team]" blocks list the current agents with stable @ids, names, roles and models. Use those exact @ids when delegating.',
+    '- "[Team]" blocks list the current agents with stable @ids, names, roles, providers and models. Use those exact @ids when delegating.',
     `- Routing: ${mode.rule}`,
     '- Write your final message for its reader: short, concrete, with file paths and what you need.',
     `- When the whole task is complete, or only ${userName} can decide something, address ${userName} directly and end with a line containing only [[DONE]]. This stops the automatic hand-offs.`,
@@ -65,6 +65,7 @@ export interface RosterMember {
   id: string;
   name: string;
   roleName: string;
+  provider?: string;
   canEdit?: string;
   model?: string | null;
   status?: ReturnType<typeof agentStatus>;
@@ -72,18 +73,20 @@ export interface RosterMember {
 
 export function rosterText(team: RosterMember[], selfId: string, routingMode: string): string {
   const edits: Record<string, string> = { all: 'edits files', tests: 'edits tests only', none: 'read-only' };
-  const ready = team.filter((a) => !a.status || a.status.availability === 'ready');
-  const unavailable = team.filter((a) => a.status && a.status.availability !== 'ready');
+  const ready = team.filter((a) => !a.status || a.status.availability === 'ready' || a.status.availability === 'switching_provider');
+  const unavailable = team.filter((a) => !ready.includes(a));
   const lines = ready.map(
     (a) =>
-      `- @${a.id}: ${a.name} (${a.roleName}, ${edits[a.canEdit || 'all'] || 'edits files'})${a.model ? `, model ${a.model}` : ''}${a.id === selfId ? ' (you)' : ''}`,
+      `- @${a.id}: ${a.name} (${a.roleName}, ${edits[a.canEdit || 'all'] || 'edits files'})${a.provider ? `, provider ${a.provider}` : ''}${a.model ? `, model ${a.model}` : ''}${a.status?.availability === 'switching_provider' ? ' (switching provider, work will wait)' : ''}${a.id === selfId ? ' (you)' : ''}`,
   );
   const mode = ROUTING_MODES[routingMode as RoutingMode] || ROUTING_MODES.orchestrator;
   const noEditor = !ready.some((a) => a.canEdit === 'all');
   const note = noEditor
     ? '\nNo agent in this team can edit production code. Do not try to work around it: plan and review only, and tell the user to add a Coder (or another role that edits files) when the task needs code changes.'
     : '';
-  const blocked = unavailable.map((a) => '@' + a.id + ' (' + a.name + ': ' + (a.status?.reason || a.status?.availability) + ')');
+  const blocked = unavailable.map(
+    (a) => '@' + a.id + ' (' + a.name + (a.provider ? ', ' + a.provider : '') + ': ' + (a.status?.reason || a.status?.availability) + ')',
+  );
   const warning = blocked.length ? '\nUnavailable: ' + blocked.join(', ') + '. Do not delegate to these agents.' : '';
   return '[Team]\n' + lines.join('\n') + warning + '\nRouting: ' + mode.label + '.' + note;
 }

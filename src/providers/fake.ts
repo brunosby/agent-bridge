@@ -2,6 +2,8 @@ import type { ProviderEventArgs } from '../core/types.ts';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { Agent, AgentOptions, DriverConfig, ModelInfo } from '../core/types.ts';
 
 interface FakeRule {
@@ -54,7 +56,7 @@ export class FakeAgent extends EventEmitter implements Agent {
     this.config = config || {};
     this.tokens = tokens;
     this.cachedTokens = cachedTokens;
-    this.sessionId = this.config.resumeSessionId || `fake-${id}`;
+    this.sessionId = this.config.resumeSessionId || `fake-${randomUUID()}`;
   }
 
   get busy(): boolean {
@@ -74,6 +76,7 @@ export class FakeAgent extends EventEmitter implements Agent {
   }
 
   async start(): Promise<void> {
+    if (this.config.startDelayMs) await delay(Number(this.config.startDelayMs));
     if (this.config.failRoleStartup && this.name === this.config.failRoleStartup && this.available) {
       this.available = false;
       this.unavailableReason = 'Fixture startup failure.';
@@ -96,6 +99,13 @@ export class FakeAgent extends EventEmitter implements Agent {
     const timer = setTimeout(
       () => {
         this.timers.delete(timer);
+        if (this.config.rejectFirstInput && n === 1) {
+          this.busyCount -= 1;
+          this.emitEvent('turnEnd', { taskIds, text: '', ok: false, detail: 'Fixture delivery failure.' });
+          this.emitEvent('status', { busy: this.busy });
+          return;
+        }
+        if (taskIds.length) this.emitEvent('inputAccepted', { taskIds });
         const rule = this.ruleFor(text);
         const reply = rule ? String(rule.reply).replace(/\{n\}/g, String(n)) : `ok ${n}`;
         if (rule?.edit) {

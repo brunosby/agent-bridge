@@ -7,7 +7,8 @@ import {
   offerMilestonePlan,
   restoreMilestoneViews,
 } from './milestones.ts';
-import { isTaskLifecycleKind, readAgentTaskEvent } from '../core/task-events.ts';
+import { isTaskLifecycleKind, readAgentTaskEvent, taskIdsFromLog } from '../core/task-events.ts';
+import { restoreProviderHandoffs, settleProviderHandoff } from './provider-handoff.ts';
 // Conversation lifecycle: open, close, restore, wire agent events, approvals timeout, token limit, settings.
 import type { Agent, AgentEvent, AgentSpec, Conversation, RoutingMode } from '../core/types.ts';
 import { S } from './state.ts';
@@ -66,7 +67,10 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
     rosterVersion: 1,
     rosterSeen: {},
     pendingRoleNote: {},
+    providerChanges: new Set(),
+    providerHandoffs: restoreProviderHandoffs(saved?.events ?? [], team ?? []),
     lastSender: {},
+    lastUserText: saved?.events.findLast((event) => event.kind === 'user' && typeof event.text === 'string')?.text,
     tasks: new Map(),
     refusedRoles: new Set(),
     roleDecisionVersion: 0,
@@ -96,6 +100,9 @@ export function openConversation({ workDir, restoreId, team, routingMode }: Open
       sessionId: saved ? t.sessionId || null : null,
       cachedTokens: saved ? t.cachedTokens || 0 : 0,
       tokens: saved ? t.tokens || 0 : 0,
+      baseTokens: saved ? t.baseTokens : undefined,
+      baseCachedTokens: saved ? t.baseCachedTokens : undefined,
+      providerChangeId: saved ? t.providerChangeId : undefined,
       cwd: t.cwd && t.worktree && fs.existsSync(t.cwd) ? t.cwd : undefined,
       worktree: t.cwd && t.worktree && fs.existsSync(t.cwd) ? t.worktree : undefined,
     };
@@ -128,8 +135,15 @@ export function startAgents() {
 }
 
 export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
-  agent.on('event', (ev: AgentEvent) => {
-    if (S.conv !== owner || owner.agents[id] !== agent) return; // late events from a closed conversation or removed agent
+  const changeId = owner.team.find((member) => member.id === id)?.providerChangeId;
+  agent.on('event', (event: AgentEvent) => {
+    if (S.conv !== owner || owner.agents[id] !== agent) return; // late events from a closed conversation or replaced agent
+    if (event.kind === 'inputAccepted') {
+      settleProviderHandoff(owner, id, taskIdsFromLog(event.taskIds), true);
+      return;
+    }
+    // Provider message and tool keys are only unique within their own session.
+    const ev = changeId && typeof event.key === 'string' ? { ...event, key: changeId + ':' + event.key } : event;
     if (
       (ev.kind === 'delta' || ev.kind === 'text') &&
       typeof ev.key === 'string' &&
@@ -236,6 +250,7 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
           })
         : [];
     if (lifecycle) {
+      if (lifecycle.kind !== 'taskStarted') settleProviderHandoff(owner, id, lifecycle.taskIds, false);
       for (const taskId of lifecycle.taskIds) {
         const task = owner.tasks.get(taskId);
         if (task?.agent !== id) continue;
@@ -321,12 +336,13 @@ export function armApprovalTimeout(agentId: string, ev: AgentEvent): void {
   if (!(sec > 0)) return;
   ev.expiresAt = Date.now() + sec * 1000;
   const owner = S.conv;
+  const agent = owner.agents[agentId];
   const timer = setTimeout(() => {
     approvalTimers.delete(ev.requestId);
+    if (S.conv !== owner || owner.agents[agentId] !== agent) return;
     closeShellApproval(owner, ev.requestId);
-    if (S.conv !== owner || !S.conv.agents[agentId]) return;
     if (
-      S.conv.agents[agentId].respondApproval(
+      agent.respondApproval(
         ev.requestId,
         'decline',
         'No answer from the user in time, so this was declined automatically. Continue without it or ask the user.',
@@ -340,7 +356,7 @@ export function armApprovalTimeout(agentId: string, ev: AgentEvent): void {
 }
 
 export function totalTokens() {
-  return Object.values(S.conv.agents).reduce((s, a) => s + (a.tokens || 0), 0);
+  return S.conv.team.reduce((sum, spec) => sum + (spec.baseTokens || 0) + (S.conv.agents[spec.id]?.tokens || 0), 0);
 }
 
 export function tokenLimitReached() {

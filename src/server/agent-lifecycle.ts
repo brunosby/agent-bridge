@@ -4,7 +4,23 @@ import type { RuntimeStatus } from '../providers/accounts.ts';
 
 const startups = new WeakMap<Agent, { state: StartupState; reason: string | null }>();
 
-export function statusOf(agent: Agent | undefined, account?: RuntimeStatus | null) {
+const operations = new WeakSet<Agent>();
+
+export function agentOperationPending(agent: Agent): boolean {
+  return operations.has(agent);
+}
+
+export async function runAgentOperation<T>(agent: Agent, run: () => Promise<T>): Promise<T> {
+  if (operations.has(agent)) throw new Error('This agent is already being updated. Try again when it finishes.');
+  operations.add(agent);
+  try {
+    return await run();
+  } finally {
+    operations.delete(agent);
+  }
+}
+
+export function statusOf(agent: Agent | undefined, account?: RuntimeStatus | null, changingProvider = false) {
   const startup = agent && startups.get(agent);
   return agentStatus({
     startup: startup?.state || 'starting',
@@ -14,6 +30,7 @@ export function statusOf(agent: Agent | undefined, account?: RuntimeStatus | nul
     busy: agent?.busy,
     waitingApproval: agent?.approvals.size,
     account,
+    changingProvider,
   });
 }
 

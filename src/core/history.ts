@@ -84,8 +84,12 @@ function teamFromState(state: BridgeEvent | null): AgentSpec[] {
       effort: a.effort && a.effort !== 'default' ? a.effort : null,
       bypass: Boolean(a.bypass),
       sessionId: a.sessionId || null,
-      tokens: a.tokens || 0,
-      cachedTokens: a.cachedTokens || 0,
+      // The snapshot exposes totals; the adapter resumes with just its own session usage.
+      tokens: Math.max(0, (a.tokens || 0) - (a.baseTokens || 0)),
+      cachedTokens: Math.max(0, (a.cachedTokens || 0) - (a.baseCachedTokens || 0)),
+      baseTokens: a.baseTokens,
+      baseCachedTokens: a.baseCachedTokens,
+      providerChangeId: a.providerChangeId,
       cwd: a.cwd || null,
       worktree: a.worktree || null,
     }));
@@ -101,6 +105,11 @@ function teamFromState(state: BridgeEvent | null): AgentSpec[] {
     sessionId: state.agents?.[driver]?.sessionId || null,
     tokens: 0,
   }));
+}
+
+export function legacyAgentIds(firstState: BridgeEvent | null): Map<string, string> {
+  if (!firstState || Array.isArray(firstState.team)) return new Map();
+  return new Map(teamFromState(firstState).map((member) => [member.driver, member.id]));
 }
 
 /** Earlier conversations that have at least one message from the user, newest first. */
@@ -181,13 +190,12 @@ export function loadConversation(
   const lastAt = summary.lastAt || Date.now();
 
   // Older logs used the provider name as the agent id; map it to the ids of the rebuilt team.
-  const legacy: Record<string, string> = Object.fromEntries(summary.team.filter((a) => a.driver).map((a) => [a.driver, a.id]));
-  const hasLegacyIds = events.some((e) => e.agent === 'claude' || e.agent === 'codex');
-  if (hasLegacyIds) {
+  const legacy = legacyAgentIds(all.find((event) => event.kind === 'state') ?? null);
+  if (legacy.size) {
     for (const e of events) {
-      for (const k of ['agent', 'from']) if (legacy[e[k]]) e[k] = legacy[e[k]];
-      if (typeof e.to === 'string' && legacy[e.to]) e.to = legacy[e.to];
-      if (Array.isArray(e.to)) e.to = e.to.map((t: string) => legacy[t] || t);
+      for (const k of ['agent', 'from']) if (legacy.has(e[k])) e[k] = legacy.get(e[k]);
+      if (typeof e.to === 'string' && legacy.has(e.to)) e.to = legacy.get(e.to);
+      if (Array.isArray(e.to)) e.to = e.to.map((id: string) => legacy.get(id) ?? id);
     }
   }
 

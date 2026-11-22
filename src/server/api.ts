@@ -8,7 +8,10 @@ import { agentName, logError, publish, publishState } from './events.ts';
 import { DRIVERS } from '../providers/registry.ts';
 import { LOGS_DIR, ROLES_DIR, SETTINGS, config, safeRegex, saveLocalConfig, setting } from '../config/settings.ts';
 import { ROUTING_MODES } from '../core/prompts.ts';
-import { canReceiveWork } from '../core/agent-status.ts';
+import { canQueueWork } from '../core/agent-status.ts';
+import { agentOperationPending, runAgentOperation } from './agent-lifecycle.ts';
+import { changeProvider } from './provider-change.ts';
+import { finishProviderDeliveries } from './delivery.ts';
 import { newConversation, restoreConversation, saveSettings, settingsView } from './conversation.ts';
 import {
   cancelBatchPart,
@@ -50,9 +53,22 @@ function optionalBoolean(value: unknown, field: string) {
   if (value !== undefined && typeof value !== 'boolean') throw new Error('invalid ' + field);
 }
 
+const agentMutations = new Set(['model', 'effort', 'role', 'bypass', 'rename', 'removeAgent', 'retry', 'interrupt']);
+
 /** Handle one API call from the page. Returns the JSON answer; throws to send an error. */
 export async function api(action: string, body: Record<string, any>): Promise<unknown> {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('expected a JSON object');
+  if (agentMutations.has(action) && (action !== 'interrupt' || body.agent !== undefined)) {
+    const id = textField(body.agent, 'agent ID')!;
+    const owner = S.conv;
+    if (owner?.providerChanges.has(id)) throw new Error('This agent is switching provider. Try again when it finishes.');
+    const agent = owner && Object.hasOwn(owner.agents, id) ? owner.agents[id] : undefined;
+    if (agent) return runAgentOperation(agent, () => dispatch(action, body));
+  }
+  return dispatch(action, body);
+}
+
+async function dispatch(action: string, body: Record<string, any>): Promise<unknown> {
   const agents = S.conv?.agents || {};
   const agentOf = (id: string): Agent => {
     const a = typeof id === 'string' && Object.hasOwn(agents, id) ? agents[id] : null;
@@ -83,7 +99,7 @@ export async function api(action: string, body: Record<string, any>): Promise<un
         targets: ids.map((id) => ({
           id,
           name: agentName(id),
-          available: canReceiveWork(statusFor(S.conv, id)),
+          available: canQueueWork(statusFor(S.conv, id)),
         })),
       };
     }
@@ -143,6 +159,10 @@ export async function api(action: string, body: Record<string, any>): Promise<un
           throw new Error('invalid ' + key);
       }
       if (typeof body.role !== 'string' || !Object.hasOwn(S.roles, body.role)) throw new Error('unknown role');
+      const owner = S.conv;
+      const members = owner.team.filter((spec) => spec.role === body.role);
+      if (members.some((spec) => owner.providerChanges.has(spec.id) || agentOperationPending(owner.agents[spec.id])))
+        throw new Error('An agent with this role is being updated. Try again when it finishes.');
       const roleOverrides = { ...(config.roleOverrides || {}) };
       if (body.reset) delete roleOverrides[body.role];
       else
@@ -153,13 +173,18 @@ export async function api(action: string, body: Record<string, any>): Promise<un
         };
       saveLocalConfig({ roleOverrides });
       // Apply to the agents that have this role (Claude restarts on the same session when idle).
-      for (const spec of S.conv.team.filter((a) => a.role === body.role)) {
-        await S.conv.agents[spec.id]?.reconfigure({
-          readOnly: S.roles[body.role].canEdit === 'none',
-          maxTurns: S.roles[body.role].maxTurns || null,
-          ...roleProfile(body.role),
-        });
-      }
+      const profile = {
+        readOnly: S.roles[body.role].canEdit === 'none',
+        maxTurns: S.roles[body.role].maxTurns || null,
+        ...roleProfile(body.role),
+      };
+      await Promise.all(
+        members.map(({ id }) => {
+          const agent = owner.agents[id];
+          return agent && runAgentOperation(agent, () => agent.reconfigure(profile));
+        }),
+      );
+      if (S.conv !== owner) return { ok: true };
       publish({
         kind: 'system',
         text: (() => {
@@ -215,11 +240,12 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       const ids = body.agent ? [agentOf(body.agent).id] : Object.keys(agents);
       if (!body.agent) {
         owner.batch = null;
+        for (const id of owner.providerChanges) finishProviderDeliveries(owner, id, 'the conversation was stopped');
         discardHeldRelays(owner, 'The conversation was stopped.');
         owner.relay.halted = owner.relay.userPaused = true;
         cancelMilestoneDecision(owner, 'stop');
       } else cancelBatchPart(owner, body.agent, 'cancelled: stopped by the user');
-      await Promise.all(ids.map((id) => agents[id]?.interrupt()));
+      await Promise.all(ids.filter((id) => !owner.providerChanges.has(id)).map((id) => agents[id]?.interrupt()));
       if (S.conv === owner) {
         publish({ kind: 'system', text: 'Stopped ' + ids.map((id) => '@' + id).join(', ') + (body.agent ? '.' : '. Relay paused.') });
         publishState();
@@ -303,6 +329,12 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       }));
       return { models };
     }
+    case 'changeProvider': {
+      const conversationId = textField(body.conversationId, 'conversation ID', true);
+      if (conversationId && conversationId !== S.conv.id) throw new Error('conversation changed before switching provider');
+      const id = textField(body.agent, 'agent ID')!;
+      return changeProvider(id, { driver: body.driver, model: body.model, effort: body.effort });
+    }
     case 'addAgent': {
       const choice = await validateAgentChoice(S.conv, body);
       return { ok: true, agent: await addAgent(choice) };
@@ -331,8 +363,10 @@ export async function api(action: string, body: Record<string, any>): Promise<un
       return { ok: true, settings: settingsView() };
     case 'accounts': {
       optionalBoolean(body.refresh, 'refresh');
+      const selected = textField(body.driver, 'provider', true);
+      if (selected && !Object.hasOwn(PROVIDERS, selected)) throw new Error('unknown provider');
       const out = [];
-      for (const driver of Object.keys(PROVIDERS)) {
+      for (const driver of selected ? [selected] : Object.keys(PROVIDERS)) {
         if (body.refresh || !cliCache[driver] || Date.now() - cliCache[driver].at > 30000) {
           cliCache[driver] = { at: Date.now(), status: await cliStatus(driver, config[driver]) };
         }

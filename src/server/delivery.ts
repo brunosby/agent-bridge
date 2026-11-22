@@ -1,4 +1,5 @@
-import type { TaskEvent } from '../core/types.ts';
+import type { Conversation, TaskEvent } from '../core/types.ts';
+import { DRIVERS } from '../providers/registry.ts';
 import { canReceiveWork } from '../core/agent-status.ts';
 import { rosterText } from '../core/prompts.ts';
 import { reviewChanges } from '../workspace/git-context.ts';
@@ -11,10 +12,36 @@ import { S } from './state.ts';
 
 /** Send a message to one agent, adding the team roster or a role note when they changed. */
 type Delivery = { from: string; sourceSeq?: number; taskId?: string; discarded?: (reason: string) => void };
-const reviewerQueues = new WeakMap<typeof S.conv, Map<string, Promise<void>>>();
+const reviewerQueues = new WeakMap<Conversation, Map<string, Promise<void>>>();
+const providerQueues = new WeakMap<Conversation, Map<string, { text: string; delivery: Delivery }[]>>();
+
+export function isPreparingDelivery(owner: Conversation, id: string): boolean {
+  return Boolean(reviewerQueues.get(owner)?.has(id));
+}
+
+export function finishProviderDeliveries(owner: Conversation, id: string, failure?: string): void {
+  const queues = providerQueues.get(owner);
+  const queued = queues?.get(id);
+  if (!queued) return;
+  queues?.delete(id);
+  for (const { text, delivery } of queued) {
+    if (delivery.taskId && owner.batch?.pending.get(id) !== delivery.taskId) continue;
+    if (!failure) deliver(id, text, delivery);
+    else if (delivery.discarded) delivery.discarded(failure);
+    else publish({ kind: 'error', agent: id, text: `Queued delivery to @${id} failed: ${failure}.` });
+  }
+}
 
 export function deliver(toId: string, text: string, delivery: Delivery): void {
   const owner = S.conv;
+  if (owner.providerChanges.has(toId)) {
+    let queues = providerQueues.get(owner);
+    if (!queues) providerQueues.set(owner, (queues = new Map()));
+    let queued = queues.get(toId);
+    if (!queued) queues.set(toId, (queued = []));
+    queued.push({ text, delivery });
+    return;
+  }
   const agent = owner.agents[toId];
   const spec = owner.team.find((member) => member.id === toId);
   if (!agent || !spec) return delivery.discarded?.('agent is no longer on the team');
@@ -75,7 +102,13 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
     discarded?.(reason);
     return;
   }
-  const extras = [];
+  const id = taskId || randomUUID();
+  const extras: string[] = [];
+  const handoff = owner.providerHandoffs.get(toId);
+  if (handoff) {
+    extras.push(handoff.summary);
+    handoff.taskIds.add(id);
+  }
   if (S.conv.pendingRoleNote[toId]) {
     extras.push(S.conv.pendingRoleNote[toId]);
     delete S.conv.pendingRoleNote[toId];
@@ -85,6 +118,7 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
       id: a.id,
       name: a.name,
       roleName: S.roles[a.role]?.name || a.role,
+      provider: DRIVERS[a.driver]?.label || a.driver,
       canEdit: S.roles[a.role]?.canEdit || 'all',
       model: owner.agents[a.id]?.resolvedModel || owner.agents[a.id]?.model,
       status: statusFor(owner, a.id),
@@ -104,13 +138,13 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
   extras.push(...context);
   S.conv.lastSender[toId] = from;
   if (from !== 'user') publish({ kind: 'routed', from, to: toId, relayed: true, hop: S.conv.relay.hops });
-  const id = taskId || randomUUID();
   const task = { id, agent: toId, from, sourceSeq: sourceSeq || null, state: 'queued' as const };
   S.conv.tasks.set(id, task);
   publish({ kind: 'taskQueued', ...task } satisfies TaskEvent);
   try {
     agent.send(extras.length ? extras.join('\n\n') + '\n\n' + text : text, id);
   } catch {
+    handoff?.taskIds.delete(id);
     owner.tasks.delete(id);
     publish({ kind: 'tasksCancelled', agent: toId, taskIds: [id] } satisfies TaskEvent);
     discarded?.('provider rejected the delivery');

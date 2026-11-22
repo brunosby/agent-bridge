@@ -5,6 +5,7 @@ export type StartupState = 'starting' | 'ready' | 'failed';
 export function agentStatus(input: {
   startup: StartupState;
   startupReason?: string | null;
+  changingProvider?: boolean;
   available?: boolean;
   unavailableReason?: string | null;
   busy?: boolean;
@@ -12,6 +13,7 @@ export function agentStatus(input: {
   account?: { state: AccountState; detail?: string | null } | null;
 }) {
   const activity = input.waitingApproval ? 'waiting' : input.busy ? 'working' : 'idle';
+  if (input.changingProvider) return { activity, availability: 'switching_provider' as const, reason: null };
   const state = input.account?.state;
   if (state === 'logged_out' || state === 'no_access' || state === 'rate_limited')
     return { activity, availability: state, reason: input.account?.detail || null };
@@ -22,4 +24,8 @@ export function agentStatus(input: {
 
 export function canReceiveWork(status: ReturnType<typeof agentStatus>): boolean {
   return status.availability === 'ready';
+}
+
+export function canQueueWork(status: ReturnType<typeof agentStatus>): boolean {
+  return canReceiveWork(status) || status.availability === 'switching_provider';
 }

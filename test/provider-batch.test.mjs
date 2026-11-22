@@ -121,3 +121,75 @@ test('OpenCode links a joined queue to one HTTP answer', async () => {
   assert.deepEqual(events.find((event) => event.kind === 'turnEnd').taskIds, ['a', 'b']);
   assert.equal(agent.busy, false);
 });
+
+test('OpenCode confirms handoff input only after a successful response', async () => {
+  const agent = new OpenCodeAgent(args);
+  agent.sessionId = 'session';
+  const events = [];
+  agent.on('event', (event) => events.push(event));
+  agent.http = async () => {
+    throw new Error('fixture HTTP failure');
+  };
+  agent.queue.push({ text: 'Handoff', taskId: 'failed' });
+  await agent.pump();
+  assert.ok(events.some((event) => event.kind === 'taskStarted'));
+  assert.ok(!events.some((event) => event.kind === 'inputAccepted'));
+  agent.http = async () => ({ info: { error: { name: 'Model unavailable' } } });
+  agent.queue.push({ text: 'Handoff', taskId: 'model-failed' });
+  await agent.pump();
+  assert.ok(!events.some((event) => event.kind === 'inputAccepted'));
+  agent.http = async () => ({ info: { role: 'assistant' } });
+  agent.queue.push({ text: 'Handoff', taskId: 'accepted' });
+  await agent.pump();
+  assert.deepEqual(
+    events.filter((event) => event.kind === 'inputAccepted').map((event) => event.taskIds),
+    [['accepted']],
+  );
+});
+
+test('Codex starts a new thread counter without losing the previous provider usage', async () => {
+  const { S } = await import('../src/server/state.ts');
+  const { totalTokens } = await import('../src/server/conversation.ts');
+  const { teamState } = await import('../src/server/events.ts');
+  const previous = S.conv;
+  const codex = new CodexAgent({ ...args, id: 'a1' });
+  S.conv = {
+    team: [{ id: 'a1', driver: 'codex', role: 'coder', baseTokens: 100, baseCachedTokens: 30 }],
+    agents: { a1: codex },
+    providerChanges: new Set(),
+  };
+  try {
+    assert.equal(totalTokens(), 100);
+    codex.handleNotification('thread/tokenUsage/updated', { tokenUsage: { total: { totalTokens: 25, cachedInputTokens: 5 } } });
+    assert.equal(codex.tokens, 20);
+    assert.equal(totalTokens(), 120);
+    const [snapshot] = teamState();
+    assert.equal(snapshot.tokens, 120);
+    assert.equal(snapshot.cachedTokens, 35);
+  } finally {
+    S.conv = previous;
+  }
+});
+
+test('an approval awaiting a decision prevents replacing the provider', async () => {
+  const { S } = await import('../src/server/state.ts');
+  const { startAndWait } = await import('../src/server/agent-lifecycle.ts');
+  const { changeProvider } = await import('../src/server/provider-change.ts');
+  const previous = S.conv;
+  const agent = new CodexAgent({ ...args, id: 'a1' });
+  agent.available = true;
+  await startAndWait(
+    agent,
+    () => agent.emitEvent('models', {}),
+    () => {},
+  );
+  agent.approvals.set('fixture', { rpcId: 1, method: 'item/commandExecution/requestApproval' });
+  S.conv = { team: [{ id: 'a1', driver: 'codex', role: 'coder' }], agents: { a1: agent }, providerChanges: new Set() };
+  try {
+    await assert.rejects(changeProvider('a1', { driver: 'claude' }), /Use Stop/);
+    assert.equal(S.conv.agents.a1, agent);
+    assert.equal(agent.approvals.size, 1);
+  } finally {
+    S.conv = previous;
+  }
+});

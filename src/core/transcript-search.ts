@@ -3,7 +3,7 @@ import { parseMilestoneMarkers } from '../../public/js/core/milestone-markers.js
 import { parseRoleMarkers } from '../../public/js/core/role-markers.js';
 import { open, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { parseTranscriptLine } from './history.ts';
+import { legacyAgentIds, parseTranscriptLine } from './history.ts';
 import { mentionLookup } from './recipients.ts';
 import type { AgentIdentity, AgentSpec } from './types.ts';
 
@@ -79,6 +79,7 @@ export async function searchSavedTranscript(
     const messages: Message[] = [];
     const fragments = new Map<string, Message>();
     const authors = new Map<string, { id: string; name: string }>();
+    let legacy: Map<string, string> | undefined;
     if (cursor.untilByte > 0) {
       const stream = file.createReadStream({ start: 0, end: cursor.untilByte - 1, encoding: 'utf8', autoClose: false });
       let pending = '';
@@ -89,6 +90,7 @@ export async function searchSavedTranscript(
           const event = parseTranscriptLine(line);
           if (!event) continue;
           if (event.kind === 'state') {
+            legacy ??= legacyAgentIds(event);
             for (const members of [event.knownAgents, event.team]) {
               if (!Array.isArray(members)) continue;
               for (const member of members) {
@@ -122,7 +124,8 @@ export async function searchSavedTranscript(
     const find = mentionLookup([...authors.values()]);
     const results: (Omit<Message, 'text' | 'authorId' | 'final'> & { author: string; excerpt: string })[] = [];
     for (let index = cursor.index; index < messages.length; index += 1) {
-      const { text, authorId, openSeq, at } = messages[index];
+      const { text, authorId: savedAuthor, openSeq, at } = messages[index];
+      const authorId = savedAuthor === null ? null : (legacy?.get(savedAuthor) ?? savedAuthor);
       const clean = authorId === null ? text : parseRoleMarkers(parseMilestoneMarkers(text).text).text;
       const normalized = mapMentions(clean, (name: string) => {
         const member = find(name);

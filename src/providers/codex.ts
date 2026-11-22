@@ -308,7 +308,10 @@ export class CodexAgent extends EventEmitter implements Agent {
       if (model) this.resolvedModel = model;
       if (this.activeBatch !== batch) return;
       if (res?.turn?.id && !this.activeTurnId) this.activeTurnId = res.turn.id;
-      if (taskIds.length) this.emitEvent('taskStarted', { taskIds, turnId: this.activeTurnId });
+      if (taskIds.length) {
+        this.emitEvent('inputAccepted', { taskIds });
+        this.emitEvent('taskStarted', { taskIds, turnId: this.activeTurnId });
+      }
     } catch (err) {
       if (this.activeBatch !== batch) return;
       this.activeBatch = null;
@@ -336,7 +339,10 @@ export class CodexAgent extends EventEmitter implements Agent {
       if (this.steering !== pending) return;
       if (result?.turnId !== expectedTurnId) throw new Error('Unexpected turn ID in the steering response');
       (this.activeBatch ??= []).push(...pending.batch);
-      if (taskIds.length) this.emitEvent('taskStarted', { taskIds, turnId: expectedTurnId });
+      if (taskIds.length) {
+        this.emitEvent('inputAccepted', { taskIds });
+        this.emitEvent('taskStarted', { taskIds, turnId: expectedTurnId });
+      }
     } catch (err) {
       if (this.steering !== pending) return;
       const refused =

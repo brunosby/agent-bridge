@@ -2,7 +2,7 @@
 import type { EventEmitter } from 'node:events';
 import type { WriteStream } from 'node:fs';
 
-export type DriverId = 'claude' | 'codex' | 'opencode' | 'fake';
+export type DriverId = 'claude' | 'codex' | 'opencode' | 'fake' | 'fake-alternate';
 export type RoutingMode = 'orchestrator' | 'mentions' | 'pipeline' | 'roundrobin';
 export type CanEdit = 'all' | 'none' | 'tests';
 export type Decision = 'accept' | 'acceptForSession' | 'decline';
@@ -34,6 +34,7 @@ export interface AgentEvent {
 
 export interface ProviderTaskPayloads {
   taskStarted: { taskIds: string[]; turnId?: string | null };
+  inputAccepted: { taskIds: string[] };
   tasksCancelled: { taskIds: string[] };
   turnEnd: { taskIds: string[]; text: string; ok: boolean; turnId?: string | null; detail?: string; costUsd?: number };
 }
@@ -42,9 +43,10 @@ export type ProviderEventArgs<K extends string> = K extends keyof ProviderTaskPa
   ? [data: ProviderTaskPayloads[K]]
   : [data?: Record<string, unknown>];
 
+type TaskLifecycleKind = Exclude<keyof ProviderTaskPayloads, 'inputAccepted'>;
 export type AgentTaskEvent = {
-  [K in keyof ProviderTaskPayloads]: { agent: string; kind: K } & ProviderTaskPayloads[K];
-}[keyof ProviderTaskPayloads];
+  [K in TaskLifecycleKind]: { agent: string; kind: K } & ProviderTaskPayloads[K];
+}[TaskLifecycleKind];
 export type TurnEnded = Extract<AgentTaskEvent, { kind: 'turnEnd' }>;
 
 export interface TrackedTask {
@@ -176,6 +178,9 @@ export interface AgentSpec {
   sessionId?: string | null;
   tokens?: number;
   cachedTokens?: number;
+  baseTokens?: number;
+  baseCachedTokens?: number;
+  providerChangeId?: string;
   cwd?: string | null;
   worktree?: { path: string; root?: string; branch: string; reused?: boolean } | null;
 }
@@ -257,6 +262,12 @@ export interface HeldRelay {
   kind: 'reply' | 'batch';
 }
 
+export interface ProviderHandoff {
+  id: string;
+  summary: string;
+  taskIds: Set<string>;
+}
+
 export interface Conversation {
   id: string;
   runDir: string;
@@ -273,6 +284,8 @@ export interface Conversation {
   rosterVersion: number;
   rosterSeen: Record<string, number>;
   pendingRoleNote: Record<string, string>;
+  providerChanges: Set<string>;
+  providerHandoffs: Map<string, ProviderHandoff>;
   lastSender: Record<string, string>;
   lastUserText?: string;
   project: Record<string, { initial: GitSnapshot | null; git: boolean; branch: string | null; detached: boolean }>;

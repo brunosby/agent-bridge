@@ -88,6 +88,22 @@ test('history: old two-agent logs are converted to the team format', () => {
   assert.equal(loaded.events.find((/** @type {any} */ e) => e.kind === 'user').to[0], 'a1');
   // the unfinished Codex turn is closed so the page does not show it as still streaming
   assert.ok(loaded.events.some((/** @type {any} */ e) => e.kind === 'turnEnd' && e.agent === 'a2'));
+  const updatedState = {
+    seq: 4,
+    at: 4,
+    kind: 'state',
+    workDir: dir,
+    team: loaded.team.map((/** @type {import('../src/core/types.ts').AgentSpec} */ member) =>
+      member.id === 'a2' ? { ...member, driver: 'claude' } : member,
+    ),
+  };
+  fs.appendFileSync(path.join(dir, id, 'transcript.jsonl'), '\n' + JSON.stringify(updatedState));
+  const switched = history.loadConversation(dir, id);
+  assert.equal(switched.team[1].driver, 'claude');
+  assert.equal(
+    switched.events.find((/** @type {import('../src/core/types.ts').BridgeEvent} */ event) => event.kind === 'delta').agent,
+    'a2',
+  );
 });
 
 test('history: malformed lines are skipped without losing the valid events', (t) => {

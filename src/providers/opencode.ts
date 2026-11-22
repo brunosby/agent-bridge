@@ -553,6 +553,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
       const res = await this.http('POST', `/session/${encodeURIComponent(this.sessionId || '')}/message`, body);
       if (this.activeBatch !== batch) return;
       const info = res?.info || {};
+      if (res?.info && !info.error && taskIds.length) this.emitEvent('inputAccepted', { taskIds });
       // Only the answer goes to the chat and to the other agents: not a compaction summary, and not
       // synthetic or ignored text that OpenCode adds itself.
       const summary = OpenCodeAgent.isSummaryMessage(info);

@@ -84,7 +84,7 @@ export function providerBlocked(driver: string | undefined): RuntimeStatus | nul
 }
 
 export function statusFor(owner: Conversation, id: string) {
-  return statusOf(owner.agents[id], providerBlocked(owner.team.find((spec) => spec.id === id)?.driver));
+  return statusOf(owner.agents[id], providerBlocked(owner.team.find((spec) => spec.id === id)?.driver), owner.providerChanges.has(id));
 }
 
 const RESERVED_AGENT_NAME = /^a\d+$/i;
@@ -124,18 +124,21 @@ export function defaultName(driver: string, role: string): string {
 
 /** Create the agent process wrapper for one team member (the process itself starts lazily or on start()). */
 export function createAgent(spec: AgentSpec): Agent {
+  return installAgent(S.conv, buildAgent(S.conv, spec));
+}
+
+export function buildAgent(owner: Conversation, spec: AgentSpec): Agent {
   const role = S.roles[spec.role] || S.roles.coder || Object.values(S.roles)[0];
   const readOnly = role?.canEdit === 'none';
-  const cwd = spec.cwd || S.conv.workDir;
+  const cwd = spec.cwd || owner.workDir;
   const instructions = buildInstructions({
     name: spec.name,
     role,
-    routingMode: S.conv.routingMode,
+    routingMode: owner.routingMode,
     workDir: cwd,
     userName: setting('userName'),
     extra: config[spec.driver]?.instructions,
   });
-  const owner = S.conv;
   const base = {
     ...(config[spec.driver] || {}),
     reviewMcp: () => configureReviewMcp(owner, spec.id, () => S.roles[spec.role]?.context === 'diff'),
@@ -144,7 +147,7 @@ export function createAgent(spec: AgentSpec): Agent {
   if (spec.effort) base.effort = spec.effort;
   let agent: Agent;
   if (spec.driver === 'claude') {
-    const promptFile = path.join(S.conv.runDir, `instructions-${spec.id}.txt`);
+    const promptFile = path.join(owner.runDir, `instructions-${spec.id}.txt`);
     fs.writeFileSync(promptFile, instructions);
     agent = new ClaudeAgent({
       id: spec.id,
@@ -181,7 +184,7 @@ export function createAgent(spec: AgentSpec): Agent {
       cachedTokens: spec.cachedTokens || 0,
       ...roleProfile(spec.role, true),
     });
-  } else if (spec.driver === 'fake' && DRIVERS.fake) {
+  } else if (DRIVERS[spec.driver]?.Agent === FakeAgent) {
     agent = new FakeAgent({
       id: spec.id,
       name: spec.name,
@@ -194,9 +197,13 @@ export function createAgent(spec: AgentSpec): Agent {
     throw new Error(`unknown driver ${spec.driver}`);
   }
   agent.isDestructive = buildMatcher({ workDir: cwd, destructive: setting('destructivePatterns'), deletion: setting('deletionPatterns') });
-  wireAgent(S.conv, spec.id, agent);
-  S.conv.agents[spec.id] = agent;
-  S.conv.rosterSeen[spec.id] = 0;
+  return agent;
+}
+
+export function installAgent(owner: Conversation, agent: Agent): Agent {
+  wireAgent(owner, agent.id, agent);
+  owner.agents[agent.id] = agent;
+  owner.rosterSeen[agent.id] = 0;
   return agent;
 }
 
@@ -287,6 +294,7 @@ export async function removeAgent(id: string): Promise<void> {
   owner.retiredAgents.set(id, { id, name: spec.name, driver: spec.driver, role: spec.role });
   const agent = S.conv.agents[id];
   revokeReviewClient(owner, id);
+  owner.providerHandoffs.delete(id);
   delete S.conv.agents[id];
   const taskIds = [...S.conv.tasks.values()].filter((task) => task.agent === id).map((task) => task.id);
   for (const taskId of taskIds) S.conv.tasks.delete(taskId);

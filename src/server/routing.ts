@@ -17,7 +17,7 @@ import { DONE_MARKER, relay } from './state.ts';
 import { checkTokenLimit, tokenLimitReached } from './conversation.ts';
 import { DRIVERS } from '../providers/registry.ts';
 import { addAgent, defaultName, providerBlocked, statusFor, uniqueName, validateAgentChoice, type AddAgentInput } from './team.ts';
-import { canReceiveWork } from '../core/agent-status.ts';
+import { canQueueWork, canReceiveWork } from '../core/agent-status.ts';
 import { addBatchPart, finishBatchPart } from './batch.ts';
 import { deliver } from './delivery.ts';
 import { driverModelCache } from './state.ts';
@@ -87,7 +87,7 @@ export function reviewNote(fromId: string, text: string): string {
 }
 
 function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): boolean {
-  const targets = item.targets.filter((id) => canReceiveWork(statusFor(owner, id)) && !owner.batch?.pending.has(id));
+  const targets = item.targets.filter((id) => canQueueWork(statusFor(owner, id)) && !owner.batch?.pending.has(id));
   if (owner.relay.hops + targets.length > relay.maxHops) {
     owner.relay.limitPause = 'hops';
     owner.relay.halted = true;
@@ -180,7 +180,7 @@ function completeBatch(owner: Conversation, agent: string, taskId: string, text:
     return;
   }
   publish({ kind: 'batchCompleted', agents: batch.results.map((part) => part.from) } satisfies BatchEvent);
-  if (!orch || !canReceiveWork(statusFor(owner, orch))) return;
+  if (!orch || !canQueueWork(statusFor(owner, orch))) return;
   const body = batch.results.map((item) => '[Message from @' + item.from + ']\n' + item.text).join('\n\n');
   const intro = batch.results.length > 1 ? '[Results from ' + batch.results.length + ' agents]\n\n' : '';
   relayOrHold(owner, {
@@ -231,8 +231,8 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
   }
   if (!relay.auto || (owner.relay.halted && !activeLimitPause(owner))) return;
   const requested = routeTargets(fromId, text).filter((id) => owner.agents[id]);
-  const targets = requested.filter((id) => canReceiveWork(statusFor(owner, id)) && !owner.batch?.pending.has(id));
-  const blocked = requested.filter((id) => !canReceiveWork(statusFor(owner, id)));
+  const targets = requested.filter((id) => canQueueWork(statusFor(owner, id)) && !owner.batch?.pending.has(id));
+  const blocked = requested.filter((id) => !canQueueWork(statusFor(owner, id)));
   const note = blocked.length
     ? 'Unavailable: ' + blocked.map((id) => '@' + id).join(', ') + '. Choose available agents or explain what cannot proceed.'
     : '';
