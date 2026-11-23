@@ -255,13 +255,33 @@ export async function renderRoles() {
 }
 
 export function showTab(name) {
-  for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.dataset.tab === name);
+  for (const tab of document.querySelectorAll('.tab')) {
+    const selected = tab.dataset.tab === name;
+    tab.classList.toggle('active', selected);
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+  }
   for (const p of ['general', 'accounts', 'roles']) $(`tab-${p}`).hidden = p !== name;
   if (name === 'accounts') renderAccounts();
   if (name === 'roles') renderRoles();
 }
 
-for (const t of document.querySelectorAll('.tab')) t.onclick = () => showTab(t.dataset.tab);
+const tabs = [...document.querySelectorAll('.tab')];
+for (const [index, tab] of tabs.entries()) {
+  tab.onclick = () => showTab(tab.dataset.tab);
+  tab.onkeydown = (event) => {
+    const next = {
+      ArrowLeft: (index + tabs.length - 1) % tabs.length,
+      ArrowRight: (index + 1) % tabs.length,
+      Home: 0,
+      End: tabs.length - 1,
+    }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    tabs[next].focus();
+    showTab(tabs[next].dataset.tab);
+  };
+}
 $('refreshAccounts').onclick = () => renderAccounts(true);
 $('openSettings').onclick = async () => {
   await loadCatalog();

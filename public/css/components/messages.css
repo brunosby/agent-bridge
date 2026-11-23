@@ -4,8 +4,8 @@
   align-self: flex-start;
   width: min(100%, var(--content-max));
   border: 1px solid var(--color-border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-xl);
+  border-inline-start: 3px solid var(--accent);
+  border-radius: var(--radius-sm) var(--radius-xl) var(--radius-xl) var(--radius-xl);
   background: var(--color-surface);
 }
 
@@ -14,7 +14,7 @@
   flex-wrap: wrap;
   gap: var(--space-2);
   align-items: baseline;
-  padding: var(--space-2) var(--space-3) 0;
+  padding: var(--space-3) var(--space-4) 0;
   color: var(--color-text-muted);
   font-size: var(--text-xs);
 }
@@ -25,7 +25,8 @@
 }
 
 .msg .body {
-  padding: var(--space-2) var(--space-3) var(--space-3);
+  padding: var(--space-1) var(--space-4) var(--space-3);
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
@@ -36,7 +37,8 @@
   max-width: min(92%, var(--content-max));
   border-inline-width: 1px 3px;
   border-inline-color: var(--color-border) var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--color-surface));
+  background: var(--color-own-message);
+  border-radius: var(--radius-xl) var(--radius-sm) var(--radius-xl) var(--radius-xl);
 }
 
 .msg.user .who {
@@ -60,11 +62,15 @@
   white-space: pre-wrap;
 }
 
+.body > :last-child {
+  margin-bottom: 0;
+}
+
 /* Recognized @mentions in message text. */
 .body .mention {
   --accent: var(--agent-accent, var(--color-text-muted));
   padding: 0 0.3em;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: color-mix(in srgb, var(--accent) 70%, currentColor);
   font-weight: 600;

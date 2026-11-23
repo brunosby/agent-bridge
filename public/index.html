@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="dark light" />
     <meta name="bridge-token" content="__BRIDGE_TOKEN__" />
     <title>Agent Bridge</title>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon" />
     <link rel="stylesheet" href="/css/main.css" />
     <script type="module" src="/js/main.js"></script>
   </head>
@@ -13,7 +14,7 @@
     <div class="app">
       <header class="app-header">
         <div class="toolbar">
-          <h1 class="brand">Agent Bridge</h1>
+          <h1 class="brand"><img class="brand-mark" src="/favicon.ico" alt="" width="32" height="32" />Agent Bridge</h1>
           <button id="toggleControls" class="btn toolbar__toggle" aria-expanded="false" aria-controls="workspacePanel">Workspace</button>
           <nav class="toolbar__group" aria-label="Workspace">
             <button id="openConversations" class="btn" title="Restore an earlier conversation or start a new one">Conversations</button>
@@ -31,10 +32,12 @@
 
       <aside id="workspacePanel" class="workspace-panel" aria-label="Workspace controls">
         <section class="workspace-panel__section" aria-labelledby="teamTitle">
-          <h2 id="teamTitle">Team</h2>
+          <div class="section-heading">
+            <h2 id="teamTitle">Team</h2>
+            <button id="addAgent" class="btn add-agent">+ Add agent</button>
+          </div>
           <div class="team-bar">
             <section id="agents" class="agents" aria-label="Agents"></section>
-            <button id="addAgent" class="btn add-agent">+ Add agent</button>
           </div>
         </section>
         <section class="workspace-panel__section" aria-labelledby="routingTitle">
@@ -51,7 +54,7 @@
         </section>
         <section class="workspace-panel__section" aria-labelledby="usageTitle">
           <h2 id="usageTitle">Usage</h2>
-          <span id="tokens" class="pill" title="Tokens used by all agents in this conversation"></span>
+          <span id="tokens" class="usage-value" title="Tokens used by all agents in this conversation"></span>
         </section>
       </aside>
       <div
@@ -69,10 +72,12 @@
       ></div>
       <section class="conversation-bar" aria-labelledby="conversationTitle">
         <div class="conversation-bar__title">
-          <h2 id="conversationTitle">Conversation</h2>
+          <div class="conversation-heading">
+            <h2 id="conversationTitle">Conversation</h2>
+            <span id="projectContext" class="hint"></span>
+          </div>
           <span id="relayState" class="pill"></span>
           <button id="pendingCount" class="btn" hidden></button>
-          <span id="projectContext" class="hint"></span>
         </div>
         <div class="conversation-bar__actions" role="group" aria-label="Session actions">
           <button id="resume" class="btn" title="Reset the hop counter and resume the relay">Resume</button>
@@ -113,6 +118,10 @@
             <button id="savedSearchMore" class="btn" hidden>More results</button>
           </section>
         </details>
+        <div id="conversationStart" class="conversation-start" hidden>
+          <h3>Start a conversation</h3>
+          <p>Send a task to your team, or use @Name to address one agent.</p>
+        </div>
         <main id="log" class="log" aria-live="polite" aria-label="Conversation" tabindex="0"></main>
         <button id="returnToEnd" class="btn" hidden>Back to end</button>
       </div>
@@ -132,12 +141,12 @@
             <select id="target" title="Who receives your message"></select>
           </div>
           <div class="composer__entry">
-            <label class="visually-hidden" for="input">Message</label>
+            <label class="composer__label" for="input">Message</label>
             <textarea
               id="input"
               class="composer__input"
               rows="1"
-              placeholder="Message… Use @Name"
+              placeholder="Write a message or mention @Name…"
               aria-autocomplete="list"
               aria-controls="mentionSuggestions"
             ></textarea>
@@ -211,14 +220,44 @@
     <dialog id="settingsDialog" class="dialog" aria-labelledby="settingsTitle">
       <div class="dialog__head">
         <h2 id="settingsTitle" class="dialog__title">Settings</h2>
-        <div class="tabs" role="tablist">
-          <button data-tab="general" class="tab active" role="tab">General</button>
-          <button data-tab="accounts" class="tab" role="tab">Accounts</button>
-          <button data-tab="roles" class="tab" role="tab">Roles</button>
+        <div class="tabs" role="tablist" aria-label="Settings sections">
+          <button
+            id="settings-tab-general"
+            aria-controls="tab-general"
+            aria-selected="true"
+            tabindex="0"
+            data-tab="general"
+            class="tab active"
+            role="tab"
+          >
+            General
+          </button>
+          <button
+            id="settings-tab-accounts"
+            aria-controls="tab-accounts"
+            aria-selected="false"
+            tabindex="-1"
+            data-tab="accounts"
+            class="tab"
+            role="tab"
+          >
+            Accounts
+          </button>
+          <button
+            id="settings-tab-roles"
+            aria-controls="tab-roles"
+            aria-selected="false"
+            tabindex="-1"
+            data-tab="roles"
+            class="tab"
+            role="tab"
+          >
+            Roles
+          </button>
         </div>
         <button class="btn btn--icon close" data-close="settingsDialog" aria-label="Close">✕</button>
       </div>
-      <div id="tab-general" class="dialog__body tabpane" role="tabpanel">
+      <div id="tab-general" aria-labelledby="settings-tab-general" class="dialog__body tabpane" role="tabpanel">
         <div id="settingsForm" class="form"></div>
         <div class="form">
           <label class="check"><input type="checkbox" id="requestNotifications" disabled /> Notify me when an agent needs a decision</label>
@@ -232,7 +271,7 @@
           <span id="settingsMsg" class="hint"></span><button id="saveSettings" class="btn btn--primary">Save</button>
         </div>
       </div>
-      <div id="tab-accounts" class="dialog__body tabpane" role="tabpanel" hidden>
+      <div id="tab-accounts" aria-labelledby="settings-tab-accounts" class="dialog__body tabpane" role="tabpanel" hidden>
         <p class="hint">
           Status of each provider's CLI on this computer. Signing in always happens in the provider's own CLI; Agent Bridge never sees or
           stores credentials.
@@ -240,7 +279,7 @@
         <div id="accountList" class="list"></div>
         <div class="actions"><button id="refreshAccounts" class="btn">Check again</button></div>
       </div>
-      <div id="tab-roles" class="dialog__body tabpane" role="tabpanel" hidden>
+      <div id="tab-roles" aria-labelledby="settings-tab-roles" class="dialog__body tabpane" role="tabpanel" hidden>
         <p class="hint">
           Roles live in the <code>roles</code> folder, one JSON file each. Copy a file to create a new role; it appears after saving
           settings or restarting.

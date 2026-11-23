@@ -23,6 +23,7 @@
 }
 
 .pill.halted {
+  background: var(--color-warning-bg);
   color: var(--color-warning);
 }
 

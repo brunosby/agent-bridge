@@ -1,22 +1,33 @@
 /* Design tokens. Components use these variables only, never raw values. */
 :root {
   /* surfaces and text (dark theme by default) */
-  --color-bg: #15171c;
-  --color-surface: #1d2027;
-  --color-surface-2: #252932;
-  --color-code: #111317;
-  --color-border: #323744;
-  --color-text: #e6e8ee;
-  --color-text-muted: #9097a6;
+  --color-bg: #111c24;
+  --color-surface: #1b2a34;
+  --color-surface-2: #243540;
+  --color-code: #0c171e;
+  --color-border: #3c505c;
+  --color-text: #edf4f5;
+  --color-text-muted: #abc0ca;
+
+  --color-rail: #172630;
+  --color-masthead: #102b36;
+  --color-masthead-text: #eaf5f6;
+  --color-brand: #83d6cf;
+  --color-on-accent: #ffffff;
+  --color-action-text: #91d9df;
+  --color-focus: #85d2e0;
+  --color-control-border: #718b95;
+  --color-own-message: #173945;
+  --dialog-backdrop: rgb(9 26 34 / 0.62);
 
   /* status */
   --color-success: #7bc47f;
   --color-success-bg: #1f2a22;
   --color-success-border: #3d7a4b;
-  --color-workspace-accent: #516ac3;
-  --color-workspace-accent-hover: #425bad;
+  --color-workspace-accent: #19697c;
+  --color-workspace-accent-hover: #20788b;
   --color-primary: #2f5d3a;
-  --color-danger: #e06464;
+  --color-danger: #f08080;
   --color-danger-soft: #f3a3a3;
   --color-danger-border: #7a3d3d;
   --color-warning: #f0c36a;
@@ -46,6 +57,8 @@
   --text-sm: 0.8125rem;
   --text-md: 0.875rem;
   --text-lg: 1rem;
+  --text-title: 1.375rem;
+  --text-brand: 1.125rem;
   --leading: 1.5;
 
   /* spacing scale */
@@ -58,8 +71,8 @@
   /* shape and depth */
   --radius-sm: 4px;
   --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 10px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
   --radius-pill: 999px;
   --shadow-dialog: 0 12px 40px rgb(0 0 0 / 0.45);
 
@@ -69,13 +82,18 @@
 
 @media (prefers-color-scheme: light) {
   :root {
-    --color-bg: #f6f7f9;
+    --color-bg: #f0f4f5;
     --color-surface: #ffffff;
-    --color-surface-2: #eef0f4;
-    --color-code: #f0f2f5;
-    --color-border: #d6dae2;
-    --color-text: #1d2129;
-    --color-text-muted: #5d6573;
+    --color-surface-2: #eaf0f1;
+    --color-rail: #f8faf9;
+    --color-action-text: #155b70;
+    --color-focus: #08647b;
+    --color-control-border: #71878c;
+    --color-own-message: #e0f0f2;
+    --color-code: #e9eff0;
+    --color-border: #cedadc;
+    --color-text: #172d37;
+    --color-text-muted: #4e666e;
     --color-link: #215e98;
     --color-agent-1: #8d431a;
     --color-agent-2: #215e98;
@@ -90,8 +108,8 @@
     --color-success: #2e7d32;
     --color-success-bg: #eaf6ec;
     --color-success-border: #9bd1a1;
-    --color-workspace-accent: #4059a8;
-    --color-workspace-accent-hover: #344989;
+    --color-workspace-accent: #155b70;
+    --color-workspace-accent-hover: #104b5e;
     --color-primary: #2e7d32;
     --color-danger: #c62828;
     --color-danger-soft: #c62828;

@@ -56,13 +56,20 @@ textarea {
 input,
 select,
 textarea {
+  border-color: var(--color-control-border);
+  accent-color: var(--color-workspace-accent);
   padding: var(--space-1) var(--space-2);
   min-height: 2rem;
 }
 
+::placeholder {
+  color: var(--color-text-muted);
+  opacity: 1;
+}
+
 :focus-visible {
-  outline: 2px solid var(--color-link);
-  outline-offset: 1px;
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
 }
 
 [hidden] {

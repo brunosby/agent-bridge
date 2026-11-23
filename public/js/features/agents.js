@@ -82,6 +82,8 @@ export function renderCard(a) {
     el.type = 'button';
     applyAgentAccent(el, a.id);
     el.setAttribute('aria-haspopup', 'dialog');
+    const avatar = h('span', 'agent-avatar');
+    avatar.setAttribute('aria-hidden', 'true');
     const name = h('span', 'name');
     const roleName = h('span', 'card-role');
     const drv = h('span', 'badge');
@@ -97,7 +99,7 @@ export function renderCard(a) {
       if (confirm(`Remove ${agentOf(a.id)?.name || a.id} from the conversation?`))
         api('removeAgent', { agent: a.id }).catch((e) => alert(e.message));
     };
-    el.append(name, roleName, status);
+    el.append(avatar, name, roleName, status);
 
     const row = h('div', 'card-row');
     const role = h('select', 'role');
@@ -192,6 +194,7 @@ export function renderCard(a) {
     };
     c = cards[a.id] = {
       el,
+      avatar,
       name,
       roleName,
       details,
@@ -216,6 +219,10 @@ export function renderCard(a) {
   const availability = describeAgent(a);
   c.el.className = `card${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${!availability.available && !availability.switching ? ' unavailable' : ''}`;
   c.details.classList.toggle('bypass-on', a.bypass);
+  c.avatar.textContent = (a.name.match(/[A-Za-z0-9]+/g) || [a.name])
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('');
   c.name.textContent = a.name;
   const roleLabel = roleOf(a.role)?.name || a.role;
   const shown = modelInfo(a);

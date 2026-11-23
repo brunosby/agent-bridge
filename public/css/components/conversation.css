@@ -19,7 +19,11 @@
 
 .log-filters summary {
   cursor: pointer;
+  width: fit-content;
+  padding-block: var(--space-1);
+  color: var(--color-action-text);
   font-size: var(--text-sm);
+  font-weight: 600;
 }
 
 .milestone-panel ol {
@@ -102,6 +106,13 @@
   outline-offset: 2px;
 }
 
+.composer__label {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin-bottom: var(--space-1);
+}
 .composer__entry {
   position: relative;
   grid-area: input;
@@ -152,4 +163,17 @@
 .log > .msg {
   content-visibility: auto;
   contain-intrinsic-block-size: auto 4rem;
+}
+
+.conversation-start {
+  margin: var(--space-4) var(--conversation-gutter) 0;
+  padding-inline-start: var(--space-3);
+  border-inline-start: 3px solid var(--color-action-text);
+}
+.conversation-start h3 {
+  font-size: var(--text-lg);
+}
+.conversation-start p {
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-muted);
 }

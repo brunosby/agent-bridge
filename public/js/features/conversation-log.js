@@ -27,6 +27,7 @@ let newNodes = document.createDocumentFragment();
 let frame = 0;
 let unread = 0;
 let replaying = true;
+let hasMessages = false;
 let scrollToEndOnReplay = true;
 let follow = true;
 let previousScroll = scrollPosition();
@@ -336,6 +337,8 @@ export function handle(ev) {
   switch (ev.kind) {
     case 'reset': {
       if ($('agentDetails').open) $('agentDetails').close();
+      hasMessages = false;
+      $('conversationStart').hidden = true;
       log.textContent = '';
       $('pending').textContent = '';
       if (frame) cancelAnimationFrame(frame);
@@ -365,6 +368,7 @@ export function handle(ev) {
       break;
     }
     case 'replayComplete':
+      $('conversationStart').hidden = hasMessages;
       replaying = false;
       if (scrollToEndOnReplay) {
         scrollToEndOnReplay = false;
@@ -386,6 +390,10 @@ export function handle(ev) {
     case 'user':
     case 'delta':
     case 'text':
+      if (!hasMessages) {
+        hasMessages = true;
+        $('conversationStart').hidden = true;
+      }
       message(ev);
       if (ev.kind === 'delta' && $('logSearch').value) results = null;
       break;

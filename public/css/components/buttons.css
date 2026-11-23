@@ -18,15 +18,21 @@ button:disabled {
 
 .btn--primary,
 button.primary {
-  background: var(--color-primary);
-  border-color: var(--color-success-border);
-  color: #fff;
+  background: var(--color-workspace-accent);
+  border-color: transparent;
+  color: var(--color-on-accent);
+  font-weight: 600;
 }
 
 .btn--danger,
 button.danger {
   border-color: var(--color-danger-border);
   color: var(--color-danger-soft);
+}
+
+.btn--primary:hover:not(:disabled),
+button.primary:hover:not(:disabled) {
+  background: var(--color-workspace-accent-hover);
 }
 
 .btn--icon {
@@ -44,7 +50,7 @@ button.mini {
 @media (pointer: coarse) {
   button,
   .btn {
-    min-height: 2.5rem;
+    min-height: 2.75rem;
   }
 
   button.mini {

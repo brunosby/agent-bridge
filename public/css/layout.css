@@ -1,7 +1,7 @@
 /* Workspace shell, with dedicated team and conversation columns on desktop. */
 .app {
   --workspace-width: 256px;
-  --workspace-gutter: clamp(1rem, 3vw, 2.75rem);
+  --workspace-gutter: var(--space-4);
   --conversation-gutter: clamp(var(--space-3), 2vw, var(--space-5));
   display: grid;
   height: 100dvh;
@@ -12,8 +12,8 @@
 
 .app-header {
   grid-area: header;
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
+  background: var(--color-masthead);
+  color: var(--color-masthead-text);
   padding: var(--space-2) var(--workspace-gutter);
 }
 
@@ -34,10 +34,36 @@
 
 .brand {
   margin: 0 auto 0 0;
-  font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-brand);
   letter-spacing: -0.02em;
 }
 
+.brand-mark {
+  flex: none;
+  display: block;
+}
+.toolbar .btn {
+  font-weight: 500;
+}
+.toolbar__group > button,
+.toolbar .toolbar__toggle,
+.toolbar .app-actions summary {
+  background: transparent;
+  color: var(--color-masthead-text);
+  border-color: transparent;
+}
+.toolbar__group > button:hover,
+.toolbar .toolbar__toggle:hover,
+.toolbar .app-actions summary:hover,
+.toolbar .app-actions[open] summary {
+  background: color-mix(in srgb, var(--color-masthead-text) 12%, var(--color-masthead));
+}
+.toolbar :focus-visible {
+  outline-color: var(--color-brand);
+}
 .app-actions {
   position: relative;
 }
@@ -57,7 +83,7 @@
 
 .app-actions__options {
   position: absolute;
-  z-index: 2;
+  z-index: 4;
   inset-inline-end: 0;
   inset-block-start: calc(100% + var(--space-1));
   display: grid;
@@ -77,7 +103,7 @@
   min-height: 0;
   max-height: 34dvh;
   overflow-y: auto;
-  background: var(--color-surface);
+  background: var(--color-rail);
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -89,7 +115,7 @@
   grid-area: resize;
   display: none;
   place-items: center;
-  background: var(--color-surface);
+  background: var(--color-rail);
   border-inline-end: 1px solid var(--color-border);
   cursor: col-resize;
   touch-action: none;
@@ -117,8 +143,8 @@
 
 .workspace-panel__section {
   display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--space-3);
+  padding: var(--space-4);
 }
 
 .workspace-panel__section + .workspace-panel__section {
@@ -126,7 +152,14 @@
 }
 
 .workspace-panel__section h2 {
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
 }
 
 .team-bar,
@@ -142,7 +175,10 @@
 
 .add-agent {
   justify-self: start;
-  border-style: dashed;
+  color: var(--color-action-text);
+  background: transparent;
+  border-color: transparent;
+  font-weight: 600;
   font-size: var(--text-sm);
 }
 
@@ -155,8 +191,24 @@
   width: 100%;
 }
 
-.workspace-panel .pill {
-  justify-self: start;
+.usage-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+.usage-value.halted {
+  color: var(--color-warning);
+}
+.relay-settings .field-inline {
+  justify-content: space-between;
+  min-height: 2rem;
+}
+.relay-settings input[type='checkbox'] {
+  order: 1;
+  min-height: 0;
+  width: 1rem;
+  height: 1rem;
 }
 
 .conversation-bar {
@@ -180,7 +232,23 @@
 }
 
 .conversation-bar__title h2 {
-  font-size: 1.05rem;
+  font-size: var(--text-title);
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+}
+
+.conversation-heading {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.conversation-bar__title {
+  column-gap: var(--space-4);
+  min-width: 0;
+}
+.conversation-bar__title .pill:empty {
+  display: none;
 }
 
 .log {
@@ -211,7 +279,7 @@
   container: composer / inline-size;
   background: var(--color-surface);
   border-top: 1px solid var(--color-border);
-  padding: var(--space-2) var(--conversation-gutter);
+  padding: var(--space-3) var(--conversation-gutter);
 }
 
 .composer__layout {
@@ -256,7 +324,7 @@
   min-height: var(--composer-control-height);
   max-height: clamp(var(--composer-control-height), 30dvh, 10rem);
   padding: var(--space-2) var(--space-3);
-  background: var(--color-bg);
+  background: var(--color-surface);
 }
 
 @supports (field-sizing: content) {
