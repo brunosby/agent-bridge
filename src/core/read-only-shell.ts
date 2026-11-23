@@ -15,11 +15,18 @@ interface Stage {
   next?: string;
 }
 
+function hasOnlyShortNameTildes(value: string): boolean {
+  return (
+    process.platform === 'win32' &&
+    value.split(/[\\/]/).every((part) => !part.includes('~') || /^[a-z0-9_-]{1,6}~[1-9]\d*(?:\.[a-z0-9_-]{1,3})?$/i.test(part))
+  );
+}
+
 function parseStages({ text, shell }: ShellCommand): Stage[] | null {
   if (!text || text.length > 8192 || /(?!\t)[\p{Cc}\u2018-\u201f]/u.test(text)) return null;
   const syntax = /\s+|2>&1|&&|\|\||[;|]|"[^"]*"|'(?:[^']|'')*'/.source;
-  const tokens = new RegExp(syntax + '|' + /[a-z0-9_.:/\\*?+=,-]+/.source, 'iy');
-  const childItemTokens = new RegExp(syntax + '|' + /,|[a-z0-9_.:/\\*?+=-]+/.source, 'iy');
+  const tokens = new RegExp(syntax + '|' + /[a-z0-9_.:/\\*?+=,~-]+/.source, 'iy');
+  const childItemTokens = new RegExp(syntax + '|' + /,|[a-z0-9_.:/\\*?+=~-]+/.source, 'iy');
   const stages: Stage[] = [];
   let words: string[] = [];
   let raw: string[] = [];
@@ -70,6 +77,7 @@ function parseStages({ text, shell }: ShellCommand): Stage[] | null {
     let word = quoted ? piece.slice(1, -1) : piece;
     if (literal) word = word.replaceAll("''", "'");
     else if (/[$`!%#{}<>()[\]"']/.test(word)) return null;
+    if (!quoted && word.includes('~') && !hasOnlyShortNameTildes(word)) return null;
     if (!word || (!quoted && !childItems && /[*?]/.test(word)) || (!words.length && quoted)) return null;
     if (shell === 'bash' && !single && piece.includes('\\')) return null;
     if (!words.length) start = index;
@@ -81,7 +89,8 @@ function parseStages({ text, shell }: ShellCommand): Stage[] | null {
 }
 
 function localPath(value: string, cwd: string): string | null {
-  if (!/^[a-z0-9_. \\/-]+$/i.test(value) && !/^[a-z]:[\\/][a-z0-9_. \\/-]*$/i.test(value)) return null;
+  if (value.includes('~') && !hasOnlyShortNameTildes(value)) return null;
+  if (!/^[a-z0-9_.~ \\/-]+$/i.test(value) && !/^[a-z]:[\\/][a-z0-9_.~ \\/-]*$/i.test(value)) return null;
   if (/^[\\/]{2}|(?:^|[\\/])(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|[\\/]|$)/i.test(value)) return null;
   if (process.platform === 'win32') {
     const drive = /^\/([a-z])(?:\/(.*))?$/i.exec(value);
@@ -95,7 +104,7 @@ function within(root: string, cwd: string, value: string, directory = false): st
   const candidate = localPath(value, cwd);
   if (!candidate) return null;
   try {
-    const resolved = realpathSync(candidate);
+    const resolved = realpathSync.native(candidate);
     if (/^[\\/]{2}/.test(resolved)) return null;
     const relative = path.relative(root, resolved);
     if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) return null;
@@ -147,7 +156,7 @@ function recursiveListingAllowed(directory: string, depth: number): boolean {
   try {
     while (pending.length) {
       const { directory: current, depth } = pending.pop()!;
-      if (path.relative(current, realpathSync(current))) return false;
+      if (path.relative(current, realpathSync.native(current))) return false;
       const entries = readdirSync(current, { withFileTypes: true });
       remaining -= entries.length;
       if (remaining < 0 || entries.some((entry) => entry.isSymbolicLink())) return false;
@@ -278,7 +287,7 @@ export function inspectShell(
   if (!stages || /^[\\/]{2}/.test(workspace)) return manual;
   let root: string;
   try {
-    root = realpathSync(workspace);
+    root = realpathSync.native(workspace);
   } catch {
     return manual;
   }

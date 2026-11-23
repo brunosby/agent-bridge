@@ -220,3 +220,20 @@ test('Get-ChildItem accepts literal depth, filename filters, and include lists',
     rmSync(parent, { recursive: true, force: true });
   }
 });
+
+test('Windows short-name paths are checked against the resolved workspace', { skip: process.platform !== 'win32' }, () => {
+  const parent = mkdtempSync(path.join(tmpdir(), 'bridge-path-'));
+  try {
+    const root = path.join(parent, 'workspace');
+    const inside = path.join(root, 'nested');
+    mkdirSync(inside, { recursive: true });
+    symlinkSync(inside, path.join(root, 'FOLDER~1'), 'junction');
+    symlinkSync(parent, path.join(root, 'FOLDER~2'), 'junction');
+    const inspect = (arg) => inspectShell({ shell: 'powershell', text: 'Get-Item -LiteralPath ' + arg }, root, root).readOnly;
+    assert.equal(inspect('FOLDER~1'), true);
+    assert.equal(inspect('FOLDER~2'), false);
+    assert.equal(inspect('~'), false);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});

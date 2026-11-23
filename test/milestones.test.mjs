@@ -242,6 +242,24 @@ test('worktree identity uses the full conversation ID and the immutable agent ID
   }
 });
 
+test('an aliased project subfolder maps to the same subfolder of the new worktree', async () => {
+  const project = fixture();
+  try {
+    const nested = path.join(project.work, 'nested');
+    fs.mkdirSync(nested);
+    project.write('nested/tracked.txt', 'fixture');
+    project.git('add', 'nested');
+    project.git('commit', '-m', 'Add fixture subfolder');
+    const alias = path.join(project.dir, 'workspace-alias');
+    fs.symlinkSync(project.work, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const tree = await createWorktree({ repoDir: path.join(alias, 'nested'), conversationId: 'fixture', agentId: 'a1' });
+    assert.equal(tree.path, path.join(tree.root, 'nested'));
+    assert.equal(fs.readFileSync(path.join(tree.path, 'tracked.txt'), 'utf8'), 'fixture');
+  } finally {
+    fs.rmSync(project.dir, { recursive: true, force: true });
+  }
+});
+
 test('restore keeps a legacy worktree path and branch that were saved by name', async () => {
   const project = fixture();
   let bridge;

@@ -44,7 +44,9 @@ export async function createWorktree({
   const dir = path.join(base, agentId);
   const branch = `agent-bridge/${conv}/${agentId}`;
   // Keep the agent in the same sub-folder of the repository as the conversation.
-  const sub = path.relative(top, repoDir);
+  const sub = path.relative(fs.realpathSync.native(top), fs.realpathSync.native(repoDir));
+  if (path.isAbsolute(sub) || sub === '..' || sub.startsWith('..' + path.sep))
+    throw new Error('The project folder is outside the Git worktree.');
   const agentDir = path.join(dir, sub);
   if (fs.existsSync(dir)) throw new Error('A worktree already exists for this agent identity.');
   fs.mkdirSync(base, { recursive: true });
