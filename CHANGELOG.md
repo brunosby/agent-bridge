@@ -43,6 +43,7 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
+- Agent messages render markdown tables, lists, headings, quotes and rules. Inline code is read before bold, italics and table pipes, so mixed formatting no longer breaks, and inline code (such as `darkMode: true`) no longer splits across lines.
 - **Resume** delivers replies held at the token or hand-off limit in order, as the current limits allow. **Stop all** and a new user message clear the queue.
 - New worktrees use the full conversation ID and the agent ID to keep agents isolated. Restoring a conversation reuses its saved worktree path and branch.
 - Simultaneous Codex approval requests and requests after a restart have distinct IDs.

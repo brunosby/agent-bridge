@@ -93,6 +93,68 @@
   background: none;
 }
 
+/* Inline code stays in one piece (the message body breaks long words anywhere). */
+.body :not(pre) > code {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  box-decoration-break: clone;
+}
+
+.body blockquote {
+  margin: var(--space-2) 0;
+  padding: 0 var(--space-3);
+  border-inline-start: 3px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+
+.body ul,
+.body ol {
+  margin: var(--space-1) 0;
+  padding-inline-start: 1.5em;
+}
+
+.body .md-heading {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: 1em;
+}
+
+.body hr {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  margin: var(--space-3) 0;
+}
+
+.body .md-table {
+  margin: var(--space-2) 0;
+  overflow-x: auto;
+}
+
+.body table {
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.body th,
+.body td {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  text-align: start;
+  vertical-align: top;
+  overflow-wrap: normal;
+}
+
+.body th {
+  font-weight: 600;
+  background: var(--color-code);
+}
+
+/* Long cells wrap between words; inline code inside them still stays whole. */
+.body td {
+  min-width: 8ch;
+  max-width: 48ch;
+}
+
 .tool,
 .sys,
 .route {
