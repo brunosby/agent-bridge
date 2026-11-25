@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Window } from 'happy-dom';
 
-test('agent card shows the role and a short model name, with the full id and effort in the tooltip', async () => {
+test('agent card shows the role and a short model name, with the full id and effort in the tooltip', async (t) => {
   const window = new Window({ url: 'http://localhost' });
   window.document.write(readFileSync(new URL('../public/index.html', import.meta.url), 'utf8').replace(/<script[^>]+><\/script>/g, ''));
   Object.assign(globalThis, {
@@ -130,6 +130,28 @@ test('agent card shows the role and a short model name, with the full id and eff
     assert.equal(messages[1].querySelector('.who').textContent, 'Quality');
     assert.equal(window.document.querySelector('#logAgent option[value="a2"]').textContent, 'Quality');
 
+    await t.test('Stop all, Quit and Bypass report rejected actions and retain the server state', async (t) => {
+      t.mock.method(globalThis, 'fetch', async (url) => ({ ok: false, json: async () => ({ error: 'Rejected ' + url }) }));
+      globalThis.confirm = () => true;
+      try {
+        const byId = (id) => window.document.getElementById(id);
+        await byId('stopAll').onclick();
+        await byId('quitApp').onclick();
+        assert.ok(byId('quitApp'));
+        assert.equal(window.document.querySelector('.closed-page'), null);
+        const bypass = cards.a1.bypass;
+        bypass.checked = true;
+        await bypass.onchange();
+        assert.equal(bypass.checked, false);
+        handle({ kind: 'replayComplete' });
+        assert.deepEqual(
+          [...log.querySelectorAll('.sys.error')].map((el) => el.textContent),
+          ['Rejected /api/interrupt', 'Rejected /api/quit', 'Rejected /api/bypass'],
+        );
+      } finally {
+        delete globalThis.confirm;
+      }
+    });
     store.catalog.drivers = [
       { id: 'codex', label: 'Codex' },
       { id: 'claude', label: 'Claude Code' },

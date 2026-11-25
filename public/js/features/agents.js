@@ -135,7 +135,11 @@ export function renderCard(a) {
     bypassLabel.title = 'Approve requests automatically, except destructive actions and deletions outside the project folder';
     const bypass = h('input');
     bypass.type = 'checkbox';
-    bypass.onchange = () => api('bypass', { agent: a.id, on: bypass.checked }).catch((e) => addSys(e.message, true));
+    bypass.onchange = () =>
+      api('bypass', { agent: a.id, on: bypass.checked }).catch((e) => {
+        bypass.checked = Boolean(store.state?.team.find((member) => member.id === a.id)?.bypass);
+        addSys(e.message, true);
+      });
     bypassLabel.append(bypass, document.createTextNode(' Bypass'));
     row.append(role, model, effort, bypassLabel);
 

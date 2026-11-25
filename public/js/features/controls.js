@@ -210,7 +210,7 @@ $('routing').onchange = (e) =>
     .catch((err) => addSys(err.message, true));
 $('resume').onclick = () => api('relay', { resume: true });
 $('pause').onclick = () => api('relay', { pause: true });
-$('stopAll').onclick = () => api('interrupt', {});
+$('stopAll').onclick = () => api('interrupt', {}).catch((error) => addSys(error.message, true));
 for (const b of document.querySelectorAll('[data-close]')) b.onclick = () => closeDialog(b.dataset.close);
 
 const appActions = $('appActions');
@@ -261,7 +261,12 @@ $('restartApp').onclick = async () => {
 $('quitApp').onclick = async () => {
   closeAppActions();
   if (!busyConfirm('Quit') || !confirm('Close Agent Bridge and all agents?')) return;
-  await api('quit').catch(() => {});
+  try {
+    await api('quit');
+  } catch (error) {
+    addSys(error.message, true);
+    return;
+  }
   document.body.innerHTML =
     '<div class="closed-page"><h2>Agent Bridge is closed</h2><p>Start it again with <code>Agent Bridge.vbs</code>. Conversations can be restored from the Conversations button.</p></div>';
 };
