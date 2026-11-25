@@ -2,21 +2,28 @@
 import { store } from './store.js';
 import { addSys, handle } from '../features/conversation-log.js';
 import { observeRequestNotifications } from '../features/request-notifications.js';
-export const TOKEN = document.querySelector('meta[name="bridge-token"]').content;
-
+import { storageKey } from './browser-session.js';
+export { initializeSession } from './browser-session.js';
 export async function api(action, body = {}) {
   const res = await fetch(`/api/${action}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Bridge-Token': TOKEN },
+    headers: { 'Content-Type': 'application/json', 'X-Bridge-Token': globalThis.sessionStorage?.getItem(storageKey) || '' },
+    redirect: 'error',
     body: JSON.stringify(body),
   });
+  if (res.status === 403) throw new Error('Open Agent Bridge from its shortcut to restore access.');
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
 
 export function connect() {
-  const es = new EventSource(`/events?token=${encodeURIComponent(TOKEN)}`);
+  const es = new EventSource(`/events?token=${encodeURIComponent(sessionStorage.getItem(storageKey))}`);
+  es.addEventListener('session-revoked', () => {
+    es.close();
+    sessionStorage.removeItem(storageKey);
+    addSys('This session has ended. Use the tab opened from the shortcut.', true);
+  });
   es.onmessage = (m) => {
     const ev = JSON.parse(m.data);
     if (ev.kind === 'replayComplete') {

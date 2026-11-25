@@ -1,3 +1,5 @@
+import { loggingPrefixes } from '../workspace/secret-patterns.ts';
+import { redact, redactRecord } from '../core/secret-detection.ts';
 import { successorChoices, watchCoordinator } from './task-workflow.ts';
 import { mapMentions } from '../../public/js/core/mentions.js';
 import { milestoneCommitAvailable, milestoneViews } from './milestones.ts';
@@ -15,7 +17,7 @@ import { projectLabel } from './project.ts';
 import { DRIVERS } from '../providers/registry.ts';
 
 export function publish(ev: BridgeEvent): BridgeEvent {
-  const full: BridgeEvent = { seq: ++S.seq, at: Date.now(), ...ev };
+  const full: BridgeEvent = { seq: ++S.seq, at: Date.now(), ...redactRecord(ev, loggingPrefixes()) };
   S.history.push(full);
   if (S.history.length > 20000) S.history.splice(0, S.history.length - 20000);
   const saved = full.kind === 'milestonePlanProposed' ? { ...full, command: '', commandSaved: false } : full;
@@ -39,7 +41,7 @@ export function logError(source: string, text: unknown): void {
   try {
     fs.appendFileSync(
       path.join(S.conv.runDir, 'errors.log'),
-      `${new Date().toISOString()} [${source}] ${String(text).replace(/\s+$/g, '')}\n`,
+      `${new Date().toISOString()} [${redact(source, loggingPrefixes())}] ${redact(String(text), loggingPrefixes()).replace(/\s+$/g, '')}\n`,
     );
   } catch {
     // logging must never break the app
@@ -147,7 +149,7 @@ export function publishState() {
 
 /** A state snapshot sent before replaying S.history, so names and S.roles are known while it renders. */
 export function snapshotLine() {
-  return S.conv ? `data: ${JSON.stringify({ seq: 0, at: Date.now(), ...stateEvent() })}\n\n` : '';
+  return S.conv ? `data: ${JSON.stringify({ seq: 0, at: Date.now(), ...redactRecord(stateEvent(), loggingPrefixes()) })}\n\n` : '';
 }
 
 export function resetClients() {

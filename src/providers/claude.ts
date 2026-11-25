@@ -203,7 +203,13 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     const deny = [...(this.readOnly ? ['Edit', 'Write', 'NotebookEdit'] : []), ...skillDeny];
     if (deny.length) args.push('--disallowedTools', deny.join(','));
     // Lean profile: no hooks (plugins' hooks run on every turn and change how support agents behave).
-    if (this.profile === 'lean') args.push('--settings', JSON.stringify({ disableAllHooks: true }));
+    args.push(
+      '--settings',
+      JSON.stringify({
+        ...(this.profile === 'lean' ? { disableAllHooks: true } : {}),
+        permissions: { ask: ['Bash(git push:*)', 'Bash(gh pr:*)', 'PowerShell(git push:*)', 'PowerShell(gh pr:*)'] },
+      }),
+    );
     const allowed = Array.isArray(c.allowedTools) ? [...c.allowedTools] : [];
     if (reviewUrl) {
       allowed.push('mcp__bridge_review__bridge_diff');

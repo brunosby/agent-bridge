@@ -1,3 +1,8 @@
+import { activateSecretPatterns, loggingPrefixes } from '../workspace/secret-patterns.ts';
+import { markApprovalReady } from './shell-approvals.ts';
+import { reviewPublication, forgetReview } from './publication-approval.ts';
+import { redactRecord } from '../core/secret-detection.ts';
+import { requestsBridgeAccess } from './browser-session.ts';
 import { workflowMarkers } from '../../public/js/core/workflow-markers.js';
 import { checkGrowth, readTaskBlocks, requestSpec, stopWatching } from './task-workflow.ts';
 import { closeShellApproval, mayBypassApproval, processShellApproval } from './shell-approvals.ts';
@@ -132,6 +137,7 @@ function prepareConversation({ workDir, restoreId, team, routingMode }: OpenOpti
 }
 
 function activateConversation({ owner, saved }: ReturnType<typeof prepareConversation>) {
+  activateSecretPatterns(owner.workDir);
   S.conv = owner;
   S.history = saved ? saved.events : [];
   S.seq = Math.max(S.seq, saved?.lastSeq || 0);
@@ -210,7 +216,8 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
     )
       return;
     if (ev.kind === 'stderr') {
-      if (!owner.transcript.destroyed) owner.transcript.write(JSON.stringify({ at: Date.now(), ...ev }) + '\n');
+      if (!owner.transcript.destroyed)
+        owner.transcript.write(JSON.stringify({ at: Date.now(), ...redactRecord(ev, loggingPrefixes()) }) + '\n');
       if (/\b(error|panic|fatal|exception)\b/i.test(ev.text)) logError(agentName(id), `stderr: ${ev.text}`);
       return;
     }
@@ -274,26 +281,33 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       return;
     }
     if (ev.kind === 'approval') {
-      const hit = await agent
-        .isDestructive?.({ command: ev.matchText, cwd: ev.cwd || agent.cwd, deletePaths: ev.deletePaths })
-        .catch(() => 'Could not verify the requested operation. Review it before proceeding.');
+      const localAccess = requestsBridgeAccess(String(ev.matchText || '') + ' ' + (ev.shellCommand?.text || ''));
+      const hit = localAccess
+        ? 'This operation requests access to the running Bridge. Review it before proceeding.'
+        : await agent
+            .isDestructive?.({ command: ev.matchText, cwd: ev.cwd || agent.cwd, deletePaths: ev.deletePaths })
+            .catch(() => 'Could not verify the requested operation. Review it before proceeding.');
+      if (S.conv !== owner || owner.agents[id] !== agent || !agent.approvals.has(ev.requestId)) return;
+      const publication = await reviewPublication(agent, ev, owner.workDir, hit);
       if (S.conv !== owner || owner.agents[id] !== agent || !agent.approvals.has(ev.requestId)) return;
       const spec = owner.team.find((member) => member.id === id);
-      if (spec?.bypass && mayBypassApproval(ev, (S.roles[spec.role]?.canEdit ?? 'none') === 'none', Boolean(hit))) {
+      if (!publication && spec?.bypass && mayBypassApproval(ev, (S.roles[spec.role]?.canEdit ?? 'none') === 'none', Boolean(hit))) {
         agent.respondApproval(ev.requestId, 'accept');
         publish({ kind: 'autoApproved', agent: id, title: ev.title, detail: ev.detail });
         return;
       }
-      const approved = processShellApproval(owner, agent, ev, Boolean(hit));
+      const approved = !publication && processShellApproval(owner, agent, ev, Boolean(hit));
       if (approved) {
         publish({ kind: 'autoApproved', agent: id, title: approved, detail: approved });
         return;
       }
-      if (hit) ev.warning = hit;
+      if (!publication && hit) ev.warning = hit;
       ev.title = ev.title.replace(/^(Claude|Codex|OpenCode)\b/, '@' + id);
+      markApprovalReady(agent, ev.requestId);
       armApprovalTimeout(id, ev);
     }
     if (ev.kind === 'approvalClosed') {
+      forgetReview(agent, ev.requestId);
       closeShellApproval(owner, ev.requestId);
       clearTimeout(approvalTimers.get(ev.requestId));
       approvalTimers.delete(ev.requestId);

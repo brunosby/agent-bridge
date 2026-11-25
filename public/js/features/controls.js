@@ -244,7 +244,7 @@ $('restartApp').onclick = async () => {
     return addSys(`Restart failed: ${e.message}`, true);
   }
   addSys('Restarting... this page reloads when Agent Bridge is back.');
-  // The new process uses the same address with a new access token, so the page has to reload.
+  // Reload when the replacement process is listening at the same address.
   await new Promise((r) => setTimeout(r, 1500));
   for (let i = 0; i < 60; i++) {
     try {

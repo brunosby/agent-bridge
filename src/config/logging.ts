@@ -1,4 +1,6 @@
 // --log-file: write console output to a file ourselves (shell redirection locks the file on Windows).
+import { loggingPrefixes } from '../workspace/secret-patterns.ts';
+import { redact } from '../core/secret-detection.ts';
 import path from 'node:path';
 import fs from 'node:fs';
 import { argv } from './args.ts';
@@ -10,7 +12,13 @@ export function setupLogFile(): void {
   const fd = fs.openSync(logPath, 'a');
   const write = (...parts: unknown[]): void => {
     try {
-      fs.writeSync(fd, `${parts.map((p) => (typeof p === 'string' ? p : p instanceof Error ? p.stack : JSON.stringify(p))).join(' ')}\n`);
+      fs.writeSync(
+        fd,
+        redact(
+          parts.map((p) => (typeof p === 'string' ? p : p instanceof Error ? p.stack : JSON.stringify(p))).join(' '),
+          loggingPrefixes(),
+        ) + '\n',
+      );
     } catch {
       // never let logging break the app
     }

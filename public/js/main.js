@@ -5,7 +5,7 @@ import './features/conversations.js';
 import './features/controls.js';
 import './features/workspace-resize.js';
 import { cards, store } from './core/store.js';
-import { api, connect } from './core/api.js';
+import { api, connect, initializeSession } from './core/api.js';
 import { $ } from './core/dom.js';
 import { renderState } from './features/agents.js';
 import { addSys } from './features/conversation-log.js';
@@ -26,6 +26,7 @@ export async function loadCatalog() {
 }
 
 setupRequestNotifications();
-loadCatalog()
-  .catch((e) => addSys(`Could not load settings: ${e.message}`, true))
-  .finally(connect);
+initializeSession()
+  .then(loadCatalog)
+  .then(connect)
+  .catch((e) => addSys(e.message, true));

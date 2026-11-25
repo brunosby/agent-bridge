@@ -1,3 +1,4 @@
+import { gitProgram } from '../workspace/git-program.ts';
 import { execFile } from 'node:child_process';
 import { lstat } from 'node:fs/promises';
 import path from 'node:path';
@@ -81,8 +82,29 @@ const CHANGES_DIR = /(^|[\s;&|(])(cd|pushd|chdir|Set-Location|sl)\s/i;
 // Shell wrapper used by Codex on Windows: "...\powershell.exe" -Command "<real command>"
 const WRAPPER = /^\s*"?[^"\s]*?(powershell|pwsh|cmd|bash|sh)(\.exe)?"?\s+(-NoProfile\s+)?(-Command|-c|\/c|\/d\s+\/s\s+\/c)\s+/i;
 
+// Resolve only plain Git aliases. An opaque shell alias cannot be verified before execution.
+async function publicationAlias(cwd: string, name: string): Promise<boolean> {
+  const seen = new Set<string>();
+  while (/^[a-z0-9][a-z0-9-]*$/i.test(name)) {
+    if (seen.has(name) || seen.size >= 8) return true;
+    seen.add(name);
+    const value = await new Promise<string>((resolve) =>
+      execFile(
+        gitProgram(),
+        ['config', '--get', 'alias.' + name],
+        { cwd, timeout: 1500, windowsHide: true, maxBuffer: 65536 },
+        (error, stdout) => resolve(error ? (error.code === 1 ? '' : '!') : stdout.trim()),
+      ),
+    );
+    if (!value) return false;
+    if (value.startsWith('!') || value.startsWith('-')) return true;
+    name = value.split(/\s+/)[0];
+    if (name === 'push') return true;
+  }
+  return false;
+}
 // Keep quoted arguments together so a commit message or a branch called "push" is data.
-async function gitAction(text: string, cwd: string): Promise<string | null> {
+export async function gitAction(text: string, cwd: string, pushOnly = false): Promise<string | null> {
   if (!/git/i.test(text)) return null;
   const wrapped = WRAPPER.test(text);
   let body = wrapped ? text.replace(WRAPPER, '') : text;
@@ -108,7 +130,7 @@ async function gitAction(text: string, cwd: string): Promise<string | null> {
     if (shell && /^(?:powershell|pwsh|cmd|bash|sh)$/i.test(shell)) {
       const commandIndex = words.findIndex((word) => /^(?:-command|-[a-z]*c|\/c)$/i.test(word));
       if (commandIndex > 0) {
-        const nested = await gitAction(words.slice(commandIndex + 1).join(' '), directory);
+        const nested = await gitAction(words.slice(commandIndex + 1).join(' '), directory, pushOnly);
         if (nested) return nested;
         continue;
       }
@@ -130,6 +152,19 @@ async function gitAction(text: string, cwd: string): Promise<string | null> {
     const command = args.shift();
     if (command === 'push')
       return args.some((a) => a.startsWith('--force') || /^-[a-z]*f/.test(a) || a.startsWith('+')) ? 'destructive push' : 'external action';
+    if (pushOnly) {
+      // Common built-ins cannot be overridden by an alias.
+      if (
+        command &&
+        !/^(?:status|log|diff|show|add|commit|checkout|switch|branch|rev-parse|ls-files|grep|restore|fetch|pull|merge|rebase|reset|tag|config|remote|init|worktree|cherry-pick|stash|clean|clone)$/.test(
+          command,
+        )
+      ) {
+        if (words.includes('-c') || words.includes('--config-env') || customTree || (await publicationAlias(base, command)))
+          return 'publication alias';
+      }
+      continue;
+    }
     if (command === 'switch' && discardsWorkingChanges(args)) return 'switch may replace working files';
     if (command !== 'checkout') continue;
     const risk = await checkoutRisk(args, base, customTree);

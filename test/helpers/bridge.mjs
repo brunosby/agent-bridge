@@ -1,5 +1,6 @@
 // @ts-check
 // Starts a real Agent Bridge server with the scripted "fake" provider and talks to it like the page does.
+import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -33,9 +34,9 @@ function freePort() {
 }
 
 /**
- * @param {{ team: object[], rules: object[], settings?: Record<string, unknown>, resume?: string|boolean, dir?: string }} opts
+ * @param {{ team: object[], rules: object[], settings?: Record<string, unknown>, resume?: string|boolean, dir?: string, logFile?: boolean, preload?: URL }} opts
  */
-export async function startBridge({ team, rules, settings = {}, resume, dir }) {
+export async function startBridge({ team, rules, settings = {}, resume, dir, logFile = false, preload }) {
   const root = dir || fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bridge-test-'));
   const work = path.join(root, 'work');
   const logs = path.join(root, 'logs');
@@ -61,13 +62,21 @@ export async function startBridge({ team, rules, settings = {}, resume, dir }) {
     '--port',
     String(port),
     '--no-open',
+    '--session-stdin',
     '--exit-with-parent',
     '--max-lifetime',
     '600',
   ];
+  if (logFile) args.push('--log-file', path.join(root, 'server.log'));
   if (resume) args.push('--resume', ...(resume === true ? [] : [String(resume)]));
   else args.push('--cwd', work);
-  const child = spawn(process.execPath, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  if (preload) args.unshift('--import', preload.href);
+  const child = preload
+    ? spawn(process.execPath, args, { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], windowsHide: true })
+    : spawn(process.execPath, args, { stdio: 'pipe', windowsHide: true });
+  if (!child.stdin || !child.stdout || !child.stderr) throw new Error('Missing test server pipes');
+  const token = randomBytes(18).toString('hex');
+  child.stdin.write(token);
   running.add(child);
   child.on('exit', () => running.delete(child));
   let output = '';
@@ -75,16 +84,15 @@ export async function startBridge({ team, rules, settings = {}, resume, dir }) {
   child.stderr.on('data', (d) => (output += d));
 
   const base = `http://127.0.0.1:${port}`;
-  let token = '';
-  for (let i = 0; i < 100 && !token; i++) {
+  let ready = false;
+  for (let i = 0; i < 100 && !ready; i++) {
     try {
-      const html = await (await fetch(`${base}/`)).text();
-      token = (html.match(/name="bridge-token" content="([0-9a-f]+)"/) || [])[1] || '';
+      ready = (await fetch(base + '/')).ok;
     } catch {
       await sleep(100);
     }
   }
-  if (!token) throw new Error(`bridge did not start:\n${output}`);
+  if (!ready) throw new Error(`bridge did not start:\n${output}`);
 
   /** @type {any[]} */
   const events = [];
@@ -145,5 +153,5 @@ export async function startBridge({ team, rules, settings = {}, resume, dir }) {
     await sleep(100);
   }
 
-  return { api, events, waitFor, state, nameOf, stop, root, work, logs, port, child };
+  return { token, api, events, waitFor, state, nameOf, stop, root, work, logs, port, child };
 }

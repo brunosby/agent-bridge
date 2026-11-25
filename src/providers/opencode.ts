@@ -170,6 +170,10 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     const rules: { permission: string; pattern: string; action: 'ask' | 'deny' | 'allow' }[] = (
       this.config.askFor || ['bash', 'edit', 'webfetch']
     ).map((permission: string) => ({ permission, pattern: '*', action: 'ask' as const }));
+    if (!rules.some((rule) => rule.permission === 'bash' && rule.pattern === '*')) {
+      for (const pattern of ['git push', 'git push *', 'gh pr create', 'gh pr create *'])
+        rules.push({ permission: 'bash', pattern, action: 'ask' });
+    }
     if (this.readOnly)
       rules.push({ permission: 'bash', pattern: '*', action: 'ask' }, { permission: 'edit', pattern: '*', action: 'deny' });
     const spellings = (names: string[]): string[] =>

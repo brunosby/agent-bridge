@@ -2,6 +2,16 @@ import { inspectShell, type ShellCommand } from '../core/read-only-shell.ts';
 import type { Agent, AgentEvent, Conversation, Decision } from '../core/types.ts';
 import { setting } from '../config/settings.ts';
 
+const ready = new WeakMap<Agent, Set<string>>();
+export function markApprovalReady(agent: Agent, id: string) {
+  let ids = ready.get(agent);
+  if (!ids) ready.set(agent, (ids = new Set()));
+  for (const old of ids) if (!agent.approvals.has(old)) ids.delete(old);
+  ids.add(id);
+}
+export function approvalReady(agent: Agent, id: string) {
+  return ready.get(agent)?.has(id);
+}
 type Pending = { agent: string; sessionKey?: string; guardedText?: string };
 type ShellApprovals = { pending: Map<string, Pending>; permitted: Map<string, Set<string>> };
 const sessions = new WeakMap<Conversation, ShellApprovals>();

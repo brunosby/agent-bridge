@@ -20,8 +20,18 @@ test('transcript filters hide successful tools and preserve failures and pending
     handle({ kind: 'toolResult', seq: 4, agent: 'dev', key: 'ok', ok: true });
     handle({ kind: 'toolResult', seq: 5, agent: 'dev', key: 'fail', ok: false, detail: 'Build failed' });
     handle({ kind: 'turnEnd', seq: 6, agent: 'dev', ok: true });
-    handle({ kind: 'approval', seq: 7, agent: 'dev', title: 'Approval', requestId: 'one', decisions: ['accept'], at: 7 });
+    handle({
+      kind: 'approval',
+      seq: 7,
+      agent: 'dev',
+      title: 'Approval',
+      requestId: 'one',
+      decisions: ['accept'],
+      appliedExceptions: [{ file: 'sample.txt', line: 2, commit: 'abcd1234', rule: 'Credential', reason: 'test fixture' }],
+      at: 7,
+    });
     handle({ kind: 'replayComplete' });
+    assert.match($('pending').textContent, /Applied exceptions.*Credential.*abcd1234.*sample\.txt line 2.*test fixture/s);
     assert.equal($('pendingCount').textContent, '1 pending request');
     assert.ok($('log').querySelector('details.tool-group'));
     $('logMode').value = 'messages';

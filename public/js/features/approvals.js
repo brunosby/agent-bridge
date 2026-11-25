@@ -242,7 +242,12 @@ export function renderRoleRecommendation(ev) {
   updatePending();
 }
 
+function findingLocation(finding) {
+  return finding.rule + ' · ' + finding.commit.slice(0, 12) + ' · ' + finding.file + (finding.line ? ' line ' + finding.line : '');
+}
+
 export function renderApproval(ev) {
+  approvals.get(ev.requestId)?.remove();
   const el = h('div', 'approval');
   applyAgentAccent(el, ev.agent);
   el.dataset.title = ev.title;
@@ -254,6 +259,31 @@ export function renderApproval(ev) {
     ),
   );
   if (ev.warning) el.appendChild(h('div', 'warning', `⚠ ${ev.warning}`));
+  if (ev.publicationScope) {
+    const scope = h('details');
+    scope.append(h('summary', null, 'Publication scope'), h('pre', null, ev.publicationScope));
+    el.appendChild(scope);
+  }
+  if (ev.appliedExceptions?.length) {
+    el.appendChild(h('strong', null, 'Applied exceptions'));
+    const list = h('ul');
+    for (const finding of ev.appliedExceptions) list.appendChild(h('li', null, findingLocation(finding) + ' · ' + finding.reason));
+    el.appendChild(list);
+  }
+  for (const finding of ev.findings || []) {
+    const row = h('div', 'warning');
+    const exception = h('button', null, 'Allow this finding');
+    const reason = h('select');
+    ['false positive', 'test fixture'].forEach((value) => reason.appendChild(new Option(value, value)));
+    exception.onclick = () => {
+      if (confirm('Allow only this finding for the selected reason?'))
+        api('publicationException', { requestId: ev.requestId, finding: finding.id, reason: reason.value }).catch((e) =>
+          addSys(e.message, true),
+        );
+    };
+    row.append(h('span', null, findingLocation(finding)), reason, exception);
+    el.appendChild(row);
+  }
   const scope = ev.decisions.includes('acceptForSession') ? 'Once or for this session' : 'Once';
   el.appendChild(agentText('div', 'hint', () => label(ev.agent) + ' · ' + scope + (ev.cwd ? ' · ' + ev.cwd : '')));
   if (ev.detail) {

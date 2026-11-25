@@ -295,4 +295,25 @@ $('openSettings').onclick = async () => {
   $('saveTeam').checked = false;
   showTab('general');
   $('settingsDialog').showModal();
+  const conversationId = store.state?.conversationId;
+  try {
+    const status = await api('publicationHook');
+    if (conversationId !== store.state?.conversationId || !$('settingsDialog').open) return;
+    const button = h('button', null, status.enabled ? 'Remove pre-push secret check' : 'Install pre-push secret check');
+    button.type = 'button';
+    button.onclick = async () => {
+      if (status.existing && !status.enabled && !confirm('Back up the existing pre-push hook and replace it with the Agent Bridge check?'))
+        return;
+      try {
+        await api('publicationHook', { enabled: !status.enabled, signature: status.signature, conversationId });
+        button.disabled = true;
+        $('settingsMsg').textContent = status.enabled ? 'Pre-push check removed.' : 'Pre-push check installed for this repository.';
+      } catch (error) {
+        $('settingsMsg').textContent = error.message;
+      }
+    };
+    $('settingsForm').appendChild(button);
+  } catch {
+    /* Projects without a supported Git hooks directory have no install action. */
+  }
 };

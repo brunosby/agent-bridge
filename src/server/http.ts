@@ -9,7 +9,10 @@ import { clients, S } from './state.ts';
 import { serveReviewMcp } from './review-mcp.ts';
 import { api } from './api.ts';
 import { BodyTooLargeError, readJson } from './request-body.ts';
-export const token = crypto.randomBytes(18).toString('hex');
+import { redact } from '../core/secret-detection.ts';
+import { loggingPrefixes } from '../workspace/secret-patterns.ts';
+import { browserSession } from './browser-session.ts';
+let lastOpen = 0;
 export const SRC_DIR = path.join(APP_DIR, 'src');
 export const codeHash = () => {
   const h = crypto.createHash('sha1');
@@ -52,6 +55,47 @@ export const server = http.createServer(async (req, res) => {
     if (req.headers.origin !== undefined && req.headers.origin !== 'http://' + host.replace(/:80$/, '')) return send(res, 403, 'forbidden');
     const url = new URL(req.url || '/', 'http://127.0.0.1');
     pathname = url.pathname;
+    if (req.method === 'POST' && pathname === '/session') {
+      let body;
+      try {
+        body = await readJson(req);
+      } catch {
+        return send(res, 400, 'Invalid session request');
+      }
+      const result = browserSession.exchange(body?.code);
+      if (result.status === 409) {
+        publish({
+          kind: 'error',
+          text:
+            'A previously used opening code was presented again at ' +
+            new Date().toLocaleTimeString() +
+            '. If this was not you, close Agent Bridge and reopen it from its shortcut.',
+        });
+        return send(res, 409, JSON.stringify({ error: 'opening_code_used' }), 'application/json');
+      }
+      if (result.status === 403) return send(res, 403, 'forbidden');
+      publish({ kind: 'system', text: 'An opening code was used at ' + new Date().toLocaleTimeString() + '.' });
+      return send(res, 200, JSON.stringify({ token: result.token }), 'application/json');
+    }
+    if (req.method === 'POST' && pathname === '/open') {
+      let key = '';
+      server.emit('instance-key', (value: string) => {
+        key = value;
+      });
+      if (!key || req.headers['x-bridge-instance'] !== key) return send(res, 403, 'forbidden');
+      res.setHeader('x-bridge-instance', key);
+      const remaining = 3000 - (Date.now() - lastOpen);
+      if (remaining > 0) {
+        res.setHeader('Retry-After', String(Math.ceil(remaining / 1000)));
+        return send(res, 429, 'Opening a tab too frequently');
+      }
+      lastOpen = Date.now();
+      browserSession.rotate();
+      for (const client of clients) client.end('event: session-revoked\ndata: {}\n\n');
+      clients.clear();
+      server.emit('open-browser');
+      return send(res, 204, '');
+    }
     if (pathname === '/mcp/review')
       return await serveReviewMcp(
         req,
@@ -60,7 +104,7 @@ export const server = http.createServer(async (req, res) => {
         () => readJson(req),
       );
     if (req.method === 'GET' && url.pathname === '/events') {
-      if (url.searchParams.get('token') !== token) return send(res, 403, 'forbidden');
+      if (url.searchParams.get('token') !== browserSession.token) return send(res, 403, 'forbidden');
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
       res.write(snapshotLine());
       replayHistory(res);
@@ -70,8 +114,9 @@ export const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.method === 'POST' && url.pathname.startsWith('/api/')) {
-      if (req.headers['x-bridge-token'] !== token) return send(res, 403, 'forbidden');
+      if (req.headers['x-bridge-token'] !== browserSession.token) return send(res, 403, 'forbidden');
       const body = await readJson(req);
+      if (req.headers['x-bridge-token'] !== browserSession.token) return send(res, 403, 'forbidden');
       return send(res, 200, JSON.stringify(await api(url.pathname.slice(5), body)), 'application/json');
     }
     if (req.method === 'GET') return serveStatic(url.pathname, res);
@@ -79,7 +124,12 @@ export const server = http.createServer(async (req, res) => {
   } catch (err) {
     const e = err instanceof Error ? err : new Error(String(err));
     logError('bridge', `${req.method} ${pathname}: ${e.stack || e.message}`);
-    send(res, e instanceof BodyTooLargeError ? 413 : 400, JSON.stringify({ error: e.message }), 'application/json');
+    send(
+      res,
+      e instanceof BodyTooLargeError ? 413 : 400,
+      JSON.stringify({ error: redact(e.message, loggingPrefixes()) }),
+      'application/json',
+    );
   }
 });
 
@@ -87,9 +137,8 @@ export function serveStatic(pathname: string, res: ServerResponse): void {
   const rel = pathname === '/' ? 'index.html' : pathname.slice(1);
   const file = path.resolve(PUBLIC_DIR, rel);
   if (!file.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(file)) return send(res, 404, 'not found');
-  let content = fs.readFileSync(file);
+  const content = fs.readFileSync(file);
   if (rel === 'index.html') {
-    content = Buffer.from(content.toString('utf8').replace('__BRIDGE_TOKEN__', token));
     if (codeChanged() && !warnedOutdated) {
       warnedOutdated = true;
       publish({

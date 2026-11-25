@@ -1,6 +1,8 @@
 import { buildProviderHandoff } from './provider-handoff.ts';
 import { recordWorkflow, closeDecision, offerSuccession, resolveSuccession, resolveTask } from './task-workflow.ts';
-import { answerApproval } from './shell-approvals.ts';
+import { hookStatus, setHook } from '../workspace/publication-hook.ts';
+import { verifyDecision, confirmException } from './publication-approval.ts';
+import { answerApproval, approvalReady } from './shell-approvals.ts';
 import { validateMentionChecks } from '../core/recipients.ts';
 import { cancelMilestoneDecision, resolveMilestoneCommit, resolveMilestonePlan } from './milestones.ts';
 // API actions called by the page.
@@ -330,12 +332,34 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       publishState();
       return { ok: true };
     }
+    case 'publicationHook': {
+      if (body.enabled === undefined) return hookStatus(S.conv.workDir);
+      if (body.conversationId !== S.conv.id || typeof body.enabled !== 'boolean' || typeof body.signature !== 'string')
+        throw new Error('Reopen settings for this conversation.');
+      return setHook(S.conv.workDir, body.enabled, body.signature);
+    }
+    case 'publicationException': {
+      const agent = Object.values(agents).find((a) => a.approvals.has(body.requestId));
+      if (!agent || !approvalReady(agent, body.requestId)) throw new Error('Request closed.');
+      const finding = await confirmException(agent, body.requestId, body.finding, body.reason, (ev) => publish({ ...ev, agent: agent.id }));
+      publish({
+        kind: 'info',
+        text: 'Publication exception: ' + finding.rule + ' · ' + finding.file + ' · ' + finding.commit + ' · ' + body.reason,
+      });
+      return { ok: true };
+    }
     case 'approval': {
       if (body.decision !== 'accept' && body.decision !== 'acceptForSession' && body.decision !== 'decline')
         throw new Error('unknown approval decision');
       textField(body.requestId, 'approval request ID');
       const owner = Object.keys(agents).find((id) => agents[id].approvals?.has(body.requestId));
       if (!owner) throw new Error('this request is no longer pending');
+      const conversation = S.conv;
+      const agent = agents[owner];
+      if (!approvalReady(agent, body.requestId)) throw new Error('Approval review is still pending.');
+      await verifyDecision(agent, body.requestId, body.decision, (ev) => publish({ ...ev, agent: owner }));
+      if (S.conv !== conversation || conversation.agents[owner] !== agent || !agent.approvals.has(body.requestId))
+        throw new Error('Request closed.');
       if (!answerApproval(S.conv, agents[owner], body.requestId, body.decision)) throw new Error('this request is no longer pending');
       clearTimeout(approvalTimers.get(body.requestId));
       approvalTimers.delete(body.requestId);
