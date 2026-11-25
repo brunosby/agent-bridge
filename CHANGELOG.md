@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Added
 
+- Tasks in orchestrator mode show an editable size estimate. Large tasks require an approved specification before coding. Coordinators can collect decisions in a question card, and the user can select a successor when a coordinator leaves or becomes unavailable.
+- Manual pauses retain incoming replies. Stopping all agents discards cancelled work. Provider control requests report timeouts, and a quiet turn remains open for the user to inspect.
+- Read-only roles now route shell requests through the approval policy even in bypass mode. External writes require approval, and the Reviewer excludes additional credential filenames.
+- Worker reports can include a summary card in the chat. By default only the summary is relayed to the orchestrator, with any Reviewer verdict and review-round guidance. Other recipients receive the full report. Toggle this in **Settings > General**.
 - Change the provider of an idle agent from its details. The agent keeps its name, mentions, history and worktree. The new provider gets a handoff summary, and incoming work waits for it to start.
 - Use **Customize** on a role recommendation or missing-role card to choose the agent’s name, provider, model and options before adding it.
 - **Settings > General > Automatically approve read-only commands** covers supported workspace reads. PowerShell support includes recursive listings and literal values for `Get-ChildItem -Depth`, `-Filter` and `-Include`.
@@ -43,6 +47,13 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
+- Overlapping specifications and questions open in order. If the Architect returns a missing or invalid specification, the Bridge asks for one correction. If the correction also fails, **Retry specification** reopens the same task, including after restoring the conversation.
+- Other agents can start while a Coder waits for specification approval. The coordinator receives skipped-recipient notices with its next delivery. It gets an immediate notice when nobody received the delegation.
+- Git approval checks allow ordinary branch switches and require confirmation for pushes, file restoration and forced branch changes, including `git switch -f` and `git switch --discard-changes`.
+- Task growth checks run asynchronously and only for small tasks.
+- Codex and OpenCode preserve the saved session after a control request times out. A confirmed missing session starts a replacement.
+- Roles with a missing or invalid `canEdit` setting default to read-only and report a warning.
+- **Stop all**, **Quit** and **Bypass** report failed requests in the chat and keep the controls consistent with the server.
 - Agent messages render markdown tables, lists, headings, quotes and rules. Inline code is read before bold, italics and table pipes, so mixed formatting no longer breaks, and inline code (such as `darkMode: true`) no longer splits across lines.
 - **Resume** delivers replies held at the token or hand-off limit in order, as the current limits allow. **Stop all** and a new user message clear the queue.
 - New worktrees use the full conversation ID and the agent ID to keep agents isolated. Restoring a conversation reuses its saved worktree path and branch.
