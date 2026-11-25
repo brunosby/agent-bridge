@@ -22,7 +22,7 @@ function hasOnlyShortNameTildes(value: string): boolean {
   );
 }
 
-function parseStages({ text, shell }: ShellCommand): Stage[] | null {
+export function parseStages({ text, shell }: ShellCommand, allowEmptyArgument = false): Stage[] | null {
   if (!text || text.length > 8192 || /(?!\t)[\p{Cc}\u2018-\u201f]/u.test(text)) return null;
   const syntax = /\s+|2>&1|&&|\|\||[;|]|"[^"]*"|'(?:[^']|'')*'/.source;
   const tokens = new RegExp(syntax + '|' + /[a-z0-9_.:/\\*?+=,~-]+/.source, 'iy');
@@ -78,7 +78,7 @@ function parseStages({ text, shell }: ShellCommand): Stage[] | null {
     if (literal) word = word.replaceAll("''", "'");
     else if (/[$`!%#{}<>()[\]"']/.test(word)) return null;
     if (!quoted && word.includes('~') && !hasOnlyShortNameTildes(word)) return null;
-    if (!word || (!quoted && !childItems && /[*?]/.test(word)) || (!words.length && quoted)) return null;
+    if ((!word && !allowEmptyArgument) || (!quoted && !childItems && /[*?]/.test(word)) || (!words.length && quoted)) return null;
     if (shell === 'bash' && !single && piece.includes('\\')) return null;
     if (!words.length) start = index;
     words.push(word);

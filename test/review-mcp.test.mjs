@@ -26,7 +26,19 @@ test('MCP serves only the authorized, filtered file patch in the active review',
   git('add', '-A');
   writeFileSync(path.join(dir, 'safe.txt'), 'safe marker\n' + 'x'.repeat(500) + '\n');
   writeFileSync(path.join(dir, 'new file.txt'), 'untracked marker\n');
-  const secrets = ['id_ed25519', 'id_ecdsa.old', 'id_dsa', '.npmrc', '.netrc', '.pypirc', 'cert.pfx'];
+  const secrets = [
+    'id_ed25519',
+    'id_ecdsa.old',
+    'id_dsa',
+    '.npmrc',
+    '.netrc',
+    '.pypirc',
+    'cert.pfx',
+    'sign.keystore',
+    'sign.jks',
+    '.git-credentials',
+    'secret.tfvars',
+  ];
   for (const file of secrets) writeFileSync(path.join(dir, file), 'SYNTHETIC_SECRET');
   const owner = { agents: { reviewer: {}, other: {} } };
   const server = createServer((req, res) =>

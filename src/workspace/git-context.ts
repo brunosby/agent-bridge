@@ -19,6 +19,10 @@ const sensitiveNames = [
   '.pypirc',
   '*.pfx',
   '*.p12',
+  '*.keystore',
+  '*.jks',
+  '.git-credentials',
+  '*.tfvars',
   'credentials*.json',
 ];
 

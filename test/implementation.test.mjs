@@ -120,7 +120,16 @@ test('a Reviewer receives the allowed patch while tracked and untracked secrets 
     git('add', 'rename.key');
     git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Fixture');
     git('mv', 'rename.key', 'renamed.txt');
-    for (const name of ['.env', 'nested/cert.pem', 'strategy.private', 'credentials-untracked.json']) {
+    for (const name of [
+      '.env',
+      'nested/cert.pem',
+      'strategy.private',
+      'credentials-untracked.json',
+      'nested/sign.jks',
+      'nested/sign.keystore',
+      '.git-credentials',
+      'config.tfvars',
+    ]) {
       fs.writeFileSync(path.join(b.work, name), 'BRIDGE_SECRET_SENTINEL\n');
     }
     fs.writeFileSync(path.join(b.work, 'allowed.txt'), 'VISIBLE_CHANGE\n');
