@@ -13,13 +13,14 @@ export function finishBatchPart(
   owner: Conversation,
   agent: string,
   taskId: string,
-  text: string,
+  text?: string,
   sourceSeq?: number,
+  shortText?: string,
 ): DeliveryBatch | undefined {
   const batch = owner.batch;
   if (!batch || batch.pending.get(agent) !== taskId) return;
   batch.pending.delete(agent);
-  batch.results.push({ from: agent, text, sourceSeq });
+  if (text !== undefined) batch.results.push({ from: agent, text, sourceSeq, shortText });
   if (!batch.pending.size) owner.batch = null;
   return batch;
 }

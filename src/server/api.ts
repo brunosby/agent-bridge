@@ -1,3 +1,5 @@
+import { buildProviderHandoff } from './provider-handoff.ts';
+import { recordWorkflow, closeDecision, offerSuccession, resolveSuccession, resolveTask } from './task-workflow.ts';
 import { answerApproval } from './shell-approvals.ts';
 import { validateMentionChecks } from '../core/recipients.ts';
 import { cancelMilestoneDecision, resolveMilestoneCommit, resolveMilestonePlan } from './milestones.ts';
@@ -76,6 +78,12 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
     return a;
   };
   switch (action) {
+    case 'taskDecision':
+      resolveTask(S.conv, body);
+      return { ok: true };
+    case 'coordinatorDecision':
+      await resolveSuccession(S.conv, body);
+      return { ok: true };
     case 'catalog':
       return {
         roles: Object.values(S.roles).map(({ instructions: _instructions, ...r }) => r),
@@ -116,14 +124,25 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       if (body.maxHops !== undefined && (!Number.isFinite(body.maxHops) || body.maxHops < 0)) throw new Error('invalid maxHops');
       if (typeof body.auto === 'boolean') relay.auto = body.auto;
       if (Number.isFinite(body.maxHops) && body.maxHops >= 0) relay.maxHops = body.maxHops;
-      if (body.resume) resumeRelay(S.conv);
+      if (body.resume) {
+        if (S.conv.plan?.pending?.kind === 'question')
+          resolveTask(S.conv, { conversationId: S.conv.id, seq: S.conv.plan.seq, requestId: S.conv.plan.pending.id, action: 'dismiss' });
+        resumeRelay(S.conv);
+      }
       if (body.pause) S.conv.relay.halted = S.conv.relay.userPaused = true;
       publishState();
       return { ok: true };
     case 'routing': {
       if (typeof body.mode !== 'string' || !Object.hasOwn(ROUTING_MODES, body.mode)) throw new Error('unknown routing mode');
       const mode = ROUTING_MODES[body.mode as RoutingMode];
-      if (S.conv.routingMode !== body.mode) cancelMilestoneDecision(S.conv, 'routing changed');
+      if (S.conv.routingMode !== body.mode) {
+        cancelMilestoneDecision(S.conv, 'routing changed');
+        closeDecision(S.conv, 'routing changed');
+        if (S.conv.succession) publish({ kind: 'workflowClosed', requestId: S.conv.succession.id, action: 'routing changed' });
+        delete S.conv.plan;
+        delete S.conv.succession;
+        recordWorkflow(S.conv);
+      }
       S.conv.routingMode = body.mode as RoutingMode;
       S.conv.rosterVersion++;
       publish({ kind: 'system', text: `Routing: ${mode.label}. ${mode.rule}` });
@@ -239,6 +258,12 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       const owner = S.conv;
       const ids = body.agent ? [agentOf(body.agent).id] : Object.keys(agents);
       if (!body.agent) {
+        for (const task of owner.tasks.keys()) owner.stoppedTasks.add(task);
+        closeDecision(owner, 'stop');
+        if (owner.plan) {
+          owner.plan.finished = true;
+          recordWorkflow(owner);
+        }
         owner.batch = null;
         for (const id of owner.providerChanges) finishProviderDeliveries(owner, id, 'the conversation was stopped');
         discardHeldRelays(owner, 'The conversation was stopped.');
@@ -345,7 +370,11 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
     }
     case 'removeAgent': {
       const owner = S.conv;
-      await removeAgent(body.agent);
+      const old = owner.team.find((m) => m.id === body.agent);
+      const summary = old?.role === 'orchestrator' ? buildProviderHandoff(owner, old, S.roles.orchestrator, S.history) : undefined;
+      await removeAgent(body.agent, () => {
+        if (old) offerSuccession(owner, old, true, summary);
+      });
       cancelBatchPart(owner, body.agent, 'cancelled: agent removed');
       return { ok: true };
     }

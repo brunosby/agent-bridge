@@ -60,7 +60,7 @@ test('review loop stops after the configured number of rounds', async () => {
       { agent: 'Lead', match: 'Message from @a2', reply: '@Rev review it' },
       { agent: 'Lead', match: 'Message from Tester', reply: '@Dev build it' },
       { agent: 'Dev', reply: 'done', edit: true },
-      { agent: 'Rev', reply: 'CHANGES REQUESTED\n- fix x' },
+      { agent: 'Rev', reply: 'CHANGES REQUESTED\n- fix x\n[[SUMMARY]]\nFix the missing check.\n[[/SUMMARY]]' },
     ],
   });
   try {

@@ -66,6 +66,23 @@
   margin-bottom: 0;
 }
 
+.reply-summary {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-inline-start: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+.reply-summary > strong {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.reply-summary > div > :last-child {
+  margin-bottom: 0;
+}
+
 /* Recognized @mentions in message text. */
 .body .mention {
   --accent: var(--agent-accent, var(--color-text-muted));

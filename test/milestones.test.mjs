@@ -6,13 +6,47 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseMilestoneMarkers } from '../public/js/core/milestone-markers.js';
-import { startBridge } from './helpers/bridge.mjs';
+import { startBridge as startTestServer } from './helpers/bridge.mjs';
 import { captureMilestoneWorkspace, commitMilestone, findMilestoneChanges } from '../src/workspace/milestone-git.ts';
 
 const proposal =
   'Plan ready.\n[[MILESTONES]]\n1. Data model | done when: model tests pass\n2. API | done when: API tests pass\n[[/MILESTONES]]';
 const team = [{ driver: 'fake', name: 'Lead', role: 'orchestrator' }];
 
+function startBridge(opts) {
+  const scripted = opts.settings?.fake?.rules || opts.rules;
+  const rules = [
+    {
+      agent: 'Planner',
+      match: 'prepare the spec',
+      reply: '[[SPEC]]\n[{"path":"docs/spec/plan.md","text":"Implement the verified objectives."}]\n[[/SPEC]]',
+    },
+    {
+      agent: 'Lead',
+      match: 'begin milestone scenario',
+      reply: '[[SIZE: large]]\nMultiple milestones\n[[/SIZE]]\n@Planner prepare the spec',
+    },
+    { agent: 'Lead', match: 'Specification approved and saved', reply: proposal },
+    ...scripted,
+  ];
+  return startTestServer({
+    ...opts,
+    team: [...opts.team, { driver: 'fake', role: 'architect', name: 'Planner' }],
+    rules,
+    settings: { ...opts.settings, fake: { ...opts.settings?.fake, rules } },
+  });
+}
+async function approveSpec(bridge) {
+  await bridge.api('send', { text: 'begin milestone scenario' });
+  const state = await bridge.waitFor((e) => e.kind === 'state' && e.taskPlan?.pending?.kind === 'spec');
+  await bridge.api('taskDecision', {
+    action: 'approve',
+    conversationId: state.conversationId,
+    seq: state.taskPlan.seq,
+    requestId: state.taskPlan.pending.id,
+    docs: state.taskPlan.pending.docs,
+  });
+}
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-milestones-'));
   const work = path.join(dir, 'work');
@@ -58,7 +92,6 @@ test('two approved milestones create scoped commits and a final review without s
     rules: [],
     settings: {
       fake: {
-        delayMs: 100,
         rules: [
           { match: 'Milestone 1 committed', reply: 'API finished.\n[[MILESTONE_DONE: 2]]', writeFile: ['api.txt', 'step two'] },
           { match: 'Milestone plan approved', reply: 'Model finished.\n[[MILESTONE_DONE: 1]]', writeFile: ['model.txt', 'step one'] },
@@ -68,18 +101,18 @@ test('two approved milestones create scoped commits and a final review without s
     },
   });
   try {
-    await bridge.api('send', { text: 'large objective' });
+    await approveSpec(bridge);
     const offered = await bridge.waitFor((event) => event.kind === 'milestonePlanProposed');
     assert.equal(offered.command, 'npm run check');
     assert.equal(project.git('rev-parse', 'HEAD'), project.head);
     const edited = [{ title: 'Schema', criterion: 'schema test passes' }, offered.milestones[1]];
+    project.write('.env', 'SYNTHETIC_ONLY_DO_NOT_COMMIT=1\n');
     await bridge.api('resolveMilestonePlan', {
       requestId: offered.requestId,
       action: 'approve',
       milestones: edited,
       command: 'node -e "process.exit(0)"',
     });
-    project.write('.env', 'SYNTHETIC_ONLY_DO_NOT_COMMIT=1\n');
     const first = await bridge.waitFor((event) => event.kind === 'milestoneCommitProposed' && event.milestone.number === 1);
     assert.equal(first.message, 'Milestone 1: Schema');
     assert.deepEqual(first.files, [{ workspace: 'Project', paths: ['model.txt'] }]);
@@ -122,11 +155,16 @@ test('automatic milestones need a passing check and approval from any configured
       },
       { agent: 'Lead', match: 'Message from @a2', reply: 'Finished.\n[[MILESTONE_DONE: 1]]' },
       { agent: 'Lead', match: 'large objective', reply: proposal },
-      { agent: 'Rev', reply: scenario === 'reviewer approved' ? 'APPROVED' : 'CHANGES REQUESTED\n- incomplete work' },
+      {
+        agent: 'Rev',
+        reply:
+          (scenario === 'reviewer approved' ? 'APPROVED' : 'CHANGES REQUESTED\n- incomplete work') +
+          '\n[[SUMMARY]]\nChecks reviewed.\n[[/SUMMARY]]',
+      },
     ];
     const bridge = await startBridge({ dir: project.dir, team: agents, rules, settings: { milestoneCommitMode: 'automatic' } });
     try {
-      await bridge.api('send', { text: 'large objective' });
+      await approveSpec(bridge);
       const event = await bridge.waitFor((item) => item.kind === 'milestonePlanProposed');
       const command = scenario === 'failed' ? 'node -e "process.exit(3)"' : 'node -e "process.exit(0)"';
       await bridge.api('resolveMilestonePlan', { requestId: event.requestId, action: 'approve', command });
@@ -168,7 +206,7 @@ test('a linked worktree uses its own branch and commits literal approved paths',
 test('a non-Git workspace does not offer milestone approval', async () => {
   const bridge = await startBridge({ team, rules: [{ reply: proposal }] });
   try {
-    await bridge.api('send', { text: 'large objective without Git' });
+    await approveSpec(bridge);
     await bridge.waitFor((event) => event.kind === 'turnEnd');
     assert.equal(bridge.state().milestoneCommitAvailable, false);
     assert.equal(
@@ -213,7 +251,7 @@ test('a pending agent task blocks a milestone even when its files are ready', as
     ],
   });
   try {
-    await bridge.api('send', { text: 'large objective' });
+    await approveSpec(bridge);
     const milestone = await bridge.waitFor((event) => event.kind === 'milestonePlanProposed');
     await bridge.api('resolveMilestonePlan', { requestId: milestone.requestId, action: 'approve', command: '' });
     await bridge.waitFor((event) => event.seq > milestone.seq && event.kind === 'turnEnd');

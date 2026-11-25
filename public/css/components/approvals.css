@@ -1,3 +1,24 @@
+.workflow-card .workflow-field {
+  display: grid;
+  gap: 0.35rem;
+  margin-block: 0.5rem;
+}
+.workflow-card textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+}
+.workflow-card .body {
+  max-height: min(45vh, 28rem);
+  overflow: auto;
+}
+.workflow-card fieldset {
+  min-width: 0;
+}
+.task-size {
+  font: inherit;
+  max-width: 12rem;
+}
 /* Cards pinned above the message box: approvals, missing roles and the final confirmation. */
 .approval {
   --accent: var(--agent-accent, var(--color-warning));

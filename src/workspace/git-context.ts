@@ -2,7 +2,7 @@ import { execFile, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { GitSnapshot } from '../core/types.ts';
+import type { GitSnapshot, TaskPlan } from '../core/types.ts';
 import { globMatch } from '../core/roles.ts';
 
 const sensitiveNames = [
@@ -128,6 +128,24 @@ export async function reviewChanges(cwd: string, excluded: unknown, options?: { 
   return { patch, files: selected ? [selected] : visible, omitted: denied.size > 0, omittedPaths };
 }
 
+function pathSnapshot(head: string | null, status: string) {
+  return {
+    head: head?.trim() || null,
+    paths: status
+      .split('\0')
+      .filter(Boolean)
+      .map((line) => line.slice(3)),
+  };
+}
+
+export async function workingPaths(cwd: string) {
+  const [head, status] = await Promise.all([
+    gitAsync(cwd, ['rev-parse', '--verify', 'HEAD']),
+    gitAsync(cwd, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all']),
+  ]);
+  return status === null ? null : pathSnapshot(head, status);
+}
+
 export function projectSnapshot(cwd: string): GitSnapshot | null {
   const status = git(cwd, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all']);
   if (status === null) return null;
@@ -141,11 +159,24 @@ export function projectSnapshot(cwd: string): GitSnapshot | null {
   };
 }
 
-export function committedPaths(cwd: string, previous: string | null, current: string | null) {
+function commitRange(previous: string | null, current: string | null) {
   if (!previous || !current || previous === current) return [];
   // Object IDs originate from Git snapshots. Reject invalid persisted IDs before invoking Git.
   if (![previous, current].every((id) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id))) return null;
-  const names = git(cwd, ['diff', '--no-renames', '--name-only', '-z', previous, current, '--']);
+  return ['diff', '--no-renames', '--name-only', '-z', previous, current, '--'];
+}
+
+export function committedPaths(cwd: string, previous: string | null, current: string | null) {
+  const args = commitRange(previous, current);
+  if (!args?.length) return args;
+  const names = git(cwd, args);
+  return names?.split('\0').filter(Boolean) ?? null;
+}
+
+export async function changedCommitPaths(cwd: string, previous: string | null, current: string | null) {
+  const args = commitRange(previous, current);
+  if (!args?.length) return args;
+  const names = await gitAsync(cwd, args);
   return names?.split('\0').filter(Boolean) ?? null;
 }
 
@@ -153,14 +184,15 @@ export function committedPaths(cwd: string, previous: string | null, current: st
  * Fingerprint of the working tree: HEAD, the diff against HEAD and the untracked files (size and time).
  * For activity detection, status is a fallback. Milestone approvals require a readable diff.
  */
-export async function changeFingerprint(cwd: string, requireDiff = false): Promise<string | null> {
-  const status = await gitAsync(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+export async function changeFingerprint(cwd: string, requireDiff = false, baseline?: TaskPlan['baseline']): Promise<string | null> {
+  const status = await gitAsync(cwd, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all']);
   if (status === null) return null;
   const [head, diff, root] = await Promise.all([
     gitAsync(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']),
-    gitAsync(cwd, ['diff', 'HEAD', '--no-ext-diff', '--binary']),
+    gitAsync(cwd, ['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--binary']),
     gitAsync(cwd, ['rev-parse', '--show-toplevel']),
   ]);
+  if (baseline) baseline[cwd] = pathSnapshot(head, status);
   if (requireDiff && diff === null) return null;
   const hash = createHash('sha256')
     .update(head || '')

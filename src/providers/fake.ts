@@ -11,6 +11,7 @@ interface FakeRule {
   match?: string;
   reply: string;
   streamAt?: number;
+  waitForFile?: string;
   /** Report a successful Edit tool call, or a failed one for regression tests. */
   edit?: boolean | 'failed';
   /** Write [file, content] in the working folder before the reply, without a tool event (like a shell edit). */
@@ -76,6 +77,13 @@ export class FakeAgent extends EventEmitter implements Agent {
   }
 
   async start(): Promise<void> {
+    if (this.config.startWhenFile) {
+      const deadline = Date.now() + 30000;
+      while (!fs.existsSync(path.join(this.cwd, String(this.config.startWhenFile)))) {
+        if (Date.now() > deadline) throw Error('Fixture startup gate timed out.');
+        await delay(10);
+      }
+    }
     if (this.config.startDelayMs) await delay(Number(this.config.startDelayMs));
     if (this.config.failRoleStartup && this.name === this.config.failRoleStartup && this.available) {
       this.available = false;
@@ -96,8 +104,13 @@ export class FakeAgent extends EventEmitter implements Agent {
     const n = this.received;
     const taskIds = taskId ? [taskId] : [];
     this.emitEvent('taskStarted', { taskIds });
+    const rule = this.ruleFor(text);
     const timer = setTimeout(
       () => {
+        if (rule?.waitForFile && !fs.existsSync(path.join(this.cwd, rule.waitForFile))) {
+          timer.refresh();
+          return;
+        }
         this.timers.delete(timer);
         if (this.config.rejectFirstInput && n === 1) {
           this.busyCount -= 1;
@@ -106,7 +119,6 @@ export class FakeAgent extends EventEmitter implements Agent {
           return;
         }
         if (taskIds.length) this.emitEvent('inputAccepted', { taskIds });
-        const rule = this.ruleFor(text);
         const reply = rule ? String(rule.reply).replace(/\{n\}/g, String(n)) : `ok ${n}`;
         if (rule?.edit) {
           this.emitEvent('tool', { key: `${this.id}-edit-${n}`, title: 'Edit', detail: 'file.txt' });
@@ -155,6 +167,7 @@ export class FakeAgent extends EventEmitter implements Agent {
   }
 
   async interrupt(): Promise<void> {
+    if (this.config.finishAfterInterrupt && this.busy) return;
     for (const timer of this.timers.keys()) clearTimeout(timer);
     const taskIds = [...this.timers.values()].filter((id): id is string => Boolean(id));
     this.timers.clear();

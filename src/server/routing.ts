@@ -1,6 +1,7 @@
 import { cancelMilestoneDecision, hasActiveMilestones, milestoneInstructions } from './milestones.ts';
 // Routing: who receives each message, review rounds, missing roles, delivery to agents.
 import type {
+  TaskPlan,
   AgentSpec,
   BatchEvent,
   Conversation,
@@ -10,10 +11,13 @@ import type {
   RoleSuggestion,
   TurnEnded,
 } from '../core/types.ts';
+import { startPlan } from './task-plan.ts';
+import { preparingSmallBaseline, closeDecision, recordWorkflow, requestSpec } from './task-workflow.ts';
+import { parseSummary } from '../../public/js/core/summary-markers.js';
 import { S } from './state.ts';
 import { logError, publish, publishState } from './events.ts';
 import { setting } from '../config/settings.ts';
-import { DONE_MARKER, relay } from './state.ts';
+import { DONE_MARKER, orchestratorId, relay } from './state.ts';
 import { checkTokenLimit, tokenLimitReached } from './conversation.ts';
 import { DRIVERS } from '../providers/registry.ts';
 import { addAgent, defaultName, providerBlocked, statusFor, uniqueName, validateAgentChoice, type AddAgentInput } from './team.ts';
@@ -26,9 +30,7 @@ import { randomUUID } from 'node:crypto';
 import { mentionedAgents, resolveRecipients, toMentionIds, validateMentionChecks } from '../core/recipients.ts';
 import { changeFingerprint } from '../workspace/git-context.ts';
 import { publishFinalReview } from './final-review.ts';
-export function orchestratorId() {
-  return (S.conv.team.find((a) => a.role === 'orchestrator') || S.conv.team[0])?.id;
-}
+export { orchestratorId } from './state.ts';
 
 /** @mentions of team members in a message, in order, without duplicates. */
 export function mentions(text: string, selfId: string | null): string[] {
@@ -66,13 +68,12 @@ export function routeTargets(fromId: string, text: string): string[] {
  * Review rounds: each CHANGES REQUESTED from a Reviewer counts one round; APPROVED resets the count.
  * Past maxReviewRounds the orchestrator is told to stop the fix loop and report to the user instead.
  */
-export function reviewNote(fromId: string, text: string): string {
-  if (S.conv.team.find((a) => a.id === fromId)?.role !== 'reviewer' || !text) return text;
+function reviewRoundNote(text: string): string {
   if (/^\W*APPROVED/i.test(text)) {
     S.conv.reviewRounds = 0;
-    return text;
+    return '';
   }
-  if (!/^\W*CHANGES REQUESTED/i.test(text)) return text;
+  if (!/^\W*CHANGES REQUESTED/i.test(text)) return '';
   S.conv.reviewRounds = (S.conv.reviewRounds || 0) + 1;
   const max = Number(setting('maxReviewRounds'));
   if (S.conv.reviewRounds > max) {
@@ -81,24 +82,60 @@ export function reviewNote(fromId: string, text: string): string {
       text: `The Reviewer still requests changes after ${max} fix round(s). @${orchestratorId()} will report to you instead of starting another round.`,
     });
     logError('bridge', `review round limit (${max}) reached`);
-    return `${text}\n\n[Agent Bridge: review round limit (${max}) reached. Do not send this back to the coder. Summarize for the user what was done and the open findings, and end with [[DONE]].]`;
+    return `[Agent Bridge: review round limit (${max}) reached. Do not send this back to the coder. Summarize for the user what was done and the open findings, and end with [[DONE]].]`;
   }
-  return `${text}\n\n[Agent Bridge: review round ${S.conv.reviewRounds} of ${max}. Send the findings to the coder.]`;
+  return `[Agent Bridge: review round ${S.conv.reviewRounds} of ${max}. Send the findings to the coder.]`;
 }
 
 function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): boolean {
-  const targets = item.targets.filter((id) => canQueueWork(statusFor(owner, id)) && !owner.batch?.pending.has(id));
+  const eligible = item.targets.filter((id) => canQueueWork(statusFor(owner, id)) && !owner.batch?.pending.has(id));
+  const lead = orchestratorId();
+  const plan = owner.plan;
+  const needsSpec = plan?.size === 'large' && (!plan.approved || plan.awaitingSpecRevision);
+  const coders = needsSpec ? eligible.filter((id) => owner.team.some((member) => member.id === id && member.role === 'coder')) : [];
+  let targets = eligible.filter((id) => !coders.includes(id));
+  const skipped = plan?.size === 'small' && item.from === lead ? targets.slice(1) : [];
+  if (skipped.length) targets = targets.slice(0, 1);
   if (owner.relay.hops + targets.length > relay.maxHops) {
     owner.relay.limitPause = 'hops';
     owner.relay.halted = true;
     return false;
   }
-  if (resumed && targets.length !== item.targets.length) {
-    const missing = item.targets.filter((id) => !targets.includes(id));
-    publish({
-      kind: 'system',
-      text: 'Skipped held delivery to ' + missing.map((id) => '@' + id).join(', ') + ' because the destination is no longer ready.',
-    });
+  if (resumed) {
+    const missing = item.targets.filter((id) => !eligible.includes(id));
+    if (missing.length)
+      publish({
+        kind: 'system',
+        text: 'Skipped held delivery to ' + missing.map((id) => '@' + id).join(', ') + ' because the destination is no longer ready.',
+      });
+  }
+  const orchestrator =
+    owner.team.find((member) => member.role === 'orchestrator')?.id ?? (owner.routingMode === 'orchestrator' ? lead : undefined);
+  const architect =
+    needsSpec && item.from === lead ? targets.find((id) => owner.team.some((m) => m.id === id && m.role === 'architect')) : undefined;
+  const needsDraft = architect && plan && !plan.specRequestedFrom;
+  if (needsDraft) {
+    plan.specRequestedFrom = architect;
+    recordWorkflow(owner);
+  }
+  const requestedDraft = coders.length && lead && !architect && requestSpec(owner, lead);
+  const note = coders.length
+    ? 'Specification approval is pending. ' +
+      coders.map((id) => '@' + id).join(', ') +
+      ' did not receive this delegation. Delegate their work again after approval.'
+    : skipped.length
+      ? 'Small task: only @' + targets[0] + ' received the delegation. Do not wait for ' + skipped.map((id) => '@' + id).join(', ') + '.'
+      : '';
+  if (note && plan && lead) {
+    publish({ kind: 'system', text: note });
+    if (!plan.routingNotices?.includes(note)) {
+      (plan.routingNotices ??= []).push(note);
+      (plan.pendingRoutingNotices ??= []).push(note);
+      recordWorkflow(owner);
+    }
+    if (!targets.length && !requestedDraft && plan.pendingRoutingNotices?.length) {
+      deliver(lead, 'No agent received the delegation. Adjust the next step.', { from: 'user', sourceSeq: plan.seq });
+    }
   }
   const deliveries = targets.map((to) => ({
     to,
@@ -107,9 +144,16 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
   }));
   for (const { to, taskId } of deliveries) {
     owner.relay.hops++;
-    deliver(to, item.text, {
+    const summarize = to === orchestrator && setting('summarizeAgentReplies');
+    const body = item.parts
+      .map((part) => '[Message from @' + part.from + ']\n' + (summarize ? (part.shortText ?? part.text) : part.text))
+      .join('\n\n');
+    const intro = item.parts.length > 1 ? '[Results from ' + item.parts.length + ' agents]\n\n' : '';
+    const draft = needsDraft && to === architect ? '\nPrepare the specification and decisions as [[SPEC]] for user approval.' : '';
+    deliver(to, intro + body + draft, {
       from: item.from,
       sourceSeq: item.sourceSeq,
+      specAttempt: draft ? 'draft' : undefined,
       taskId,
       discarded: taskId ? (reason) => completeBatch(owner, to, taskId, '(not delivered: ' + reason + ')') : undefined,
     });
@@ -119,14 +163,18 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
 
 function activeLimitPause(owner: Conversation) {
   return (
-    owner.relay.limitPause && !owner.relay.userPaused && !owner.pendingFinal && !owner.pendingRoleRequest && !owner.pendingRecommendation
+    (owner.relay.limitPause || owner.relay.userPaused) && !owner.pendingFinal && !owner.pendingRoleRequest && !owner.pendingRecommendation
   );
 }
 
 function relayOrHold(owner: Conversation, item: HeldRelay): void {
-  if (!relay.auto || (owner.relay.halted && !activeLimitPause(owner))) return;
+  if (!relay.auto || (owner.relay.halted && !activeLimitPause(owner) && !owner.plan?.pending && !owner.succession)) return;
   checkTokenLimit();
-  if (!owner.relay.halted && dispatchRelay(owner, item)) return;
+  if (preparingSmallBaseline(owner)) {
+    owner.heldRelays.push(item);
+    return;
+  }
+  if (!owner.plan?.pending && !owner.succession && !owner.relay.halted && dispatchRelay(owner, item)) return;
   owner.heldRelays.push(item);
   publish({
     kind: 'system',
@@ -156,7 +204,12 @@ export function resumeRelay(owner: Conversation): void {
   owner.relay.halted = owner.relay.userPaused = false;
   owner.relay.hops = 0;
   delete owner.relay.limitPause;
-  while (owner.heldRelays.length && !owner.relay.halted) {
+  drainHeld(owner);
+}
+
+export function drainHeld(owner: Conversation) {
+  if (owner.heldRelays.length && preparingSmallBaseline(owner)) return;
+  while (owner.heldRelays.length && relay.auto && !owner.relay.halted && !owner.plan?.pending && !owner.succession) {
     const item = owner.heldRelays.shift()!;
     if (dispatchRelay(owner, item, true)) continue;
     owner.heldRelays.unshift(item);
@@ -164,9 +217,9 @@ export function resumeRelay(owner: Conversation): void {
   }
 }
 
-function completeBatch(owner: Conversation, agent: string, taskId: string, text: string, sourceSeq?: number) {
+export function completeBatch(owner: Conversation, agent: string, taskId: string, text?: string, sourceSeq?: number, shortText?: string) {
   if (owner !== S.conv) return;
-  const batch = finishBatchPart(owner, agent, taskId, text, sourceSeq);
+  const batch = finishBatchPart(owner, agent, taskId, text, sourceSeq, shortText);
   if (!batch) return;
   const orch = orchestratorId();
   if (batch.pending.size) {
@@ -180,13 +233,11 @@ function completeBatch(owner: Conversation, agent: string, taskId: string, text:
     return;
   }
   publish({ kind: 'batchCompleted', agents: batch.results.map((part) => part.from) } satisfies BatchEvent);
-  if (!orch || !canQueueWork(statusFor(owner, orch))) return;
-  const body = batch.results.map((item) => '[Message from @' + item.from + ']\n' + item.text).join('\n\n');
-  const intro = batch.results.length > 1 ? '[Results from ' + batch.results.length + ' agents]\n\n' : '';
+  if (!batch.results.length || !orch || (!owner.succession && !canQueueWork(statusFor(owner, orch)))) return;
   relayOrHold(owner, {
     kind: 'batch',
     targets: [orch],
-    text: intro + body,
+    parts: batch.results,
     from: batch.results[0].from,
     sourceSeq: sourceSeq ?? batch.results.findLast((item) => item.sourceSeq)?.sourceSeq,
   });
@@ -198,14 +249,29 @@ export function cancelBatchPart(owner: Conversation, agent: string, reason: stri
 }
 
 export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; sourceSeq?: number }): void {
-  const text = reviewNote(fromId, (ev.text || '').trim());
+  const raw = (ev.text || '').trim();
+  const reviewer = S.conv.team.some((member) => member.id === fromId && member.role === 'reviewer');
+  const reviewNote = reviewer ? reviewRoundNote(raw) : '';
+  const text = reviewNote ? raw + '\n\n' + reviewNote : raw;
+  const { body, summary } = parseSummary(raw);
+  const verdict = reviewer && /^\W*(?:APPROVED|CHANGES REQUESTED)\b/i.test(raw) ? raw.split('\n', 1)[0].trim() : '';
+  const shortText = summary
+    ? [verdict, reviewNote, summary, 'Full reply in the chat. Ask @' + fromId + ' for details.'].filter(Boolean).join('\n\n')
+    : undefined;
   const orch = orchestratorId();
 
   const owner = S.conv;
   const task = owner.batch?.pending.get(fromId);
   if (task) {
     if (ev.taskIds?.includes(task)) {
-      completeBatch(owner, fromId, task, text || '(no answer' + (ev.detail ? ': ' + ev.detail : '') + ')', ev.sourceSeq ?? ev.seq);
+      completeBatch(
+        owner,
+        fromId,
+        task,
+        text || '(no answer' + (ev.detail ? ': ' + ev.detail : '') + ')',
+        ev.sourceSeq ?? ev.seq,
+        shortText,
+      );
     }
     return;
   }
@@ -215,11 +281,24 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
 
   // In orchestrator mode only the orchestrator closes the work; a worker's [[DONE]] still goes back to it.
   const closes = S.conv.routingMode !== 'orchestrator' || fromId === orch;
-  if (DONE_MARKER.test(text) && closes && hasActiveMilestones(owner)) {
+  const done = DONE_MARKER.test(summary ? body : text);
+  if (
+    done &&
+    closes &&
+    (owner.plan?.pending || owner.plan?.awaitingSpecRevision || (owner.plan?.specRequestedFrom && !owner.plan.approved))
+  ) {
+    publish({ kind: 'info', agent: fromId, text: 'The task is waiting for a decision or a specification before it can finish.' });
+    return;
+  }
+  if (done && closes && hasActiveMilestones(owner)) {
     publish({ kind: 'info', agent: fromId, text: 'Approved milestones are still pending. Finish them before closing the work.' });
     return;
   }
-  if (DONE_MARKER.test(text) && closes) {
+  if (done && closes) {
+    if (owner.plan) {
+      owner.plan.finished = true;
+      recordWorkflow(owner);
+    }
     S.conv.relay.halted = true;
     delete owner.relay.limitPause;
     publish({ kind: 'system', text: `@${fromId} marked the work as done. Waiting for you.` });
@@ -229,9 +308,11 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
     publishState();
     return;
   }
-  if (!relay.auto || (owner.relay.halted && !activeLimitPause(owner))) return;
-  const requested = routeTargets(fromId, text).filter((id) => owner.agents[id]);
-  const targets = requested.filter((id) => canQueueWork(statusFor(owner, id)) && !owner.batch?.pending.has(id));
+  if (!relay.auto || (owner.relay.halted && !activeLimitPause(owner) && !owner.succession && !owner.plan?.pending)) return;
+  const requested = routeTargets(fromId, summary ? body : text).filter((id) => owner.agents[id] || owner.succession?.agent === id);
+  const targets = requested.filter(
+    (id) => (owner.succession?.agent === id || canQueueWork(statusFor(owner, id))) && !owner.batch?.pending.has(id),
+  );
   const blocked = requested.filter((id) => !canQueueWork(statusFor(owner, id)));
   const note = blocked.length
     ? 'Unavailable: ' + blocked.map((id) => '@' + id).join(', ') + '. Choose available agents or explain what cannot proceed.'
@@ -251,7 +332,7 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
   relayOrHold(owner, {
     kind: 'reply',
     from: fromId,
-    text: '[Message from @' + fromId + ']\n' + text,
+    parts: [{ from: fromId, text, shortText }],
     targets,
     sourceSeq: ev.sourceSeq ?? ev.seq,
   });
@@ -553,9 +634,9 @@ export async function resolveMissingRole(roleId: string, action: 'add' | 'closes
 }
 
 /** Capture the Git state for the main workspace and any agent worktrees before delivery. */
-async function captureChangeMark(owner: Conversation): Promise<NonNullable<Conversation['changeMark']>> {
+async function captureChangeMark(owner: Conversation, baseline: TaskPlan['baseline']): Promise<NonNullable<Conversation['changeMark']>> {
   const folders = new Set([owner.workDir, ...owner.team.flatMap((agent) => (agent.cwd ? [agent.cwd] : []))]);
-  const before = await Promise.all([...folders].map(async (folder) => [folder, await changeFingerprint(folder)] as const));
+  const before = await Promise.all([...folders].map(async (folder) => [folder, await changeFingerprint(folder, false, baseline)] as const));
   return { before: new Map(before), editTools: new Map(), editedFolders: new Set() };
 }
 
@@ -599,13 +680,16 @@ export async function userSend(text: string, target?: string, mentionChecks?: un
       if (S.conv !== owner) throw new Error('conversation changed before sending');
       validateMentionChecks(owner.team, mentionChecks);
       const canonical = toMentionIds(text, owner.team);
+      if (owner.succession && (!target || target === 'auto')) throw new Error('Choose the coordinator before sending another task.');
       if (!userTargets(target, canonical).length) throw new Error('no agent to receive this message');
       const checkFiles = setting('finalConfirmation') && owner.routingMode === 'orchestrator';
-      const mark = checkFiles ? await captureChangeMark(owner) : null;
+      const baseline: TaskPlan['baseline'] = {};
+      const mark = checkFiles ? await captureChangeMark(owner, baseline) : null;
       if (S.conv !== owner) throw new Error('conversation changed before sending');
       validateMentionChecks(owner.team, mentionChecks);
       const targets = userTargets(target, canonical);
       if (!targets.length) throw new Error('no agent to receive this message');
+      closeDecision(owner, 'new message');
       discardHeldRelays(owner, 'Your new message takes precedence.');
       clearRoleDecisions(owner, 'new message');
       cancelMilestoneDecision(owner, 'new message');
@@ -615,6 +699,11 @@ export async function userSend(text: string, target?: string, mentionChecks?: un
       owner.relay.hops = 0;
       owner.relay.halted = owner.relay.userPaused || Boolean(owner.relay.limitPause);
       const source = publish({ kind: 'user', text: canonical, to: targets });
+      owner.plan =
+        owner.routingMode === 'orchestrator' && targets.includes(orchestratorId() ?? '')
+          ? { ...startPlan(source.seq!, baseline), baselineDeferred: !checkFiles }
+          : undefined;
+      recordWorkflow(owner);
       const note = targets.length > 1 ? ' (sent to ' + targets.length + ' agents)' : '';
       for (const to of targets) {
         const instructions = to === orchestratorId() ? milestoneInstructions(owner) : '';

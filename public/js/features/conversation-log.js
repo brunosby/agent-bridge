@@ -17,6 +17,9 @@ import {
 import { renderState } from './agents.js';
 import { updateComposer } from './controls.js';
 import { bindSavedSearch } from './transcript-search.js';
+import { renderWorkflow, sizeBadge } from './task-workflow.js';
+import { workflowMarkers } from '../core/workflow-markers.js';
+import { parseSummary } from '../core/summary-markers.js';
 import { parseRoleMarkers } from '../core/role-markers.js';
 
 const transcript = new Transcript();
@@ -84,7 +87,15 @@ function flush() {
   newNodes = document.createDocumentFragment();
   const filters = filterOptions();
   for (const entry of dirty) {
-    renderMarkdown(views.get(entry).body, entry.text, findMentionAgent);
+    const body = views.get(entry).body;
+    renderMarkdown(body, entry.text, findMentionAgent);
+    if (entry.summary) {
+      const card = h('section', 'reply-summary');
+      const content = h('div');
+      renderMarkdown(content, entry.summary, findMentionAgent);
+      card.append(h('strong', null, 'Summary'), content);
+      body.appendChild(card);
+    }
     filterEntry(entry, filters);
   }
   dirty.clear();
@@ -137,7 +148,7 @@ function updateSearchText(entry) {
   transcript.update(
     entry,
     entry.text,
-    mapMentions(entry.text, (name) => {
+    mapMentions(entry.summary ? entry.text + '\n' + entry.summary : entry.text, (name) => {
       const member = findMentionAgent(name);
       return member ? '@' + member.name : undefined;
     }),
@@ -203,7 +214,10 @@ function message(ev) {
   if (user) transcript.update(entry, ev.text);
   else {
     entry.rawMessage = ev.kind === 'delta' ? (entry.rawMessage || '') + ev.text : ev.text;
-    transcript.update(entry, parseRoleMarkers(parseMilestoneMarkers(entry.rawMessage).text).text);
+    const visible = parseRoleMarkers(parseMilestoneMarkers(entry.rawMessage).text).text;
+    const { body, summary } = parseSummary(workflowMarkers(visible).text, !ev.final);
+    entry.summary = summary;
+    transcript.update(entry, body);
   }
   updateSearchText(entry);
   dirty.add(entry);
@@ -379,13 +393,21 @@ export function handle(ev) {
         });
       }
       flush();
+      if (store.state?.taskPlan) sizeBadge(views.get(transcript.bySequence.get(store.state.taskPlan.seq))?.node, store.state);
       break;
     case 'state':
+      if (store.state?.taskPlan && store.state.taskPlan.seq !== ev.taskPlan?.seq)
+        sizeBadge(views.get(transcript.bySequence.get(store.state.taskPlan.seq))?.node, store.state, false);
       store.state = ev;
+      renderWorkflow(ev);
+      if (ev.taskPlan) sizeBadge(views.get(transcript.bySequence.get(ev.taskPlan.seq))?.node, ev);
       refreshNames(ev);
       renderMilestoneProgress(ev.milestones);
       renderState();
       updateComposer();
+      break;
+    case 'workflowChanged':
+      if (ev.plan) sizeBadge(views.get(transcript.bySequence.get(ev.plan.seq))?.node, { ...store.state, taskPlan: ev.plan }, false);
       break;
     case 'user':
     case 'delta':
@@ -395,6 +417,8 @@ export function handle(ev) {
         $('conversationStart').hidden = true;
       }
       message(ev);
+      if (ev.kind === 'user' && ev.seq === store.state?.taskPlan?.seq)
+        sizeBadge(views.get(transcript.bySequence.get(ev.seq))?.node, store.state);
       if (ev.kind === 'delta' && $('logSearch').value) results = null;
       break;
     case 'routed':

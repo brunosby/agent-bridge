@@ -1,4 +1,4 @@
-import type { Conversation, TaskEvent } from '../core/types.ts';
+import type { Conversation, SpecAttempt, TaskEvent } from '../core/types.ts';
 import { DRIVERS } from '../providers/registry.ts';
 import { canReceiveWork } from '../core/agent-status.ts';
 import { rosterText } from '../core/prompts.ts';
@@ -6,12 +6,12 @@ import { reviewChanges } from '../workspace/git-context.ts';
 import { closeReview, openReview } from './review-mcp.ts';
 import { randomUUID } from 'node:crypto';
 import { config, setting } from '../config/settings.ts';
-import { publish } from './events.ts';
+import { publish, recordWorkflow } from './events.ts';
 import { statusFor } from './team.ts';
-import { S } from './state.ts';
+import { orchestratorId, S } from './state.ts';
 
 /** Send a message to one agent, adding the team roster or a role note when they changed. */
-type Delivery = { from: string; sourceSeq?: number; taskId?: string; discarded?: (reason: string) => void };
+type Delivery = { specAttempt?: SpecAttempt; from: string; sourceSeq?: number; taskId?: string; discarded?: (reason: string) => void };
 const reviewerQueues = new WeakMap<Conversation, Map<string, Promise<void>>>();
 const providerQueues = new WeakMap<Conversation, Map<string, { text: string; delivery: Delivery }[]>>();
 
@@ -104,6 +104,10 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
   }
   const id = taskId || randomUUID();
   const extras: string[] = [];
+  const plan = owner.plan;
+  const notices =
+    plan && !plan.finished && (!sourceSeq || sourceSeq >= plan.seq) && toId === orchestratorId() ? plan.pendingRoutingNotices : undefined;
+  if (notices?.length) extras.push(...notices.map((note) => '[Agent Bridge routing] ' + note));
   const handoff = owner.providerHandoffs.get(toId);
   if (handoff) {
     extras.push(handoff.summary);
@@ -135,14 +139,27 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
         (declined ? ' Declined roles: ' + declined + '.' : ''),
     );
   }
+  if (owner.plan?.approved?.length && owner.team.some((m) => m.id === toId && ['coder', 'reviewer'].includes(m.role)))
+    extras.push('[Approved specification] ' + owner.plan.approved.join(', '));
   extras.push(...context);
   S.conv.lastSender[toId] = from;
   if (from !== 'user') publish({ kind: 'routed', from, to: toId, relayed: true, hop: S.conv.relay.hops });
-  const task = { id, agent: toId, from, sourceSeq: sourceSeq || null, state: 'queued' as const };
+  const task = {
+    id,
+    ...(delivery.specAttempt && { specAttempt: delivery.specAttempt }),
+    agent: toId,
+    from,
+    sourceSeq: sourceSeq ?? owner.plan?.seq ?? null,
+    state: 'queued' as const,
+  };
   S.conv.tasks.set(id, task);
   publish({ kind: 'taskQueued', ...task } satisfies TaskEvent);
   try {
     agent.send(extras.length ? extras.join('\n\n') + '\n\n' + text : text, id);
+    if (notices?.length && plan && plan === owner.plan && plan.pendingRoutingNotices === notices) {
+      delete plan.pendingRoutingNotices;
+      recordWorkflow(owner);
+    }
   } catch {
     handoff?.taskIds.delete(id);
     owner.tasks.delete(id);

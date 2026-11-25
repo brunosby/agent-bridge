@@ -1,5 +1,7 @@
 import { mapMentions } from '../../public/js/core/mentions.js';
 import { parseMilestoneMarkers } from '../../public/js/core/milestone-markers.js';
+import { workflowMarkers } from '../../public/js/core/workflow-markers.js';
+import { parseSummary } from '../../public/js/core/summary-markers.js';
 import { parseRoleMarkers } from '../../public/js/core/role-markers.js';
 import { open, realpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -126,7 +128,11 @@ export async function searchSavedTranscript(
     for (let index = cursor.index; index < messages.length; index += 1) {
       const { text, authorId: savedAuthor, openSeq, at } = messages[index];
       const authorId = savedAuthor === null ? null : (legacy?.get(savedAuthor) ?? savedAuthor);
-      const clean = authorId === null ? text : parseRoleMarkers(parseMilestoneMarkers(text).text).text;
+      const { body, summary } =
+        authorId === null
+          ? { body: text, summary: '' }
+          : parseSummary(workflowMarkers(parseRoleMarkers(parseMilestoneMarkers(text).text).text).text);
+      const clean = summary ? body + '\n' + summary : body;
       const normalized = mapMentions(clean, (name: string) => {
         const member = find(name);
         return member ? '@' + member.name : undefined;

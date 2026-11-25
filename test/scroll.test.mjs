@@ -79,6 +79,25 @@ test('chat follows the initial replay and respects scrolling during streaming an
     assert.equal(jumpToSequence(1), true);
     assert.equal(back.hidden, false, 'jumping to search results disables following');
 
+    handle({ kind: 'delta', seq: 4, key: 'summary', agent: 'dev', text: 'Full report\n[[SUM', at: 4 });
+    paint();
+    assert.doesNotMatch(log.lastElementChild.textContent, /\[\[SUM/);
+    handle({
+      kind: 'text',
+      seq: 5,
+      key: 'summary',
+      agent: 'dev',
+      text: 'Full report\n[[SUMMARY]]\nChecked **two** files\n[[/SUMMARY]]',
+      final: true,
+      at: 5,
+    });
+    paint();
+    const message = log.lastElementChild;
+    assert.match(message.textContent, /Full report/);
+    assert.equal(message.querySelector('.reply-summary > strong').textContent, 'Summary');
+    assert.equal(message.querySelector('.reply-summary p strong').textContent, 'two');
+    assert.doesNotMatch(message.textContent, /\[\[/);
+
     handle({ kind: 'reset' });
     scroll(0);
     handle({ kind: 'replayComplete' });

@@ -2,6 +2,34 @@
 import type { EventEmitter } from 'node:events';
 import type { WriteStream } from 'node:fs';
 
+export type Size = 'small' | 'medium' | 'large';
+export type SpecDoc = { path: string; text: string };
+export type Question = { question: string; options: string[]; recommendation: string; evidence: string };
+export type TaskDecision =
+  { kind: 'spec'; id: string; agent: string; docs: SpecDoc[] } | { kind: 'question'; id: string; agent: string; questions: Question[] };
+export interface TaskPlan {
+  seq: number;
+  size: Size;
+  reason: string;
+  manual: boolean;
+  finished?: boolean;
+  classified: boolean;
+  nudged: boolean;
+  correctionRequested?: boolean;
+  warned: boolean;
+  baseline: Record<string, { head: string | null; paths: string[] }>;
+  approved?: string[];
+  pending?: TaskDecision;
+  queuedDecisions?: TaskDecision[];
+  specRequestedFrom?: string;
+  specNeedsRetry?: boolean;
+  pendingRoutingNotices?: string[];
+  awaitingSpecRevision?: boolean;
+  baselineDeferred?: boolean;
+  routingNotices?: string[];
+}
+export type Succession = { id: string; agent: string; summary: string; removed: boolean; waiting?: boolean };
+
 export type DriverId = 'claude' | 'codex' | 'opencode' | 'fake' | 'fake-alternate';
 export type RoutingMode = 'orchestrator' | 'mentions' | 'pipeline' | 'roundrobin';
 export type CanEdit = 'all' | 'none' | 'tests';
@@ -49,7 +77,10 @@ export type AgentTaskEvent = {
 }[TaskLifecycleKind];
 export type TurnEnded = Extract<AgentTaskEvent, { kind: 'turnEnd' }>;
 
+export type SpecAttempt = 'draft' | 'correction';
+
 export interface TrackedTask {
+  specAttempt?: SpecAttempt;
   id: string;
   agent: string;
   from: string;
@@ -60,9 +91,16 @@ export interface TrackedTask {
 
 export type TaskEvent = AgentTaskEvent | ({ kind: 'taskQueued'; state: 'queued' } & TrackedTask);
 
+export interface RelayPart {
+  from: string;
+  text: string;
+  shortText?: string;
+  sourceSeq?: number;
+}
+
 export interface DeliveryBatch {
   pending: Map<string, string>;
-  results: { from: string; text: string; sourceSeq?: number }[];
+  results: RelayPart[];
 }
 
 export type BatchEvent =
@@ -257,7 +295,7 @@ export type AgentIdentity = Pick<AgentSpec, 'id' | 'name' | 'driver' | 'role'>;
 
 export interface HeldRelay {
   from: string;
-  text: string;
+  parts: RelayPart[];
   targets: string[];
   sourceSeq?: number;
   kind: 'reply' | 'batch';
@@ -276,6 +314,9 @@ export interface Conversation {
   workDir: string;
   routingMode: RoutingMode;
   relay: { hops: number; halted: boolean; userPaused: boolean; limitPause?: 'tokens' | 'hops' };
+  plan?: TaskPlan;
+  succession?: Succession;
+  stoppedTasks: Set<string>;
   heldRelays: HeldRelay[];
   team: AgentSpec[];
   agents: Record<string, Agent>;

@@ -44,6 +44,17 @@ export function buildInstructions({ name, role, routingMode, workDir, userName, 
     `Shared working directory: ${workDir}`,
     `Your role: ${role?.name || 'General'}. ${role?.summary || ''}`,
     role?.instructions || '',
+    role && ['coder', 'reviewer', 'tester', 'researcher', 'architect'].includes(role.id)
+      ? [
+          'End work reports with this summary (aim for 120 words). Keep delegation mentions in the report and put any required [[DONE]] after the block. When asked for full details, send them without a summary block.',
+          '[[SUMMARY]]',
+          'Done: …',
+          'Files: …',
+          'Checks: … (command and result)',
+          'Open issues: …',
+          '[[/SUMMARY]]',
+        ].join('\n')
+      : '',
     editRule,
     '',
     'How the conversation works:',

@@ -1,3 +1,5 @@
+import { workflowMarkers } from '../../public/js/core/workflow-markers.js';
+import { checkGrowth, readTaskBlocks, requestSpec, stopWatching } from './task-workflow.ts';
 import { closeShellApproval, mayBypassApproval, processShellApproval } from './shell-approvals.ts';
 import { parseMilestoneMarkers } from '../../public/js/core/milestone-markers.js';
 import {
@@ -23,7 +25,7 @@ import { approvalTimers, cliCache, providerRuntime, relay } from './state.ts';
 import { createAgent, defaultName, defaultTeam, startAgent, uniqueName } from './team.ts';
 import { driverModelCache } from './state.ts';
 import { DRIVERS } from '../providers/registry.ts';
-import { cancelBatchPart, onTurnEnd, offerRecommendedRoles } from './routing.ts';
+import { completeBatch, cancelBatchPart, onTurnEnd, offerRecommendedRoles } from './routing.ts';
 import { parseRoleMarkers } from '../../public/js/core/role-markers.js';
 import { isTestCommand } from '../core/test-command.ts';
 import { captureProject } from './project.ts';
@@ -59,6 +61,7 @@ function prepareConversation({ workDir, restoreId, team, routingMode }: OpenOpti
     workDir,
     routingMode: (routingMode && routingMode in ROUTING_MODES ? routingMode : setting('routingMode')) as RoutingMode,
     relay: { hops: 0, halted: Boolean(saved), userPaused: Boolean(saved) },
+    stoppedTasks: new Set(),
     heldRelays: [],
     team: [],
     agents: {},
@@ -117,6 +120,9 @@ function prepareConversation({ workDir, restoreId, team, routingMode }: OpenOpti
     const activePaths = new Set([workDir, ...owner.team.flatMap((spec) => (spec.worktree && spec.cwd ? [spec.cwd] : []))]);
     owner.project = Object.fromEntries(Object.entries(owner.project).filter(([cwd]) => activePaths.has(cwd)));
     for (const cwd of activePaths) captureProject(owner, cwd, !saved);
+    const workflow = saved?.events.findLast((event) => event.kind === 'workflowChanged');
+    owner.plan = workflow?.plan ?? undefined;
+    owner.succession = workflow?.succession ?? undefined;
     if (saved) restoreMilestoneViews(owner, saved.events.findLast((event) => event.kind === 'milestoneProgress')?.milestones);
     return { owner, saved };
   } catch (error) {
@@ -140,6 +146,7 @@ export function openConversation(options: OpenOptions) {
 async function closeActiveConversation() {
   if (!S.conv) return true;
   const old = S.conv;
+  stopWatching(old);
   flushMentionStreams(old);
   cancelMilestoneDecision(old, 'closed');
   S.conv = null as unknown as Conversation;
@@ -348,7 +355,11 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       owner.testResults = [...owner.testResults.slice(-39), result];
       publish({ kind: 'observedTest', result });
     }
-    const milestone = (ev.kind === 'text' || ev.kind === 'turnEnd') && typeof ev.text === 'string' ? parseMilestoneMarkers(ev.text) : null;
+    const workflow = ev.kind === 'turnEnd' && typeof ev.text === 'string' ? workflowMarkers(ev.text) : null;
+    const milestone =
+      (ev.kind === 'text' || ev.kind === 'turnEnd') && typeof ev.text === 'string'
+        ? parseMilestoneMarkers(workflow?.text ?? ev.text)
+        : null;
     const markers = milestone ? parseRoleMarkers(milestone.text) : null;
     const text = markers ? toMentionIds(markers.text, owner.team) : undefined;
     const clean = text !== undefined ? { ...ev, text } : ev;
@@ -357,9 +368,33 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
     if (ev.kind === 'text' && ev.final && published.seq) owner.lastAnswerSeq[id] = published.seq;
     if (lifecycle?.kind === 'turnEnd') {
       const sourceSeq = owner.lastAnswerSeq[id] ?? published.seq;
+      if (lifecycle.taskIds.some((task) => owner.stoppedTasks.has(task))) {
+        for (const task of lifecycle.taskIds) owner.stoppedTasks.delete(task);
+        delete owner.lastAnswerSeq[id];
+        publishState();
+        return;
+      }
       delete owner.lastAnswerSeq[id];
+      const plan = owner.plan;
+      const currentTasks = plan ? finishedTasks.filter((task) => (task.sourceSeq ?? 0) >= plan.seq) : [];
+      if (lifecycle.ok && owner.plan && currentTasks.length) {
+        if (owner.plan.size === 'small') void checkGrowth(owner);
+        const handled = readTaskBlocks(
+          owner,
+          id,
+          workflow?.blocks || [],
+          Boolean(text?.trim() || markers?.roles.length || milestone?.proposed),
+          currentTasks.find((t) => t.specAttempt === 'correction')?.specAttempt ?? currentTasks.find((t) => t.specAttempt)?.specAttempt,
+        );
+        if (handled) {
+          const batchId = owner.batch?.pending.get(id);
+          if (batchId && lifecycle.taskIds.includes(batchId)) completeBatch(owner, id, batchId);
+          publishState();
+          return;
+        }
+      }
       if (markers?.incomplete) publish({ kind: 'info', agent: id, text: 'Incomplete role recommendation ignored.' });
-      if (markers?.roles.length && offerRecommendedRoles(owner, id, markers.roles)) return;
+      if (owner.plan?.size !== 'small' && markers?.roles.length && offerRecommendedRoles(owner, id, markers.roles)) return;
       const role = owner.team.find((member) => member.id === id)?.role;
       const delegatedReview =
         role === 'reviewer' &&
@@ -369,6 +404,14 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
         if (milestone.invalid) publish({ kind: 'info', agent: id, text: 'Ignored a malformed milestone declaration.' });
         else if (milestone.proposed) {
           try {
+            if (owner.plan && owner.plan.size !== 'large') {
+              publish({ kind: 'info', agent: id, text: 'Milestones require a large task. Change the task size to use them.' });
+              return;
+            }
+            if (owner.plan && (!owner.plan.approved || owner.plan.awaitingSpecRevision)) {
+              requestSpec(owner, id);
+              return;
+            }
             if (offerMilestonePlan(owner, id, milestone.proposed)) return;
           } catch (error) {
             publish({ kind: 'info', agent: id, text: error instanceof Error ? error.message : 'Invalid milestone plan.' });

@@ -284,7 +284,7 @@ export async function addAgent(
   return spec;
 }
 
-export async function removeAgent(id: string): Promise<void> {
+export async function removeAgent(id: string, onRemoved?: () => void): Promise<void> {
   const owner = S.conv;
   const idx = S.conv.team.findIndex((a) => a.id === id);
   if (idx < 0) throw new Error('unknown agent');
@@ -300,10 +300,10 @@ export async function removeAgent(id: string): Promise<void> {
   for (const taskId of taskIds) S.conv.tasks.delete(taskId);
   if (taskIds.length) publish({ kind: 'tasksCancelled', agent: id, taskIds } satisfies TaskEvent);
   S.conv.rosterVersion++;
-  await agent?.shutdown().catch(() => {});
-  if (S.conv !== owner) return;
   publish({ kind: 'system', text: `Removed @${spec.id}. Its session stays saved in the log.` });
+  onRemoved?.();
   publishState();
+  await agent?.shutdown().catch(() => {});
 }
 
 function refreshAgentInstructions(spec: AgentSpec, agent: Agent): void {

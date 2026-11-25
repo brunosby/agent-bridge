@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { startBridge } from './helpers/bridge.mjs';
 
@@ -113,14 +113,17 @@ test('a failed first delivery preserves the handoff and session usage across res
 test('a batch finishing during an orchestrator provider change reaches the new session', async () => {
   const rules = [
     { agent: 'Lead', match: 'start', reply: '@a2 build' },
-    { agent: 'Dev', reply: 'batch result' },
+    { agent: 'Dev', reply: 'batch result', waitForFile: 'release-worker' },
   ];
   const bridge = await startBridge({
     team,
     rules,
     settings: {
-      fake: { rules, delayMs: 320 },
-      'fake-alternate': { startDelayMs: 900, rules: [{ match: '\\[Provider handoff\\][\\s\\S]*batch result', reply: 'batch received' }] },
+      fake: { rules },
+      'fake-alternate': {
+        startWhenFile: 'release-start',
+        rules: [{ match: '\\[Provider handoff\\][\\s\\S]*batch result', reply: 'batch received' }],
+      },
     },
   });
   try {
@@ -132,11 +135,13 @@ test('a batch finishing during an orchestrator provider change reaches the new s
       const reserved = await bridge.waitFor(
         (event) => event.kind === 'state' && member(event, 'a1')?.status.availability === 'switching_provider',
       );
+      writeFileSync(path.join(bridge.work, 'release-worker'), '');
       const completed = await bridge.waitFor((event) => event.kind === 'batchCompleted');
       assert.ok(completed.seq > reserved.seq);
       assert.equal(bridge.events.filter((event) => event.kind === 'routed' && event.to === 'a1').length, 0);
       await assert.rejects(bridge.api('changeProvider', { agent: 'a1', driver: 'fake' }), /switching provider|different provider/);
     } finally {
+      writeFileSync(path.join(bridge.work, 'release-start'), '');
       assert.equal((await changing).ready, true);
     }
     await bridge.waitFor((event) => event.kind === 'turnEnd' && event.text === 'batch received');
@@ -148,13 +153,14 @@ test('a batch finishing during an orchestrator provider change reaches the new s
 
 test('a busy agent refuses a switch and a failed startup closes queued deliveries and can be retried', async () => {
   const rules = [
-    { agent: 'Lead', match: 'delegate', reply: '@a2 build' },
+    { agent: 'Dev', match: 'work in progress', reply: 'working', waitForFile: 'release-work' },
+    { agent: 'Lead', match: 'delegate', reply: '@a2 build', waitForFile: 'release-delegation' },
     { agent: 'Lead', match: 'not delivered', reply: 'handled failed delivery' },
   ];
   const bridge = await startBridge({
     team,
     rules,
-    settings: { fake: { rules, delayMs: 450 }, 'fake-alternate': { failRoleStartup: 'Dev', startDelayMs: 950 } },
+    settings: { fake: { rules }, 'fake-alternate': { failRoleStartup: 'Dev', startWhenFile: 'release-start' } },
   });
   try {
     await idle(bridge, 'a2');
@@ -163,8 +169,15 @@ test('a busy agent refuses a switch and a failed startup closes queued deliverie
     await assert.rejects(bridge.api('changeProvider', { agent: 'a2', driver: newDriver }), /Use Stop/);
     await bridge.api('interrupt', { agent: 'a2' });
     await bridge.api('send', { text: 'delegate' });
-    const changing = await bridge.api('changeProvider', { agent: 'a2', driver: newDriver });
-    assert.equal(changing.ready, false);
+    const changing = bridge.api('changeProvider', { agent: 'a2', driver: newDriver });
+    try {
+      await bridge.waitFor((e) => e.kind === 'state' && member(e, 'a2')?.status.availability === 'switching_provider');
+      writeFileSync(path.join(bridge.work, 'release-delegation'), '');
+      await bridge.waitFor((e) => e.kind === 'turnEnd' && e.text === '@a2 build');
+    } finally {
+      writeFileSync(path.join(bridge.work, 'release-start'), '');
+    }
+    assert.equal((await changing).ready, false);
     await bridge.waitFor((event) => event.kind === 'state' && member(event, 'a2')?.status.availability === 'startup_failed');
     await bridge.waitFor((event) => event.kind === 'text' && event.text === 'handled failed delivery');
     await bridge.api('retry', { agent: 'a2' });

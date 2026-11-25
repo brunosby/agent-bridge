@@ -4,6 +4,7 @@ import { approvals, label } from '../core/store.js';
 const ENABLED_KEY = 'agent-bridge-request-notifications';
 const SEEN_KEY = 'agent-bridge-notified-requests';
 const NOTICES = {
+  workflowRequest: ['needs a decision', 'Review the pending request in Agent Bridge.'],
   approval: ['needs tool approval', 'Review the tool request in Agent Bridge.'],
   needRole: ['needs another role', 'Choose how to continue in Agent Bridge.'],
   recommendRoles: ['recommends adding roles', 'Review the suggested team in Agent Bridge.'],
@@ -11,7 +12,14 @@ const NOTICES = {
   milestonePlanProposed: ['requests milestone plan approval', 'Review the proposed milestones in Agent Bridge.'],
   milestoneCommitProposed: ['requests milestone commit approval', 'Review the selected files in Agent Bridge.'],
 };
-const CLOSED = new Set(['approvalClosed', 'needRoleClosed', 'recommendRolesClosed', 'finalReviewClosed', 'milestoneDecisionClosed']);
+const CLOSED = new Set([
+  'workflowClosed',
+  'approvalClosed',
+  'needRoleClosed',
+  'recommendRolesClosed',
+  'finalReviewClosed',
+  'milestoneDecisionClosed',
+]);
 let notifier;
 
 function read(browser, key) {

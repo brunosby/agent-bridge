@@ -26,6 +26,10 @@ export const SETTING_LABELS = {
     'Review fix rounds',
     'How many times the Reviewer CHANGES REQUESTED answer goes back to the coder before the orchestrator reports to you.',
   ],
+  summarizeAgentReplies: [
+    'Send only agent summaries to the orchestrator',
+    'Full replies stay in the chat. Replies without a complete summary are sent in full.',
+  ],
   finalConfirmation: [
     'Ask me to approve the final result',
     'Show Approve / Ask for changes when the orchestrator finishes and files changed since your last message.',
@@ -175,6 +179,7 @@ export async function renderRoles() {
       h('span', 'hint', r.canEdit === 'none' ? 'read-only' : r.canEdit === 'tests' ? 'edits tests only' : 'edits files'),
     );
     row.append(head, h('div', null, r.summary));
+    if (r.warning) row.append(h('p', 'err', r.warning));
     if (r.recommended?.label) row.appendChild(h('div', 'hint', `Recommended models: ${r.recommended.label}`));
 
     // Profile: full setup or lean (no hooks), plus skills switched off for this role.

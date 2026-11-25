@@ -1,7 +1,8 @@
+import { successorChoices, watchCoordinator } from './task-workflow.ts';
 import { mapMentions } from '../../public/js/core/mentions.js';
 import { milestoneCommitAvailable, milestoneViews } from './milestones.ts';
 // Event bus: everything the page shows goes through publish() and the state snapshot.
-import type { Agent, AgentSpec, BridgeEvent, ModelInfo } from '../core/types.ts';
+import type { Agent, AgentSpec, BridgeEvent, Conversation, ModelInfo } from '../core/types.ts';
 import type { ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -93,10 +94,31 @@ export function teamState() {
   });
 }
 
+export function recordWorkflow(owner: Conversation) {
+  if (owner !== S.conv) return;
+  publish({
+    kind: 'workflowChanged',
+    plan: owner.plan ? structuredClone(owner.plan) : null,
+    succession: owner.succession ? { ...owner.succession } : null,
+  });
+  publishState();
+}
+
 export function stateEvent() {
   const team = teamState();
   return {
     kind: 'state',
+    taskPlan: S.conv.plan
+      ? {
+          seq: S.conv.plan.seq,
+          size: S.conv.plan.size,
+          reason: S.conv.plan.reason,
+          pending: S.conv.plan.pending,
+          specNeedsRetry: S.conv.plan.specNeedsRetry,
+          finished: S.conv.plan.finished,
+        }
+      : null,
+    succession: S.conv.succession ? { ...S.conv.succession, choices: successorChoices(S.conv) } : null,
     tasks: [...S.conv.tasks.values()],
     project: projectLabel(S.conv),
     milestones: milestoneViews(S.conv),
@@ -120,6 +142,7 @@ export function stateEvent() {
 export function publishState() {
   if (!S.conv) return;
   publish(stateEvent());
+  watchCoordinator(S.conv);
 }
 
 /** A state snapshot sent before replaying S.history, so names and S.roles are known while it renders. */
