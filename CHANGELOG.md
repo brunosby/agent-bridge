@@ -52,6 +52,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
+- Claude Code starts from its npm launcher on Windows. Startup failures now show the underlying error and point to `claude.command` immediately.
+
 - Overlapping specifications and questions open in order. If the Architect returns a missing or invalid specification, the Bridge asks for one correction. If the correction also fails, **Retry specification** reopens the same task, including after restoring the conversation.
 - Other agents can start while a Coder waits for specification approval. The coordinator receives skipped-recipient notices with its next delivery. It gets an immediate notice when nobody received the delegation.
 - Git approval checks allow ordinary branch switches and require confirmation for pushes, file restoration and forced branch changes, including `git switch -f` and `git switch --discard-changes`.

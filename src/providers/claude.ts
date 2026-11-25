@@ -1,6 +1,7 @@
 import type { ProviderEventArgs } from '../core/types.ts';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { providerCommand } from './windows-command.ts';
 import { spawnJsonl, type JsonlProcess } from './process.ts';
 import type { Agent, AgentOptions, DriverConfig, ModelInfo, ReconfigureOptions } from '../core/types.ts';
 
@@ -236,35 +237,52 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     const review = this.config.reviewMcp?.();
     const args = this.buildArgs(review?.url);
     this.emitEvent('info', { text: `Starting: ${command} ${args.join(' ')}` });
-    this.proc = spawnJsonl(command, args, {
-      cwd: this.cwd,
-      shell: false,
-      env: review ? { ...process.env, AGENT_BRIDGE_REVIEW_TOKEN: review.token } : process.env,
-      onMessage: (m) => this.handle(m),
-      onText: (t) => this.emitEvent('info', { text: t }),
-      onStderr: (t) => {
-        this.stderrTail = (this.stderrTail + String(t)).slice(-800);
-        this.emitEvent('stderr', { text: String(t) });
-      },
-      onExit: (code) => {
-        const wasExpected = this.stopping;
-        this.stopping = false;
-        this.proc = null;
-        const taskIds = [...(this.activeBatch?.taskIds || []), ...this.unconfirmed.values()];
-        this.activeBatch = null;
-        this.unconfirmed.clear();
-        const cancelled = taskIds.filter((id): id is string => Boolean(id));
-        if (cancelled.length) this.emitEvent('tasksCancelled', { taskIds: cancelled });
-        this.closeApprovals();
-        this.emitEvent('status', { busy: false });
-        if (!wasExpected)
-          this.emitEvent('error', {
-            text: `Claude process exited (code ${code}).${this.stderrTail.trim() ? ` ${this.stderrTail.trim().slice(-300)}` : ''}`,
-          });
-        // An unexpected exit is an explicit failure even if the CLI wrote output before it became ready.
-        if (!wasExpected) this.markUnavailable(`Claude Code stopped unexpectedly (exit code ${code}).`);
-      },
-    });
+    const failed = (error: unknown) => {
+      this.proc = null;
+      const tasks = [...this.unconfirmed.values()].filter((id): id is string => Boolean(id));
+      this.unconfirmed.clear();
+      if (tasks.length) this.emitEvent('tasksCancelled', { taskIds: tasks });
+      this.markUnavailable(
+        `Could not start ${command}: ${error instanceof Error ? error.message : String(error)}. Check claude.command in the configuration.`,
+      );
+    };
+    try {
+      const launch = providerCommand(command, args, this.cwd);
+      this.proc = spawnJsonl(launch.file, launch.args, {
+        windowsVerbatimArguments: launch.verbatim,
+        onSpawnError: failed,
+        cwd: this.cwd,
+        shell: false,
+        env: review ? { ...process.env, AGENT_BRIDGE_REVIEW_TOKEN: review.token } : process.env,
+        onMessage: (m) => this.handle(m),
+        onText: (t) => this.emitEvent('info', { text: t }),
+        onStderr: (t) => {
+          this.stderrTail = (this.stderrTail + String(t)).slice(-800);
+          this.emitEvent('stderr', { text: String(t) });
+        },
+        onExit: (code) => {
+          const wasExpected = this.stopping;
+          this.stopping = false;
+          this.proc = null;
+          const taskIds = [...(this.activeBatch?.taskIds || []), ...this.unconfirmed.values()];
+          this.activeBatch = null;
+          this.unconfirmed.clear();
+          const cancelled = taskIds.filter((id): id is string => Boolean(id));
+          if (cancelled.length) this.emitEvent('tasksCancelled', { taskIds: cancelled });
+          this.closeApprovals();
+          this.emitEvent('status', { busy: false });
+          if (!wasExpected)
+            this.emitEvent('error', {
+              text: `Claude process exited (code ${code}).${this.stderrTail.trim() ? ` ${this.stderrTail.trim().slice(-300)}` : ''}`,
+            });
+          // An unexpected exit is an explicit failure even if the CLI wrote output before it became ready.
+          if (!wasExpected) this.markUnavailable(`Claude Code stopped unexpectedly (exit code ${code}).`);
+        },
+      });
+    } catch (error) {
+      failed(error);
+      return;
+    }
     // Same control message the Agent SDK sends first; its answer lists the models this account can use.
     this.proc?.write({ type: 'control_request', request_id: `init-${Date.now()}`, request: { subtype: 'initialize' } });
     this.emitEvent('status', { busy: false });

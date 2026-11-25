@@ -4,6 +4,8 @@ import readline from 'node:readline';
 export interface JsonlOptions {
   cwd: string;
   shell?: boolean;
+  windowsVerbatimArguments?: boolean;
+  onSpawnError?: (err: Error) => void;
   env?: NodeJS.ProcessEnv;
   onMessage: (msg: any) => void;
   onText?: (line: string) => void;
@@ -24,12 +26,23 @@ export interface JsonlProcess {
 export function spawnJsonl(
   command: string,
   args: string[],
-  { cwd, shell = false, env = process.env, onMessage, onText, onStderr, onExit }: JsonlOptions,
+  {
+    cwd,
+    shell = false,
+    windowsVerbatimArguments = false,
+    env = process.env,
+    onSpawnError,
+    onMessage,
+    onText,
+    onStderr,
+    onExit,
+  }: JsonlOptions,
 ): JsonlProcess {
   const child = spawn(command, args, {
     cwd,
     shell,
     windowsHide: true,
+    windowsVerbatimArguments,
     stdio: ['pipe', 'pipe', 'pipe'],
     env,
   });
@@ -53,7 +66,14 @@ export function spawnJsonl(
   });
   child.stderr.on('data', (d: string) => onStderr?.(d));
   child.stdin.on('error', (err) => onStderr?.(`stdin error: ${err.message}`));
-  child.on('error', (err) => onStderr?.(`process error: ${err.message}`));
+  let spawned = false;
+  child.once('spawn', () => {
+    spawned = true;
+  });
+  child.on('error', (err) => {
+    if (!spawned && onSpawnError) onSpawnError(err);
+    else onStderr?.(`process error: ${err.message}`);
+  });
   child.on('exit', (code, signal) => onExit?.(code, signal));
   return {
     child,
