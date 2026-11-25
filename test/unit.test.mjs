@@ -22,19 +22,38 @@ const roles = await load('core/roles.ts');
 const prompts = await load('core/prompts.ts');
 const history = await load('core/history.ts');
 
-test('safety: single deletions inside the project pass, the rest is flagged', () => {
+test('safety: single deletions inside the project pass, the rest is flagged', async () => {
   const root = process.platform === 'win32' ? 'C:\\proj' : '/proj';
   const c = safety.buildMatcher({ workDir: root });
-  assert.equal(c({ command: 'rm notes.txt' }), null);
-  assert.equal(c({ command: 'npm test' }), null);
-  assert.match(c({ command: 'rm -rf build' }), /recursive/);
-  assert.match(c({ command: 'rm ../other.txt' }), /outside/);
-  assert.match(c({ command: 'cd /tmp && rm x' }), /changing directory/);
-  assert.match(c({ command: 'git push --force origin main' }), /destructive/);
-  assert.match(c({ command: 'git reset --hard HEAD~1' }), /destructive/);
-  assert.match(c({ command: 'rm a.txt', cwd: process.platform === 'win32' ? 'C:\\elsewhere' : '/elsewhere' }), /outside/);
+  assert.equal(await c({ command: 'rm notes.txt' }), null);
+  assert.equal(await c({ command: 'npm test' }), null);
+  assert.match(await c({ command: 'rm -rf build' }), /recursive/);
+  assert.match(await c({ command: 'rm ../other.txt' }), /outside/);
+  assert.match(await c({ command: 'cd /tmp && rm x' }), /changing directory/);
+  assert.match(await c({ command: 'git push --force origin main' }), /destructive/);
+  assert.match(await c({ command: 'git reset --hard HEAD~1' }), /destructive/);
+  assert.match(await c({ command: 'rm a.txt', cwd: process.platform === 'win32' ? 'C:\\elsewhere' : '/elsewhere' }), /outside/);
 });
 
+test('roles with missing or invalid canEdit load as read-only and expose a warning', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-role-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const log = t.mock.method(console, 'warn', () => {});
+  for (const [id, canEdit] of [
+    ['missing', undefined],
+    ['typo', 'al'],
+    ['valid', 'tests'],
+  ])
+    fs.writeFileSync(path.join(dir, id + '.json'), JSON.stringify({ name: id, id, canEdit }));
+  const catalog = roles.loadRoles(dir);
+  for (const id of ['missing', 'typo']) {
+    assert.equal(catalog[id].canEdit, 'none');
+    assert.match(catalog[id].warning, /Invalid canEdit/);
+    assert.ok(log.mock.calls.some((c) => c.arguments[0] === catalog[id].warning));
+  }
+  assert.equal(catalog.valid.canEdit, 'tests');
+  assert.equal(catalog.valid.warning, undefined);
+});
 test('roles: glob matching and recommended models', () => {
   assert.equal(roles.globMatch('*:long-task', 'plugin:long-task'), true);
   assert.equal(roles.globMatch('*:long-task', 'plugin:loop-design'), false);

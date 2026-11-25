@@ -1,4 +1,4 @@
-import { closeShellApproval, processShellApproval } from './shell-approvals.ts';
+import { closeShellApproval, mayBypassApproval, processShellApproval } from './shell-approvals.ts';
 import { parseMilestoneMarkers } from '../../public/js/core/milestone-markers.js';
 import {
   cancelMilestoneDecision,
@@ -173,9 +173,22 @@ export function startAgents() {
 }
 
 export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
+  let silence: NodeJS.Timeout | undefined;
   const changeId = owner.team.find((member) => member.id === id)?.providerChangeId;
-  agent.on('event', (event: AgentEvent) => {
+  agent.on('event', async (event: AgentEvent) => {
     if (S.conv !== owner || owner.agents[id] !== agent) return; // late events from a closed conversation or replaced agent
+    clearTimeout(silence);
+    if (agent.busy && !agent.approvals.size && !['turnEnd', 'tasksCancelled', 'unavailable'].includes(event.kind)) {
+      silence = setTimeout(() => {
+        if (S.conv === owner && owner.agents[id] === agent && agent.busy && !agent.approvals.size)
+          publish({
+            kind: 'info',
+            agent: id,
+            text: 'No provider activity for two minutes. The turn is still open; you can wait or stop it.',
+          });
+      }, 120000);
+      silence.unref();
+    }
     if (event.kind === 'inputAccepted') {
       settleProviderHandoff(owner, id, taskIdsFromLog(event.taskIds), true);
       return;
@@ -254,9 +267,12 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       return;
     }
     if (ev.kind === 'approval') {
-      const spec = owner.team.find((a) => a.id === id);
-      const hit = agent.isDestructive?.({ command: ev.matchText, cwd: ev.cwd || agent.cwd, deletePaths: ev.deletePaths }) ?? null;
-      if (spec?.bypass && !hit) {
+      const hit = await agent
+        .isDestructive?.({ command: ev.matchText, cwd: ev.cwd || agent.cwd, deletePaths: ev.deletePaths })
+        .catch(() => 'Could not verify the requested operation. Review it before proceeding.');
+      if (S.conv !== owner || owner.agents[id] !== agent || !agent.approvals.has(ev.requestId)) return;
+      const spec = owner.team.find((member) => member.id === id);
+      if (spec?.bypass && mayBypassApproval(ev, (S.roles[spec.role]?.canEdit ?? 'none') === 'none', Boolean(hit))) {
         agent.respondApproval(ev.requestId, 'accept');
         publish({ kind: 'autoApproved', agent: id, title: ev.title, detail: ev.detail });
         return;

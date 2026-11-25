@@ -19,11 +19,15 @@ export function loadRoles(dir: string): RoleCatalog {
     try {
       const r = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
       if (!r.id || !r.name) continue;
+      const valid = ['all', 'none', 'tests'].includes(r.canEdit);
+      const warning = valid ? undefined : 'Invalid canEdit in ' + f + '. Using read-only permissions.';
+      if (warning) console.warn(warning);
       roles[r.id] = {
         id: r.id,
         name: r.name,
         summary: r.summary || '',
-        canEdit: ['all', 'none', 'tests'].includes(r.canEdit) ? r.canEdit : 'all',
+        canEdit: valid ? r.canEdit : 'none',
+        warning,
         recommended: { label: r.recommended?.label || '', patterns: r.recommended?.patterns || [] },
         instructions: r.instructions || '',
         fallback: Array.isArray(r.fallback) ? r.fallback : [],

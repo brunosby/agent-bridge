@@ -127,7 +127,7 @@ export interface Agent extends EventEmitter {
   sessionId?: string | null;
   threadId?: string | null;
   commands?: { name: string; description: string }[];
-  isDestructive?: (input: { command?: string; cwd?: string; deletePaths?: string[] }) => string | null;
+  isDestructive?: (input: { command?: string; cwd?: string; deletePaths?: string[] }) => Promise<string | null>;
   readonly busy: boolean;
   readonly model: string | null;
   readonly effort: string | null;
@@ -148,6 +148,7 @@ export interface Agent extends EventEmitter {
 export type AgentClass = new (opts: AgentOptions) => Agent;
 
 export interface Role {
+  warning?: string;
   id: string;
   name: string;
   summary: string;

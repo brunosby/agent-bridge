@@ -6,8 +6,74 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { inspectShell, wrappedShellCommand } from '../src/core/read-only-shell.ts';
 import { config } from '../src/config/settings.ts';
-import { processShellApproval, answerApproval, revokeShellApprovals } from '../src/server/shell-approvals.ts';
+import { mayBypassApproval, processShellApproval, answerApproval, revokeShellApprovals } from '../src/server/shell-approvals.ts';
+import { OpenCodeAgent } from '../src/providers/opencode.ts';
 import { CodexAgent } from '../src/providers/codex.ts';
+
+test('OpenCode shell prompts retain the session directory; unknown commands and read-only roles go through inspection', () => {
+  const agent = new OpenCodeAgent({ id: 'a1', cwd: process.cwd(), readOnly: true, config: { askFor: [] } });
+  const events = [];
+  agent.on('event', (event) => events.push(event));
+  const ask = (id, command) => {
+    agent.onEvent({ type: 'permission.asked', properties: { id, permission: 'bash', metadata: { command } } });
+    return events.findLast((event) => event.kind === 'approval');
+  };
+  const known = ask('one', 'npm test');
+  assert.equal(known.cwd, process.cwd());
+  assert.deepEqual(known.shellCommand, { shell: 'bash', text: 'npm test' });
+  assert.equal(mayBypassApproval(known, true, false), false);
+  assert.equal(mayBypassApproval(known, false, false), true);
+  assert.equal(mayBypassApproval(known, false, true), false);
+  assert.equal(mayBypassApproval(ask('two'), false, false), false);
+  assert.equal(mayBypassApproval(ask('empty', '  '), false, false), false);
+  assert.ok(agent.permissionRules().some((r) => r.permission === 'bash' && r.action === 'ask'));
+  assert.ok(agent.permissionRules().some((r) => r.permission === 'edit' && r.action === 'deny'));
+});
+
+test('OpenCode replaces a missing session and retries the saved ID after a timeout', async (t) => {
+  const agent = new OpenCodeAgent({ config: { resumeSessionId: 'saved' }, cwd: process.cwd() });
+  const calls = [];
+  let mode = 'timeout';
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    calls.push([opts.method, new URL(url).pathname]);
+    if (mode === 'timeout') throw new DOMException('deadline exceeded', 'TimeoutError');
+    if (mode === 'missing' && opts.method === 'GET') return new Response('', { status: 404 });
+    return Response.json({ id: 'replacement' });
+  });
+  agent.base = 'http://localhost';
+  await assert.rejects(agent.restoreOrCreateSession(), /GET \/session\/saved.*deadline exceeded/);
+  assert.equal(agent.sessionId, 'saved');
+  assert.deepEqual(calls, [['GET', '/session/saved']]);
+  mode = 'ready';
+  await agent.restoreOrCreateSession();
+  assert.equal(agent.sessionId, 'saved');
+  assert.deepEqual(calls.slice(1), [
+    ['GET', '/session/saved'],
+    ['PATCH', '/session/saved'],
+  ]);
+  mode = 'missing';
+  await agent.restoreOrCreateSession();
+  assert.deepEqual(calls.slice(3), [
+    ['GET', '/session/saved'],
+    ['POST', '/session'],
+  ]);
+  assert.equal(agent.sessionId, 'replacement');
+});
+test('overdue Codex control requests identify the stage and keep the saved thread for retry', async () => {
+  const agent = new CodexAgent({ id: 'a1', cwd: process.cwd(), config: { resumeThreadId: 'saved' } });
+  agent.proc = { write: () => {} };
+  await assert.rejects(agent.request('initialize', {}, 5), /initialize timed out/);
+  assert.equal(agent.waiting.size, 0);
+  const methods = [];
+  agent.request = async (method) => {
+    methods.push(method);
+    if (method === 'thread/resume') throw Error('transport timeout');
+    return {};
+  };
+  await assert.rejects(agent.handshake(), /transport timeout/);
+  assert.ok(!methods.includes('thread/start'));
+  assert.equal(agent.config.resumeThreadId, 'saved');
+});
 
 test('read-only approvals require literal arguments and keep session grants in Bridge', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'bridge-approval-test-'));

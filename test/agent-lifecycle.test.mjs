@@ -31,6 +31,8 @@ test('startup waits for the model handshake and a busy agent can receive work un
       false,
     );
     assert.equal(statusOf(agent).availability, 'startup_failed');
+    agent.emitEvent('models');
+    assert.equal(statusOf(agent).availability, 'ready');
   } finally {
     clearTimeout(timer);
   }

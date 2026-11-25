@@ -5,7 +5,22 @@ import path from 'node:path';
 import type { GitSnapshot } from '../core/types.ts';
 import { globMatch } from '../core/roles.ts';
 
-const sensitiveNames = ['.env', '.env.*', '*.pem', '*.key', 'id_rsa*', '*.p12', 'credentials*.json'];
+const sensitiveNames = [
+  '.env',
+  '.env.*',
+  '*.pem',
+  '*.key',
+  'id_rsa*',
+  'id_ed25519*',
+  'id_ecdsa*',
+  'id_dsa*',
+  '.npmrc',
+  '.netrc',
+  '.pypirc',
+  '*.pfx',
+  '*.p12',
+  'credentials*.json',
+];
 
 function git(cwd: string, args: string[]): string | null {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 5000, maxBuffer: 8 * 1024 * 1024 });

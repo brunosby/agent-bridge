@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process';
+import { lstat } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -13,10 +15,8 @@ import path from 'node:path';
  */
 export const DEFAULT_DESTRUCTIVE_PATTERNS = [
   // Git history and uncommitted work
-  '\\bgit\\b.*\\bpush\\b.*(--force|\\s-f\\b|--mirror|--delete|\\s:)',
   '\\bgit\\b.*\\breset\\b.*--hard',
   '\\bgit\\b.*\\bclean\\b.*-[a-z]*f',
-  '\\bgit\\b.*\\bcheckout\\b.*\\s--\\s',
   '\\bgit\\b.*\\brestore\\b',
   '\\bgit\\b.*\\bbranch\\b.*\\s-D\\b',
   '\\bgit\\b.*\\bstash\\b.*\\b(drop|clear)\\b',
@@ -59,8 +59,16 @@ export const DEFAULT_DELETION_PATTERNS = [
   '\\b(rmSync|rmdirSync|unlinkSync|shutil\\.rmtree|os\\.remove)\\b',
 ];
 
+// These external operations always require an explicit decision on approval requests.
+const externalAction = [
+  /\bgh(?:\.exe)?\s+(?:pr|issue|release|repo|workflow|run|secret|variable|label|gist)\s+(?:create|merge|edit|delete|close|reopen|upload|fork|enable|disable|run|rerun|cancel|set|comment|review|ready)\b/i,
+  /\bgh(?:\.exe)?\s+api\b[^;&|\n]*(?:graphql|--(?:method|field|raw-field|input)\b|-[XFf]\s*\S)/i,
+  /\b(?:curl(?:\.exe)?|wget(?:\.exe)?)\b[^;&|\n]*(?:\s-(?:[dFT]|X\s*(?:POST|PUT|PATCH|DELETE))|--(?:data|form|upload-file|post-data|post-file|request)(?:[-=\s]|$))/i,
+  /\b(?:Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b[^;|\n]*\s-(?:Body|InFile|Form|Method\s+['"]?(?:Post|Put|Patch|Delete))\b/i,
+];
+
 const RECURSIVE = [
-  '\\brm\\s+(-[a-z]*r|--recursive)',
+  '\\brm\\s+(?:-[a-z]+\\s+)*(-[a-z]*r|--recursive)',
   '\\b(rmdir|rd|del|erase)\\b[^&|;]*\\s/s\\b',
   '\\b(Remove-Item|ri)\\b[^&|;]*-Recurse',
   '\\bfind\\b.*\\s-delete\\b',
@@ -72,6 +80,99 @@ const RECURSIVE = [
 const CHANGES_DIR = /(^|[\s;&|(])(cd|pushd|chdir|Set-Location|sl)\s/i;
 // Shell wrapper used by Codex on Windows: "...\powershell.exe" -Command "<real command>"
 const WRAPPER = /^\s*"?[^"\s]*?(powershell|pwsh|cmd|bash|sh)(\.exe)?"?\s+(-NoProfile\s+)?(-Command|-c|\/c|\/d\s+\/s\s+\/c)\s+/i;
+
+// Keep quoted arguments together so a commit message or a branch called "push" is data.
+async function gitAction(text: string, cwd: string): Promise<string | null> {
+  if (!/git/i.test(text)) return null;
+  const wrapped = WRAPPER.test(text);
+  let body = wrapped ? text.replace(WRAPPER, '') : text;
+  if (wrapped && /^(['"])[\s\S]*\1$/.test(body)) body = body.slice(1, -1);
+  const segments: string[][] = [[]];
+  for (const [token] of body.matchAll(/(?:'[^']*'|"[^"]*"|[^\s'";&|()])+|[;&|()\n]/g)) {
+    if (/^[;&|()\n]$/.test(token)) {
+      segments.push([]);
+      continue;
+    }
+    segments.at(-1)!.push(token.replace(/'([^']*)'|"([^"]*)"/g, (_m, s, d) => s ?? d));
+  }
+  let directory = cwd;
+  for (const words of segments) {
+    if (/^(?:cd|chdir|set-location)$/i.test(words[0] || '') && words.length === 2) {
+      directory = path.resolve(directory, toNativePath(words[1]));
+      continue;
+    }
+    const shell = words[0]
+      ?.split(/[/\\]/)
+      .at(-1)
+      ?.replace(/\.exe$/i, '');
+    if (shell && /^(?:powershell|pwsh|cmd|bash|sh)$/i.test(shell)) {
+      const commandIndex = words.findIndex((word) => /^(?:-command|-[a-z]*c|\/c)$/i.test(word));
+      if (commandIndex > 0) {
+        const nested = await gitAction(words.slice(commandIndex + 1).join(' '), directory);
+        if (nested) return nested;
+        continue;
+      }
+    }
+    const index = words.findIndex((w) => /(?:^|[/\\])git(?:\.exe)?$/i.test(w));
+    if (index < 0) continue;
+    const prefix = words.slice(0, index).filter((word) => !/^[A-Za-z_]\w*=/.test(word));
+    if (prefix.length && !/^(?:env|sudo|command|exec|time|xargs|then|do|if)$/i.test(path.basename(prefix[0]))) continue;
+    const args = words.slice(index + 1);
+    let base = directory;
+    let customTree = false;
+    while (args[0]?.startsWith('-')) {
+      const flag = args.shift()!;
+      if (/^--(?:work-tree|git-dir)(?:=|$)/.test(flag)) customTree = true;
+      if (flag === '-C') base = path.resolve(base, toNativePath(args.shift() || '.'));
+      else if (flag.startsWith('-C')) base = path.resolve(base, toNativePath(flag.slice(2)));
+      else if (['-c', '--git-dir', '--work-tree', '--namespace', '--config-env'].includes(flag)) args.shift();
+    }
+    const command = args.shift();
+    if (command === 'push')
+      return args.some((a) => a.startsWith('--force') || /^-[a-z]*f/.test(a) || a.startsWith('+')) ? 'destructive push' : 'external action';
+    if (command === 'switch' && discardsWorkingChanges(args)) return 'switch may replace working files';
+    if (command !== 'checkout') continue;
+    const risk = await checkoutRisk(args, base, customTree);
+    if (risk) return risk;
+  }
+  return null;
+}
+
+function discardsWorkingChanges(args: string[]): boolean {
+  return args.some((arg) => arg === '--force' || arg === '--discard-changes' || /^-[a-zA-Z]*f/.test(arg));
+}
+
+async function checkoutRisk(args: string[], base: string, customTree: boolean): Promise<string | null> {
+  const risk = 'checkout may replace working files';
+  if (discardsWorkingChanges(args) || args.some((a) => a === '--' || a === '-B' || a.startsWith('--pathspec-from-file'))) return risk;
+  const refs = args.filter((a) => !a.startsWith('-'));
+  if (refs.some((a) => /^(?::|\.{1,2}(?:[/\\]|$)|[/\\]|[a-z]:)|[*?[\]$]/i.test(a))) return risk;
+  if (!refs.length || args.includes('-b') || args.includes('--orphan')) return null;
+  if (refs.length > 1 || customTree) return risk;
+  const name = refs[0];
+  const probe = (args: string[]) =>
+    new Promise<number | string>((resolve) => {
+      execFile(
+        'git',
+        ['--no-optional-locks', '-c', 'core.fsmonitor=false', ...args],
+        { cwd: base, windowsHide: true, timeout: 1500 },
+        (error) => resolve(error ? (error.code ?? 'unknown') : 0),
+      );
+    });
+  // A local branch takes precedence over a path with the same name.
+  if ((await probe(['show-ref', '--verify', '--quiet', 'refs/heads/' + name])) === 0) return null;
+  // A tracked file is still a pathspec after its local copy has been deleted.
+  if (
+    await lstat(path.resolve(base, name)).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => error.code !== 'ENOENT',
+    )
+  )
+    return risk;
+  const tracked = await probe(['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', name]);
+  if (tracked !== 1) return risk;
+  return null;
+}
 
 export interface MatchInput {
   command?: string;
@@ -87,7 +188,7 @@ export function buildMatcher({
   workDir: string;
   destructive?: string[];
   deletion?: string[];
-}): (input: MatchInput) => string | null {
+}): (input: MatchInput) => Promise<string | null> {
   const destructiveRx = destructive.map((p) => new RegExp(p, 'i'));
   const deletionRx = deletion.map((p) => new RegExp(p, 'i'));
   const root = normalize(workDir);
@@ -98,7 +199,7 @@ export function buildMatcher({
   };
 
   /** Returns a short reason when the action must be approved by the user, otherwise null. */
-  return function classify({ command, cwd, deletePaths }: MatchInput): string | null {
+  return async function classify({ command, cwd, deletePaths }: MatchInput): Promise<string | null> {
     const base = cwd || workDir;
     for (const p of deletePaths || []) {
       if (!inside(p, base)) return `deletes ${p}, outside the project folder`;
@@ -106,6 +207,9 @@ export function buildMatcher({
     const text = String(command || '').replace(WRAPPER, '');
     const d = destructiveRx.find((r) => r.test(text));
     if (d) return `destructive action (matches ${d.source})`;
+    const gitRisk = await gitAction(String(command || ''), base);
+    if (gitRisk) return gitRisk;
+    if (externalAction.some((rule) => rule.test(text))) return 'external action';
 
     const del = deletionRx.map((r) => r.exec(text)).find(Boolean);
     if (!del) return null;

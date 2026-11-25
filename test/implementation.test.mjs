@@ -24,7 +24,22 @@ test('recipient rule respects priority, team order and orchestration fallback', 
 });
 
 test('review exclusions cover defaults, nested paths, Windows separators and local patterns', () => {
-  const names = ['.env', '.ENV.Staging', 'nested/root.pem', 'nested\\root.key', 'ssh/id_rsa.old', 'a.p12', 'credentials-work.JSON'];
+  const names = [
+    '.env',
+    '.ENV.Staging',
+    'nested/root.pem',
+    'nested\\root.key',
+    'ssh/id_rsa.old',
+    'a.p12',
+    'credentials-work.JSON',
+    'ssh/id_ed25519.pub',
+    'id_ecdsa.bak',
+    'id_dsa',
+    '.npmrc',
+    'nested/.netrc',
+    '.pypirc',
+    'cert.PFX',
+  ];
   for (const name of names) assert.equal(isReviewExcluded(name), true, name);
   assert.equal(isReviewExcluded('vendor/private.settings', ['vendor/*.settings']), true);
   assert.equal(isReviewExcluded('public/a.js', ['vendor/*.settings']), false);

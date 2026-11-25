@@ -44,7 +44,7 @@ Roles live in `roles/`, one JSON file each; copy one to create a new role.
 
 - The page listens on `127.0.0.1` only and requires a token created at start.
 - Agent Bridge never handles credentials: you sign in through each provider's CLI.
-- Read-only roles are enforced by each provider, not just requested.
+- Codex uses its read-only sandbox for read-only roles. For Claude and OpenCode, shell requests for these roles skip bypass and require approval unless Bridge recognizes a safe read or an existing session grant. External actions detected in approval requests always require confirmation.
 
 ## Development
 

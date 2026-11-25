@@ -26,6 +26,8 @@ test('MCP serves only the authorized, filtered file patch in the active review',
   git('add', '-A');
   writeFileSync(path.join(dir, 'safe.txt'), 'safe marker\n' + 'x'.repeat(500) + '\n');
   writeFileSync(path.join(dir, 'new file.txt'), 'untracked marker\n');
+  const secrets = ['id_ed25519', 'id_ecdsa.old', 'id_dsa', '.npmrc', '.netrc', '.pypirc', 'cert.pfx'];
+  for (const file of secrets) writeFileSync(path.join(dir, file), 'SYNTHETIC_SECRET');
   const owner = { agents: { reviewer: {}, other: {} } };
   const server = createServer((req, res) =>
     serveReviewMcp(
@@ -56,6 +58,7 @@ test('MCP serves only the authorized, filtered file patch in the active review',
     assert.equal(listing.result.tools[0].name, 'bridge_diff');
     await send(other.token, 'tools/list');
     const changes = await reviewChanges(dir, []);
+    assert.doesNotMatch(changes.patch, /SYNTHETIC_SECRET/);
     const files = changes.files.flatMap((file) => file.names);
     assert.deepEqual(files.sort(), ['new file.txt', 'safe.txt']);
     const oldId = openReview(owner, 'reviewer', dir, files, changes.omittedPaths, 200);
@@ -68,6 +71,7 @@ test('MCP serves only the authorized, filtered file patch in the active review',
     assert.match(await patch('safe.txt', oldId), /Review closed/);
     assert.match(await patch('safe.txt', active, other.token), /Review closed/);
     assert.match(await patch('.env'), /Omitted/);
+    for (const secret of secrets) assert.match(await patch(secret), /Omitted/);
     assert.match(await patch('renamed.txt'), /Omitted/);
     assert.match(await patch('outside.txt'), /outside the review list/);
     const visible = await patch('safe.txt');
@@ -75,7 +79,7 @@ test('MCP serves only the authorized, filtered file patch in the active review',
     assert.match(visible, /Truncated: 200 of /);
     assert.doesNotMatch(visible, /SYNTHETIC_SECRET/);
     assert.match(await patch('new file.txt'), /untracked marker/);
-    for (let call = 0; call < 15; call++) assert.match(await patch('outside.txt'), /outside the review list/);
+    for (let call = 0; call < 15 - secrets.length; call++) assert.match(await patch('outside.txt'), /outside the review list/);
     assert.match(await patch('safe.txt'), /quota reached/);
     revokeReviewClient(owner, 'reviewer');
     assert.equal(await patch('safe.txt'), 403);

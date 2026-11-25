@@ -19,6 +19,11 @@ function approveCurrentShell(agent: Agent, requestId: string, guardedText?: stri
   return guardedText ? Boolean(agent.approveShellCommand?.(requestId, guardedText)) : agent.respondApproval(requestId, 'accept');
 }
 
+export function mayBypassApproval(event: AgentEvent, readOnly: boolean, blocked: boolean): boolean {
+  const commandProvided = event.commandProvided === true || Boolean(event.shellCommand?.text?.trim());
+  return !blocked && (!event.commandApproval || (!readOnly && commandProvided));
+}
+
 export function processShellApproval(owner: Conversation, agent: Agent, event: AgentEvent, blocked: boolean): string | undefined {
   if (!event.commandApproval) return;
   const session = approvals(owner);

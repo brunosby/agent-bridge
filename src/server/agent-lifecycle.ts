@@ -4,6 +4,7 @@ import type { RuntimeStatus } from '../providers/accounts.ts';
 
 const startups = new WeakMap<Agent, { state: StartupState; reason: string | null }>();
 
+const abandonStartup = new WeakMap<Agent, () => void>();
 const operations = new WeakSet<Agent>();
 
 export function agentOperationPending(agent: Agent): boolean {
@@ -35,6 +36,7 @@ export function statusOf(agent: Agent | undefined, account?: RuntimeStatus | nul
 }
 
 export function startAndWait(agent: Agent, launch: () => unknown, changed: () => void, timeout = 30000): Promise<boolean> {
+  abandonStartup.get(agent)?.();
   const startup = { state: 'starting' as StartupState, reason: null as string | null };
   startups.set(agent, startup);
   changed();
@@ -44,6 +46,7 @@ export function startAndWait(agent: Agent, launch: () => unknown, changed: () =>
     function finish(reason: string | null) {
       clearTimeout(timer);
       agent.off('event', onEvent);
+      abandonStartup.delete(agent);
       if (startups.get(agent) !== startup) return resolve(false);
       startup.state = reason ? 'failed' : 'ready';
       startup.reason = reason;
@@ -57,20 +60,30 @@ export function startAndWait(agent: Agent, launch: () => unknown, changed: () =>
         if (launched && agent.available) finish(null);
       }
     }
-    const timer = setTimeout(() => finish('No model list arrived before the startup deadline.'), timeout);
+    const timer = setTimeout(() => {
+      startup.state = 'failed';
+      startup.reason = 'No model list arrived before the startup deadline.';
+      changed();
+      resolve(false);
+    }, timeout);
+    abandonStartup.set(agent, () => {
+      clearTimeout(timer);
+      agent.off('event', onEvent);
+      resolve(false);
+    });
     timer.unref();
     agent.on('event', onEvent);
     Promise.resolve()
       .then(launch)
       .then(
         () => {
-          if (startup.state !== 'starting') return;
+          if (startups.get(agent) !== startup || !abandonStartup.has(agent)) return;
           launched = true;
           if (!agent.available) finish(agent.unavailableReason || 'Provider startup failed.');
           else if (models) finish(null);
         },
         (error: unknown) => {
-          if (startup.state === 'starting') finish(error instanceof Error ? error.message : String(error));
+          if (startups.get(agent) === startup && abandonStartup.has(agent)) finish(error instanceof Error ? error.message : String(error));
         },
       );
   });

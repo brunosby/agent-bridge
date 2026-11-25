@@ -92,7 +92,7 @@ export class CodexAgent extends EventEmitter implements Agent {
     this.emit('event', { agent: this.id, kind, ...data });
   }
 
-  request(method: string, params: unknown, timeoutMs?: number): Promise<any> {
+  request(method: string, params: unknown, timeoutMs = method === 'turn/start' ? 0 : 30000): Promise<any> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       if (!this.proc) return reject(new Error('Codex transport unavailable'));
@@ -186,6 +186,11 @@ export class CodexAgent extends EventEmitter implements Agent {
       try {
         res = await this.request('thread/resume', { threadId: this.threadId || c.resumeThreadId, config: reviewConfig });
       } catch (err) {
+        if (
+          !(err instanceof CodexResponseError) ||
+          !/(?:thread|rollout)[^\n]*(?:not found|does not exist)|no rollout found/i.test(err.message)
+        )
+          throw err;
         this.emitEvent('info', { text: `Could not resume the earlier Codex thread (${errorText(err)}); starting a new one.` });
         this.threadId = null;
         c.resumeThreadId = null;
@@ -474,6 +479,7 @@ export class CodexAgent extends EventEmitter implements Agent {
         title: isCommand ? 'Codex wants to run a command' : 'Codex wants to change files',
         matchText: isCommand ? String(p.command || '') : '',
         commandApproval: isCommand,
+        commandProvided: isCommand && typeof p.command === 'string' && Boolean(p.command.trim()),
         shellCommand: isCommand ? wrappedShellCommand(p.command) : null,
         cwd: p.cwd || undefined,
         // Files this patch deletes (fileChange items are announced before their approval request).

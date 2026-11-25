@@ -21,6 +21,14 @@ import { clip } from './claude.ts';
  *
  * Any failure of this contract (server not starting, unknown endpoints) marks the agent unavailable.
  */
+class SessionHttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 export class OpenCodeAgent extends EventEmitter implements Agent {
   static _probe: { at: number; result: { available: boolean; version?: string; reason?: string } } | null = null;
   id: string;
@@ -162,6 +170,8 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     const rules: { permission: string; pattern: string; action: 'ask' | 'deny' | 'allow' }[] = (
       this.config.askFor || ['bash', 'edit', 'webfetch']
     ).map((permission: string) => ({ permission, pattern: '*', action: 'ask' as const }));
+    if (this.readOnly)
+      rules.push({ permission: 'bash', pattern: '*', action: 'ask' }, { permission: 'edit', pattern: '*', action: 'deny' });
     const spellings = (names: string[]): string[] =>
       [...new Set(names.flatMap((n) => [n, n.includes(':') ? n.slice(n.lastIndexOf(':') + 1) : n]))].filter((n) => n && n !== '*');
     if (this.skillsOnly) {
@@ -178,6 +188,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     try {
       await this.http('PATCH', `/session/${encodeURIComponent(this.sessionId || '')}`, { permission: this.permissionRules() });
     } catch (err) {
+      if (this.readOnly && this.available) throw new Error(`Could not apply read-only OpenCode permissions: ${errorText(err)}`);
       this.emitEvent('info', { text: `Could not update the OpenCode session permissions: ${errorText(err)}` });
     }
   }
@@ -264,14 +275,22 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
 
     if (review) await this.http('GET', '/mcp').catch(() => {});
     await this.loadModels();
+    await this.restoreOrCreateSession();
+    this.emitEvent('session', { sessionId: this.sessionId });
+    this.listen();
+    this.emitEvent('status', { busy: this.busy });
+  }
+
+  async restoreOrCreateSession() {
     if (this.sessionId) {
       try {
         await this.http('GET', `/session/${encodeURIComponent(this.sessionId || '')}`);
-        await this.applyPermissions();
-      } catch {
+      } catch (error) {
+        if (!(error instanceof SessionHttpError && error.status === 404)) throw error;
         this.emitEvent('info', { text: 'Could not find the earlier OpenCode session; starting a new one.' });
         this.sessionId = null;
       }
+      if (this.sessionId) await this.applyPermissions();
     }
     if (!this.sessionId) {
       // Ask before shell commands, edits and web fetches so requests reach the approval panel (and bypass
@@ -280,23 +299,28 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
       if (!s?.id) throw new Error('POST /session returned no id (API changed?)');
       this.sessionId = s.id;
     }
-    this.emitEvent('session', { sessionId: this.sessionId });
-    this.listen();
-    this.emitEvent('status', { busy: this.busy });
   }
 
   async http(method: string, path: string, body?: unknown): Promise<any> {
-    const res = await fetch(this.base + path, {
-      method,
-      headers: {
-        Authorization: `Basic ${Buffer.from(`opencode:${this.password}`).toString('base64')}`,
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!res.ok) throw new Error(`${method} ${path} -> HTTP ${res.status} ${clip(await res.text().catch(() => ''), 200)}`);
-    const text = await res.text();
-    return text ? JSON.parse(text) : true;
+    const turn = method === 'POST' && path.endsWith('/message');
+    try {
+      const res = await fetch(this.base + path, {
+        signal: turn ? undefined : AbortSignal.timeout(30000),
+        method,
+        headers: {
+          Authorization: `Basic ${Buffer.from(`opencode:${this.password}`).toString('base64')}`,
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (!res.ok)
+        throw new SessionHttpError(res.status, `${method} ${path} -> HTTP ${res.status} ${clip(await res.text().catch(() => ''), 200)}`);
+      const text = await res.text();
+      return text ? JSON.parse(text) : true;
+    } catch (error) {
+      if (error instanceof SessionHttpError) throw error;
+      throw new Error(`${method} ${path}: ${errorText(error)}`, { cause: error });
+    }
   }
 
   async loadModels() {
@@ -443,6 +467,8 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
         requestId: key,
         title: `OpenCode wants to use ${what}`,
         commandApproval: what === 'bash',
+        shellCommand: what === 'bash' && typeof command === 'string' ? { shell: 'bash', text: command } : null,
+        cwd: this.cwd,
         matchText: what === 'bash' ? command || patterns : `${what} ${file || patterns}`,
         detail: [
           command && `$ ${command}`,
