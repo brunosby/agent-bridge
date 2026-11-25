@@ -42,8 +42,12 @@ Roles live in `roles/`, one JSON file each; copy one to create a new role.
 
 ## Security
 
-- The page listens on `127.0.0.1` only and requires a token created at start.
-- Agent Bridge never handles credentials: you sign in through each provider's CLI.
+- Open the page from the launcher. A single-use link authenticates that browser tab for the session. The link expires after 60 seconds. Restart preserves access in the same tab. Reopening the launcher rotates the session token and disconnects previously authenticated tabs. The conversation records tab openings, successful code exchanges and reuse alerts with timestamps. For five minutes after a link is used, a second attempt triggers a reuse alert. After that, the link is still rejected as invalid.
+- The approval check recognizes literal Bridge ports with `localhost`, `127.0.0.1` or `[::1]`. Other host spellings and computed ports may escape that check. The conversation API and event stream still require the current token.
+- Before approving a `git push` or `gh pr create` requested through Bridge, review the local secret scan. The card identifies the commit, file, line and rule. Resolve each finding or confirm a scoped exception. The card lists each applied exception with its reason. When checking a private destination, Bridge uses system and user Git settings in a directory outside the repository. If authentication fails, it scans the full reachable history. Use **Settings > General** to enable the optional pre-push hook for terminal pushes.
+- Provider permissions determine which commands reach the approval card. A Codex sandbox with network access can push directly. The optional hook checks terminal and provider pushes in that repository unless Git skips hooks with `--no-verify`.
+- The scanner checks known credential formats and sensitive filenames. Text files are scanned even when they have image extensions. Binary files and LFS objects are listed separately. To add project-specific token prefixes, create `.agent-bridge/secret-patterns.json` with a `prefixes` array, for example `{"prefixes":["internal_key_"]}`. Use `rules` for path-specific prefixes, such as `{"rules":[{"prefix":"internal_key_","pathSuffix":".ini"}]}`. Set `genericAssignments` to `true` to also check high-entropy password, secret and token assignments. These settings add checks. Exceptions require confirmation in the approval card.
+- Sign in through each provider’s CLI.
 - Codex uses its read-only sandbox for read-only roles. For Claude and OpenCode, shell requests for these roles skip bypass and require approval unless Bridge recognizes a safe read or an existing session grant. External actions detected in approval requests always require confirmation.
 
 ## Development

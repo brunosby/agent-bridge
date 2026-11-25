@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Added
 
+- Single-use links authenticate the browser tab. Restarting preserves access in that tab. Reopening from the launcher revokes previous access. The conversation records tab openings, code use and reuse alerts.
+- Push and PR approval cards identify known secrets in outgoing commits and PR text, including text files with image extensions. Cards show each applied exception and its reason. Projects can add detection rules and enable a pre-push hook in Settings.
+- Publication checks use the destination refs and the remote default branch to identify outgoing commits. Private remotes can use system and user Git credentials. The pre-push hook also checks the default branch when publishing a new ref.
+- For a tag push, Bridge compares up to 4,096 remote refs and scans the outgoing commits. A remote with 300 tags remains within that limit. At 4,097 refs, Bridge scans the full outgoing history and reports this on the approval card.
+
 - Tasks in orchestrator mode show an editable size estimate. Large tasks require an approved specification before coding. Coordinators can collect decisions in a question card, and the user can select a successor when a coordinator leaves or becomes unavailable.
 - Manual pauses retain incoming replies. Stopping all agents discards cancelled work. Provider control requests report timeouts, and a quiet turn remains open for the user to inspect.
 - Read-only roles now route shell requests through the approval policy even in bypass mode. External writes require approval, and the Reviewer excludes additional credential filenames.
