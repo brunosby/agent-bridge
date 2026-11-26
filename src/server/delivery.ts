@@ -11,7 +11,14 @@ import { statusFor } from './team.ts';
 import { orchestratorId, S } from './state.ts';
 
 /** Send a message to one agent, adding the team roster or a role note when they changed. */
-type Delivery = { specAttempt?: SpecAttempt; from: string; sourceSeq?: number; taskId?: string; discarded?: (reason: string) => void };
+type Delivery = {
+  originalRequest?: string;
+  specAttempt?: SpecAttempt;
+  from: string;
+  sourceSeq?: number;
+  taskId?: string;
+  discarded?: (reason: string) => void;
+};
 const reviewerQueues = new WeakMap<Conversation, Map<string, Promise<void>>>();
 const providerQueues = new WeakMap<Conversation, Map<string, { text: string; delivery: Delivery }[]>>();
 
@@ -39,7 +46,7 @@ export function deliver(toId: string, text: string, delivery: Delivery): void {
     if (!queues) providerQueues.set(owner, (queues = new Map()));
     let queued = queues.get(toId);
     if (!queued) queues.set(toId, (queued = []));
-    queued.push({ text, delivery });
+    queued.push({ text, delivery: { ...delivery, originalRequest: delivery.originalRequest ?? owner.lastUserText ?? '' } });
     return;
   }
   const agent = owner.agents[toId];
@@ -51,7 +58,9 @@ export function deliver(toId: string, text: string, delivery: Delivery): void {
   const previous = queue?.get(toId);
   if (!needsDiff && !previous) return sendDelivery(toId, text, delivery);
   if (!queue) reviewerQueues.set(owner, (queue = new Map()));
-  const original = needsDiff ? '[Original request from ' + setting('userName') + ']\n' + (owner.lastUserText || '(not available)') : '';
+  const original = needsDiff
+    ? '[Original request from ' + setting('userName') + ']\n' + ((delivery.originalRequest ?? owner.lastUserText) || '(not available)')
+    : '';
   const valid = () =>
     S.conv === owner &&
     owner.agents[toId] === agent &&

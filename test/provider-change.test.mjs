@@ -110,6 +110,40 @@ test('a failed first delivery preserves the handoff and session usage across res
   }
 });
 
+test('a queued review uses the request that preceded the provider switch', async () => {
+  const rules = [
+    { agent: 'Lead', match: 'first request', reply: '@Rev review the change' },
+    { agent: 'Lead', match: 'second request', reply: 'ack' },
+  ];
+  const b = await startBridge({
+    team: [team[0], { name: 'Rev', driver: 'fake', role: 'reviewer' }],
+    rules,
+    settings: {
+      routingMode: 'mentions',
+      'fake-alternate': {
+        startWhenFile: 'release-start',
+        rules: [{ match: '\\[Original request from [^\\]]+\\]\\nfirst request', reply: 'correct original' }],
+      },
+    },
+  });
+  try {
+    await idle(b, 'a2');
+    const changing = b.api('changeProvider', { agent: 'a2', driver: newDriver });
+    try {
+      await b.waitFor((e) => e.kind === 'state' && member(e, 'a2')?.status.availability === 'switching_provider');
+      await b.api('send', { target: 'a1', text: 'first request' });
+      await b.waitFor((e) => e.kind === 'turnEnd' && e.agent === 'a1');
+      await b.api('send', { target: 'a1', text: 'second request' });
+    } finally {
+      writeFileSync(path.join(b.work, 'release-start'), '');
+      await changing;
+    }
+    await b.waitFor((e) => e.kind === 'turnEnd' && e.text === 'correct original');
+  } finally {
+    await b.stop();
+  }
+});
+
 test('a batch finishing during an orchestrator provider change reaches the new session', async () => {
   const rules = [
     { agent: 'Lead', match: 'start', reply: '@a2 build' },

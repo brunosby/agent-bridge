@@ -52,6 +52,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
+- Reviewer deliveries queued during a provider switch keep the original user request.
+
 - Claude Code starts from its npm launcher on Windows. Startup failures now show the underlying error and point to `claude.command` immediately.
 
 - Overlapping specifications and questions open in order. If the Architect returns a missing or invalid specification, the Bridge asks for one correction. If the correction also fails, **Retry specification** reopens the same task, including after restoring the conversation.
