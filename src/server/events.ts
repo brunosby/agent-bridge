@@ -1,3 +1,4 @@
+import { activityPublisher } from './task-activity.ts';
 import { signInState } from './login-watch.ts';
 import { requestContext, register, observeProgress, pendingWork, progressView } from './request-progress.ts';
 import { loggingPrefixes } from '../workspace/secret-patterns.ts';
@@ -18,7 +19,63 @@ import { isRecommended } from '../core/roles.ts';
 import { projectLabel } from './project.ts';
 import { DRIVERS } from '../providers/registry.ts';
 
-export function publish(ev: BridgeEvent): BridgeEvent {
+const notifyActivity = activityPublisher((owner, event) => {
+  if (S.conv === owner) publish(event, { transient: true });
+});
+const savedTeams = new WeakMap<Conversation, string>();
+
+function stateCheckpoint(owner: Conversation, state: BridgeEvent, final = false) {
+  const { lastAgentId, workDir, routingMode, knownAgents } = state;
+  const team = state.team.map(
+    ({
+      id,
+      name,
+      driver,
+      role,
+      model,
+      effort,
+      bypass,
+      sessionId,
+      cwd,
+      worktree,
+      providerChangeId,
+      baseTokens,
+      baseCachedTokens,
+    }: AgentSpec) => ({
+      id,
+      name,
+      driver,
+      role,
+      model,
+      effort,
+      bypass,
+      sessionId,
+      cwd,
+      worktree,
+      providerChangeId,
+      baseTokens,
+      baseCachedTokens,
+    }),
+  );
+  const restore = { lastAgentId, workDir, routingMode, knownAgents, team };
+  // Usage totals are captured at the next checkpoint and on graceful close.
+  const key = JSON.stringify(restore);
+  if (!final && savedTeams.get(owner) === key) return null;
+  savedTeams.set(owner, key);
+  return {
+    kind: 'state',
+    seq: state.seq,
+    at: state.at,
+    ...restore,
+    team: team.map((member: AgentSpec, i: number) => ({
+      ...member,
+      tokens: state.team[i].tokens,
+      cachedTokens: state.team[i].cachedTokens,
+    })),
+  };
+}
+
+export function publish(ev: BridgeEvent, options: { finalState?: boolean; transient?: boolean } = {}): BridgeEvent {
   const seq = S.conv && requestContext(S.conv);
   const full: BridgeEvent = {
     seq: ++S.seq,
@@ -26,12 +83,20 @@ export function publish(ev: BridgeEvent): BridgeEvent {
     ...(seq && ev.kind !== 'state' && { requestSeq: seq }),
     ...redactRecord(ev, loggingPrefixes()),
   };
-  if (S.conv && !['delta', 'text', 'tool', 'state', 'stderr'].includes(full.kind)) observeProgress(S.conv, full);
+  const activityAgent =
+    !options.transient && S.conv && !['text', 'state', 'stderr'].includes(full.kind) ? observeProgress(S.conv, full) : undefined;
   // State is delivered as a fresh snapshot on reconnect, never replayed.
-  if (full.kind !== 'state') S.history.push(full);
+  if (!options.transient && full.kind !== 'state') S.history.push(full);
   if (S.history.length > 20000) S.history.splice(0, S.history.length - 20000);
-  const saved = full.kind === 'milestonePlanProposed' ? { ...full, command: '', commandSaved: false } : full;
-  if (S.conv && !S.conv.transcript.destroyed) S.conv.transcript.write(JSON.stringify(saved) + '\n');
+  if (!options.transient && S.conv && !S.conv.transcript.destroyed) {
+    const saved =
+      full.kind === 'state'
+        ? stateCheckpoint(S.conv, full, options.finalState)
+        : full.kind === 'milestonePlanProposed'
+          ? { ...full, command: '', commandSaved: false }
+          : full;
+    if (saved) S.conv.transcript.write(JSON.stringify(saved) + '\n');
+  }
   if (full.kind === 'error')
     logError(
       full.agent ? agentName(full.agent) : 'bridge',
@@ -42,6 +107,7 @@ export function publish(ev: BridgeEvent): BridgeEvent {
     );
   const line = `data: ${JSON.stringify(full)}\n\n`;
   if (!isPrivateEvent(full)) for (const res of clients) res.write(line);
+  if (activityAgent) notifyActivity(S.conv, activityAgent);
   return full;
 }
 

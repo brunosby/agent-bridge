@@ -1,9 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { startActivity, endActivity, recordActivity, type TaskActivity } from './task-activity.ts';
 import { milestonePending } from './milestones.ts';
 import type { BridgeEvent, Conversation, MilestoneView, TaskPlan } from '../core/types.ts';
 
 type TaskStatus = 'queued' | 'working' | 'completed' | 'cancelled' | 'failed' | 'interrupted';
-type Delegation = {
+type Delegation = TaskActivity & {
   id: string;
   agent: string;
   name: string;
@@ -74,6 +75,8 @@ export function originPlan(owner: Conversation, seq?: number) {
   return seq && owner.plan?.seq !== seq ? register(owner).get(seq)?.plan : owner.plan;
 }
 export function observeProgress(owner: Conversation, event: BridgeEvent) {
+  const changedAgent = recordActivity(owner, event);
+  if (['tool', 'toolResult', 'delta', 'info'].includes(event.kind)) return changedAgent;
   const rows = register(owner);
   const now = event.at ?? Date.now();
   if (event.kind === 'workflowChanged') {
@@ -178,7 +181,11 @@ export function observeProgress(owner: Conversation, event: BridgeEvent) {
               : event.ok === false
                 ? 'failed'
                 : 'completed';
-        if (!active(task)) task.end = now;
+        if (task.state === 'working') startActivity(owner, task, now);
+        if (!active(task)) {
+          task.end = now;
+          endActivity(owner, task);
+        }
       }
       if (!row.tasks.some(active)) row.end = now;
     }
@@ -206,6 +213,7 @@ export function observeProgress(owner: Conversation, event: BridgeEvent) {
     const row = rows.get(event.requestSeq);
     if (row) row.blocked = [...new Set([...row.blocked, ...(event.agents as string[])])];
   }
+  return changedAgent;
 }
 export function restoreProgress(owner: Conversation, events: BridgeEvent[]) {
   for (const event of events) observeProgress(owner, event);
@@ -213,7 +221,11 @@ export function restoreProgress(owner: Conversation, events: BridgeEvent[]) {
     row.approvals = {};
     row.blocked = [];
     if (row.plan?.specRequestedFrom && !row.plan.finished && !row.plan.approved && !row.plan.pending) row.plan.specNeedsRetry = true;
-    for (const task of row.tasks) if (active(task)) task.state = 'interrupted';
+    for (const task of row.tasks)
+      if (active(task)) {
+        task.state = 'interrupted';
+        endActivity(owner, task);
+      }
   }
 }
 type Wait = { reason: string; action?: string; card?: string; agent?: string; seq?: number };

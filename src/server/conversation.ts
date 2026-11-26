@@ -26,7 +26,7 @@ import { finished } from 'node:stream/promises';
 import path from 'node:path';
 import { listConversations, loadConversation } from '../core/history.ts';
 import { LOGS_DIR, SETTINGS, safeRegex, saveLocalConfig, setting } from '../config/settings.ts';
-import { agentName, logError, publish, publishState, resetClients } from './events.ts';
+import { agentName, logError, publish, publishState, resetClients, stateEvent } from './events.ts';
 import { ROUTING_MODES } from '../core/prompts.ts';
 import { approvalTimers, cliCache, providerRuntime, relay } from './state.ts';
 import { createAgent, defaultName, defaultTeam, startAgent, uniqueName } from './team.ts';
@@ -158,6 +158,7 @@ async function closeActiveConversation() {
   stopWatching(old);
   flushMentionStreams(old);
   cancelMilestoneDecision(old, 'closed');
+  publish(stateEvent(), { finalState: true });
   S.conv = null as unknown as Conversation;
   for (const t of approvalTimers.values()) clearTimeout(t);
   approvalTimers.clear();
@@ -360,22 +361,6 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       const title = String(ev.title || '');
       if (owner.changeMark && /^(?:edit|multiedit|notebookedit|write|fileChange|patch|apply_patch)$/i.test(title))
         owner.changeMark.editTools.set(toolKey, agent.cwd || owner.workDir);
-      const activity = /^(?:bash|shell|commandExecution)$/i.test(title)
-        ? 'running a command'
-        : /^(?:edit|fileChange|write)$/i.test(title)
-          ? 'editing files'
-          : /^(?:read|readFile)$/i.test(title)
-            ? 'reading files'
-            : '';
-      if (activity) {
-        let changed = false;
-        for (const task of owner.tasks.values()) {
-          if (task.agent !== id || task.state !== 'working' || task.activity === activity) continue;
-          task.activity = activity;
-          changed = true;
-        }
-        if (changed) publishState();
-      }
     }
     if (ev.kind === 'tool' && /^(?:Bash|shell|commandExecution)$/i.test(String(ev.title || '')) && isTestCommand(String(ev.detail || ''))) {
       owner.possibleTests.set(toolKey, agentName(id));
