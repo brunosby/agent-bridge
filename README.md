@@ -8,6 +8,8 @@ For example, you ask for a login screen. The orchestrator asks the Coder to buil
 
 Mixing providers means one model reviews another's work and each role can use the model it does best. Agent Bridge runs the CLIs you already have, so usage counts against your own provider accounts; it needs no account or key of its own.
 
+Use **Teams** beside the roster to save, rename, or apply a team. Templates keep role and model choices. Each new member starts with bypass off.
+
 Use **Settings → General → Progress layout** to follow the latest request beside or above the chat. Expand **Earlier requests** to see outstanding work from previous messages.
 
 ## Quick start

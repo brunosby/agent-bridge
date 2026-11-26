@@ -460,6 +460,11 @@ export async function resolveMilestoneCommit(owner: Conversation, requestId: str
   }
 }
 
+export function discardMilestones(owner: Conversation) {
+  cancelMilestoneDecision(owner, 'stop');
+  flows.delete(owner);
+  archivedViews.delete(owner);
+}
 export function cancelMilestoneDecision(owner: Conversation, action: string) {
   const flow = flows.get(owner);
   if (!flow) return;

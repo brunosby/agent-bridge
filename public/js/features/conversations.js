@@ -1,4 +1,5 @@
 // Conversations dialog: restore, remove or start a conversation.
+import { teamOptions } from './teams.js';
 import { $, closeDialog, h } from '../core/dom.js';
 import { roleOf, store } from '../core/store.js';
 import { api } from '../core/api.js';
@@ -9,7 +10,8 @@ export async function showConversations() {
   $('newWorkDir').value = store.state?.workDir || '';
   $('convDialog').showModal();
   try {
-    const { current, conversations } = await api('conversations');
+    const [{ current, conversations }, teams] = await Promise.all([api('conversations'), api('teams')]);
+    teamOptions(teams, $('newTeam'));
     list.textContent = '';
     if (!conversations.length) list.appendChild(h('div', 'hint', 'No earlier conversations yet.'));
     for (const c of conversations) {
@@ -66,7 +68,7 @@ $('newConversation').onclick = async () => {
   if (store.state && store.state.team.some((a) => a.busy) && !confirm('An agent is still working. Stop it and start a new conversation?'))
     return;
   try {
-    await api('new', { workDir: $('newWorkDir').value.trim() });
+    await api('new', { workDir: $('newWorkDir').value.trim(), teamName: $('newTeam').value });
     closeDialog('convDialog');
   } catch (e) {
     alert(e.message);

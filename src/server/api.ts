@@ -1,3 +1,7 @@
+import { savedTeams, manageTeam, applyTeam } from './saved-teams.ts';
+import { clearRoleDecisions } from './routing.ts';
+import { register } from './request-progress.ts';
+import { discardMilestones } from './milestones.ts';
 import { buildProviderHandoff } from './provider-handoff.ts';
 import { recordWorkflow, closeDecision, offerSuccession, resolveSuccession, resolveTask } from './task-workflow.ts';
 import { hookStatus, setHook } from '../workspace/publication-hook.ts';
@@ -86,6 +90,12 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
     case 'coordinatorDecision':
       await resolveSuccession(S.conv, body);
       return { ok: true };
+    case 'teams':
+      return savedTeams();
+    case 'manageTeam':
+      return manageTeam(body);
+    case 'applyTeam':
+      return applyTeam(body);
     case 'catalog':
       return {
         roles: Object.values(S.roles).map(({ instructions: _instructions, ...r }) => r),
@@ -259,7 +269,25 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       textField(body.agent, 'agent ID', true);
       const owner = S.conv;
       const ids = body.agent ? [agentOf(body.agent).id] : Object.keys(agents);
+      if (body.cancelPending && (body.agent || body.conversationId !== owner.id)) throw new Error('The conversation changed.');
       if (!body.agent) {
+        if (body.cancelPending === true) {
+          for (const row of register(owner).values()) {
+            if (row.plan) {
+              closeDecision(owner, 'stop', false, row.plan);
+              row.plan.finished = true;
+              delete row.plan.specNeedsRetry;
+              delete row.plan.queuedDecisions;
+              recordWorkflow(owner, row.plan);
+            }
+            row.blocked = [];
+          }
+          if (owner.pendingFinal) publish({ kind: 'finalReviewClosed', requestId: owner.pendingFinal, action: 'cancelled' });
+          owner.pendingFinal = null;
+          owner.succession = undefined;
+          clearRoleDecisions(owner, 'stop');
+          discardMilestones(owner);
+        }
         for (const task of owner.tasks.keys()) owner.stoppedTasks.add(task);
         closeDecision(owner, 'stop');
         if (owner.plan) {
@@ -467,7 +495,7 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       return { ok: true };
     case 'new':
       if (body.workDir !== undefined && typeof body.workDir !== 'string') throw new Error('invalid workspace');
-      await newConversation(body.workDir);
+      await newConversation(body.workDir, body.teamName);
       return { ok: true };
     default:
       throw new Error(

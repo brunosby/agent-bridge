@@ -106,7 +106,6 @@ $('saveSettings').onclick = async () => {
     const t = el.dataset.type;
     out[el.dataset.key] = t === 'boolean' ? el.checked : t === 'number' ? Number(el.value) : t === 'list' ? el.value.split('\n') : el.value;
   }
-  out.saveTeamAsDefault = $('saveTeam').checked;
   try {
     const r = await api('settings', out);
     store.catalog.settings = r.settings;
@@ -300,7 +299,6 @@ $('openSettings').onclick = async () => {
   await loadCatalog();
   renderSettingsForm();
   $('settingsMsg').textContent = '';
-  $('saveTeam').checked = false;
   showTab('general');
   $('settingsDialog').showModal();
   const conversationId = store.state?.conversationId;

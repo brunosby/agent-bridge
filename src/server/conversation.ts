@@ -1,3 +1,4 @@
+import { chosenTeam } from './saved-teams.ts';
 import { originPlan, restoreProgress } from './request-progress.ts';
 import { activateSecretPatterns, loggingPrefixes } from '../workspace/secret-patterns.ts';
 import { markApprovalReady } from './shell-approvals.ts';
@@ -101,7 +102,7 @@ function prepareConversation({ workDir, restoreId, team, routingMode }: OpenOpti
   try {
     for (const t of team || defaultTeam()) {
       const driver = DRIVERS[t.driver] ? t.driver : 'claude';
-      const role = S.roles[t.role] ? t.role : 'coder';
+      const role = t.role || 'coder';
       const spec = {
         id: t.id && /^a\d+$/.test(t.id) ? t.id : `a${owner.nextAgent + 1}`,
         name: uniqueName(t.name || defaultName(driver, role), Boolean(saved), owner),
@@ -109,7 +110,7 @@ function prepareConversation({ workDir, restoreId, team, routingMode }: OpenOpti
         role,
         model: t.model && t.model !== 'default' ? t.model : null,
         effort: t.effort && t.effort !== 'default' ? t.effort : null,
-        bypass: Boolean(t.bypass),
+        bypass: Boolean(S.roles[role] && t.bypass),
         sessionId: saved ? t.sessionId || null : null,
         cachedTokens: saved ? t.cachedTokens || 0 : 0,
         tokens: saved ? t.tokens || 0 : 0,
@@ -228,6 +229,19 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
     if (ev.kind === 'models') {
       const driver = owner.team.find((a) => a.id === id)?.driver;
       if (driver) driverModelCache[driver] = { at: Date.now(), models: agent.models || [] };
+      const member = owner.team.find((m) => m.id === id);
+      if (member?.model && agent.models?.length && !agent.models.some((m) => m.value === member.model && !m.disabled)) {
+        const missing = member.model;
+        member.model = null;
+        member.effort = null;
+        publish({ kind: 'info', agent: id, text: member.name + ' uses the provider default because ' + missing + ' is unavailable.' });
+        try {
+          await agent.setModel('default');
+          await agent.setEffort(null);
+        } catch (e) {
+          publish({ kind: 'error', agent: id, text: 'Could not select the default model: ' + String(e) });
+        }
+      }
     }
     if (ev.kind === 'status' || ev.kind === 'session' || ev.kind === 'models') {
       publishState();
@@ -527,11 +541,12 @@ export function restoreConversation(id: string) {
   });
 }
 
-export function newConversation(workDir?: string) {
+export function newConversation(workDir?: string, teamName?: string) {
   return serializeTransition(async () => {
     if (stopping) throw new Error('Agent Bridge is shutting down.');
     const dir = path.resolve(workDir || S.conv?.workDir || process.cwd());
-    await switchConversation({ workDir: dir });
+    const team = teamName === '' ? defaultTeam(true) : chosenTeam(teamName);
+    await switchConversation({ workDir: dir, team });
     publish({
       kind: 'system',
       text: `New conversation in ${dir}. Team: ${S.conv.team.map((a) => `@${a.id} (${S.roles[a.role]?.name})`).join(', ')}.`,

@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events';
+import { chosenTeam } from './saved-teams.ts';
 import { projectSnapshot } from '../workspace/git-context.ts';
 // The team: creating, adding, removing and reconfiguring agents; role profiles; model lists.
 import { flushMentionStreams } from './mention-stream.ts';
@@ -25,8 +27,11 @@ import { globMatch } from '../core/roles.ts';
 import { startAndWait, statusOf } from './agent-lifecycle.ts';
 import { configureReviewMcp, revokeReviewClient } from './review-mcp.ts';
 /** Team used for a new conversation: config.defaultTeam, else the old mainAgent setting. */
-export function defaultTeam() {
-  if (Array.isArray(config.defaultTeam) && config.defaultTeam.length) return config.defaultTeam.map((a) => ({ ...a }));
+export function defaultTeam(factory = false) {
+  const chosen = factory ? undefined : chosenTeam(undefined);
+  if (chosen) return chosen;
+  if (!factory && !Array.isArray(config.teams) && Array.isArray(config.defaultTeam) && config.defaultTeam.length)
+    return config.defaultTeam.map((a) => ({ ...a }));
   const main = String(argv.main || config.mainAgent || 'claude').toLowerCase() === 'codex' ? 'codex' : 'claude';
   const other = main === 'claude' ? 'codex' : 'claude';
   return [
@@ -108,10 +113,14 @@ export function uniqueName(base: string, preserveLegacyName = false, owner = S.c
   }
 }
 
-function validAgentName(value: string, except?: string): string {
+export function validateNameFormat(value: string): string {
   const name = value.trim();
   if (!/^[\w-]{1,24}$/.test(name)) throw new Error('Enter an agent name of 1 to 24 letters, digits, underscores or hyphens.');
   if (RESERVED_AGENT_NAME.test(name)) throw new Error('Names such as a2 are reserved for agent IDs.');
+  return name;
+}
+function validAgentName(value: string, except?: string) {
+  const name = validateNameFormat(value);
   if (nameTaken(name, except)) throw new Error('An agent already uses that name.');
   return name;
 }
@@ -128,7 +137,38 @@ export function createAgent(spec: AgentSpec, owner = S.conv): Agent {
 }
 
 export function buildAgent(owner: Conversation, spec: AgentSpec): Agent {
-  const role = S.roles[spec.role] || S.roles.coder || Object.values(S.roles)[0];
+  const role = S.roles[spec.role];
+  if (!role) {
+    const reason = 'Role "' + spec.role + '" no longer exists. Choose another role.';
+    const fail = () => {
+      throw new Error(reason);
+    };
+    return Object.assign(new EventEmitter(), {
+      id: spec.id,
+      name: spec.name,
+      cwd: spec.cwd || owner.workDir,
+      tokens: spec.tokens || 0,
+      cachedTokens: spec.cachedTokens || 0,
+      available: false,
+      unavailableReason: reason,
+      models: [],
+      resolvedModel: null,
+      approvals: new Map(),
+      sessionId: spec.sessionId,
+      busy: false,
+      model: spec.model || null,
+      effort: spec.effort || null,
+      start: fail,
+      send: fail,
+      setModel: fail,
+      setEffort: fail,
+      reconfigure: fail,
+      respondApproval: () => false,
+      interrupt: async () => {},
+      restart: fail,
+      shutdown: async () => {},
+    });
+  }
   const readOnly = role?.canEdit === 'none';
   const cwd = spec.cwd || owner.workDir;
   const instructions = buildInstructions({
@@ -361,7 +401,16 @@ export function renameAgent(id: string, value: string): void {
 export async function setRole(id: string, roleId: string): Promise<void> {
   const spec = S.conv.team.find((a) => a.id === id);
   if (!spec || !Object.hasOwn(S.roles, roleId)) throw new Error('unknown agent or role');
+  const missing = !Object.hasOwn(S.roles, spec.role);
   spec.role = roleId;
+  if (missing) {
+    spec.bypass = false;
+    const a = createAgent(spec);
+    S.conv.rosterVersion++;
+    await startAgent(a);
+    publishState();
+    return;
+  }
   const role = S.roles[roleId];
   const agent = S.conv.agents[id];
   refreshAgentInstructions(spec, agent);

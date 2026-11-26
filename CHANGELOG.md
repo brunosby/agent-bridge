@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Added
 
+- Save named teams, select a default for new conversations, and replace a paused team after outstanding work is resolved. Agents with missing roles wait for a replacement role.
+
 - Follow the latest request in a sidebar or top panel, including delegations, approvals and earlier requests still running.
 
 - Single-use links authenticate the browser tab. Restarting preserves access in that tab. Reopening from the launcher revokes previous access. The conversation records tab openings, code use and reuse alerts.

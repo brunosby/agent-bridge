@@ -677,6 +677,9 @@ export function userTargets(target?: string, prefix?: string) {
 
 const pendingUserSends = new WeakMap<Conversation, Promise<void>>();
 
+export function hasPendingSend(owner: Conversation) {
+  return pendingUserSends.has(owner);
+}
 export async function userSend(text: string, target?: string, mentionChecks?: unknown): Promise<void> {
   const owner = S.conv;
   const previous = pendingUserSends.get(owner);
