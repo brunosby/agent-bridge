@@ -10,7 +10,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 - Save named teams, select a default for new conversations, and replace a paused team after outstanding work is resolved. Agents with missing roles wait for a replacement role.
 
-- Follow the latest request in a sidebar or top panel, including delegations, approvals and earlier requests still running.
+- Follow the latest request in a sidebar or top panel, including delegations, approvals and earlier requests still running. Live activity shows what each agent is doing, elapsed time, tool actions and distinct files changed. The mobile launcher also shows the current activity.
+- Move progress between the top and right sidebar from its header without adding a chat entry. Both positions use a double chevron to collapse or expand. The right sidebar can be resized by dragging or with the keyboard, and the browser remembers its width.
 
 - Single-use links authenticate the browser tab. Restarting preserves access in that tab. Reopening from the launcher revokes previous access. The conversation records tab openings, code use and reuse alerts.
 - Push and PR approval cards identify known secrets in outgoing commits and PR text, including text files with image extensions. Cards show each applied exception and its reason. Projects can add detection rules and enable a pre-push hook in Settings.
@@ -57,6 +58,8 @@ All notable changes to this project are documented here. The format follows Keep
 - Stopping one agent closes only its part of a batch so the orchestrator can receive the other results. Task and batch events have explicit types, and Codex and OpenCode share the logic for cancelling queued tasks.
 
 ### Fixed
+
+- Conversation logs save a team checkpoint when restoration data changes and on close or restart. Live activity updates reach connected tabs without adding snapshots to the transcript.
 
 - After **Sign in**, Agent Bridge follows the login and updates the setup and Settings > Accounts by itself: on Windows when the login window closes, and on every system by checking the provider status every 5 seconds for up to 10 minutes, and when you return to the page. Claude Code uses the documented exit code of `claude auth status`. Idle agents of that provider that could not work restart once the sign-in is confirmed. No credential file is read.
 - **Sign in** opens the provider's login in a new console window on Windows. It no longer fails with "Windows cannot find 'claude-login'". A configured CLI path with spaces stays quoted, and a terminal that cannot be opened is reported in the conversation.

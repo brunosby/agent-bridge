@@ -59,7 +59,7 @@
       </aside>
       <div
         id="workspaceResizer"
-        class="workspace-resizer"
+        class="sidebar-resizer workspace-resizer"
         role="separator"
         tabindex="0"
         aria-label="Workspace controls"
@@ -85,6 +85,19 @@
           <button id="stopAll" class="btn btn--danger" title="Interrupt every agent and pause the relay">Stop all</button>
         </div>
       </section>
+      <div
+        id="progressResizer"
+        class="sidebar-resizer progress-resizer"
+        role="separator"
+        tabindex="0"
+        aria-label="Progress panel width"
+        aria-controls="progressDock"
+        aria-orientation="vertical"
+        aria-valuemin="240"
+        aria-valuemax="640"
+        aria-valuenow="320"
+        title="Drag or use the arrow keys to resize the progress panel"
+      ></div>
       <aside id="progressDock" aria-label="Request progress"><section id="requestProgress" hidden></section></aside>
       <dialog id="progressDrawer" aria-label="Request progress"></dialog>
       <div class="conversation-log">

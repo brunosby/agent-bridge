@@ -1,8 +1,23 @@
-import { $, h, time } from '../core/dom.js';
+import { $, h } from '../core/dom.js';
 import { approvals } from '../core/store.js';
 import { api } from '../core/api.js';
+import {
+  currentStep,
+  disclosure,
+  history,
+  isRunning,
+  requestHeading,
+  strip,
+  taskList,
+  timeline,
+  updateActivityClocks,
+} from './progress-view.js';
+
+let tick = () => {};
 let previous = '';
+let previousRequest;
 let layout = '';
+let savingLayout = false;
 const folded = {};
 function button(text, click) {
   const el = h('button', 'btn', text);
@@ -10,25 +25,49 @@ function button(text, click) {
   el.onclick = click;
   return el;
 }
-function details(title, open) {
-  const el = h('details');
-  el.open = open;
-  el.append(h('summary', null, title));
+function positionButton(side, host) {
+  const destination = side ? 'top' : 'sidebar';
+  const label = side ? 'Move progress above the chat' : 'Move progress to the right sidebar';
+  const el = button('', async () => {
+    if (savingLayout) return;
+    savingLayout = true;
+    el.setAttribute('aria-disabled', 'true');
+    host.querySelector('.progress-layout-error')?.remove();
+    try {
+      await api('settings', { progressLayout: destination });
+    } catch (err) {
+      const message = h('p', 'err progress-layout-error', 'Could not move progress: ' + err.message);
+      message.setAttribute('role', 'alert');
+      host.append(message);
+    } finally {
+      savingLayout = false;
+      host.querySelector('[data-focus="position"]')?.removeAttribute('aria-disabled');
+    }
+  });
+  el.classList.add('progress-position');
+  el.dataset.focus = 'position';
+  el.dataset.destination = destination;
+  el.title = label;
+  el.setAttribute('aria-label', label);
+  if (savingLayout) el.setAttribute('aria-disabled', 'true');
+  const icon = h('span', 'progress-position-icon');
+  icon.setAttribute('aria-hidden', 'true');
+  el.append(icon);
   return el;
-}
-function duration(start, end = Date.now()) {
-  const secs = Math.max(0, Math.floor((end - start) / 1000));
-  return secs < 60 ? secs + ' sec' : Math.floor(secs / 60) + ' min';
 }
 export function renderProgress(state, force = false) {
   const host = $('requestProgress');
   if (!host) return;
   const rows = state.progress || [];
   const mode = state.progressLayout || 'sidebar';
-  const signature = JSON.stringify([rows, state.conversationId, mode]);
+  const activities = new Map((state.tasks || []).filter((t) => t.activity).map((t) => [t.id, t.activity]));
+  const names = new Map((state.team || []).map((a) => [a.id, a.name]));
+  const signature = JSON.stringify([rows, state.conversationId, mode, [...activities], [...names]]);
   if (!force && previous === signature) return;
   previous = signature;
+  const changedPosition = layout !== mode;
   layout = mode;
+  const activeKey = host.contains(document.activeElement) ? document.activeElement?.dataset.focus : null;
   const app = host.closest('.app') || document.querySelector('.app');
   const drawer = $('progressDrawer'),
     floating = $('progressFloat'),
@@ -36,6 +75,7 @@ export function renderProgress(state, force = false) {
     top = $('progressTop');
   const row = rows.at(-1);
   if (!row) {
+    tick = () => {};
     host.hidden = floating.hidden = true;
     app.removeAttribute('data-progress');
     if (drawer.open) drawer.close();
@@ -49,6 +89,7 @@ export function renderProgress(state, force = false) {
     }
   }
   const mobile = globalThis.window?.matchMedia?.('(max-width: 899px)').matches;
+  const narrowTop = mode === 'top' && globalThis.window?.matchMedia?.('(max-width: 700px)').matches;
   const inlineDrawer = mobile && mode === 'sidebar';
   if (!inlineDrawer && drawer.open) drawer.close();
   const parent = inlineDrawer ? drawer : mode === 'top' ? top : dock;
@@ -58,29 +99,42 @@ export function renderProgress(state, force = false) {
   app.dataset.progress = mode;
   app.dataset.folded = String(folded[mode]);
   const collapsed = folded[mode] && !inlineDrawer;
-  const current = row.stages.filter((s) => ['working', 'checking', 'waiting_for_commit', 'waiting', 'blocked', 'queued'].includes(s.state));
-  const stage = current[0] || row.stages.find((s) => s.state === 'pending') || row.stages.at(-1);
-  const phase = (row.total ? 'Step ' + (row.stages.indexOf(stage) + 1) + ' of ' + row.total + ' · ' : '') + (stage?.name || 'Request');
-  const working = row.tasks.filter((t) => ['working', 'queued'].includes(t.state)).map((t) => t.name);
-  const brief = [
-    phase,
-    ...new Set(working),
-    row.status,
-    stage?.round > 1 ? 'round ' + stage.round : '',
-    stage?.start ? duration(stage.start, stage.end) : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const side = mode === 'sidebar';
+  const stage = currentStep(row);
+  const position = row.stages.indexOf(stage) + 1;
+  const phase = (row.total && stage ? 'Step ' + position + ' of ' + row.total + ' · ' : '') + (stage?.name || 'Request');
+  const live = row.tasks.filter(isRunning);
+  for (const task of live) {
+    if (task.now?.text) activities.set(task.id, task.now.text);
+    else if (row.waiting?.agent === task.agent) activities.set(task.id, row.waiting.reason);
+  }
+  function summary(short, time = Date.now()) {
+    const descriptions = live.map((task) => {
+      let text = activities.get(task.id) || (task.workingSince && time - task.workingSince >= 5000 ? 'Thinking' : '');
+      if (short) text = text.replace(/^(Editing |Reading ).*\//, '$1');
+      return task.name + (text ? ': ' + text : '');
+    });
+    return [phase, [...new Set(descriptions)].join(' · ') || row.status].join(' · ');
+  }
+  const brief = summary(true);
+  let compact;
   const wait = row.waiting;
-  floating.textContent = (wait ? '! ' : '') + phase;
+  floating.textContent = (wait ? '! ' : '') + brief;
   floating.classList.toggle('progress-alert', Boolean(wait));
+  floating.setAttribute('aria-label', 'Open progress: ' + (wait?.reason || brief));
   floating.onclick = () => drawer.showModal();
   drawer.onclick = (e) => {
-    if (e.target === drawer) drawer.close();
+    if (e.target !== drawer) return;
+    const bounds = drawer.getBoundingClientRect();
+    if (e.clientX < bounds.left || e.clientX > bounds.right || e.clientY < bounds.top || e.clientY > bounds.bottom) drawer.close();
   };
-  const earlierOpen = host.querySelector('.earlier')?.open || false;
-  const delegatesOpen = host.querySelector('.delegations')?.open || false;
-  const activeKey = host.contains(document.activeElement) ? document.activeElement?.dataset.focus : null;
+  const requestKey = JSON.stringify([state.conversationId, row.seq]);
+  const opened = new Set(
+    previousRequest === requestKey ? [...host.querySelectorAll('details[open] > summary')].map((el) => el.dataset.focus) : [],
+  );
+  const scrollTop = previousRequest === requestKey ? parent.scrollTop : 0;
+  const horizontalScroll = host.querySelector('.progress-stages')?.scrollLeft || 0;
+  previousRequest = requestKey;
   host.replaceChildren();
   function action(w, seq) {
     const el = button(w.action, async () => {
@@ -97,10 +151,11 @@ export function renderProgress(state, force = false) {
       card?.scrollIntoView?.({ block: 'nearest' });
       (card?.matches('button') ? card : card?.querySelector('button,input,select'))?.focus();
     });
-    el.dataset.focus = w.card || 'decision';
+    el.classList.add('btn--primary');
+    el.dataset.focus = 'action-' + seq + '-' + (w.card || 'decision');
     return el;
   }
-  const toggle = button(inlineDrawer ? 'Close' : mode === 'sidebar' ? (collapsed ? '«' : '»') : collapsed ? 'Show' : 'Hide', () => {
+  const toggle = button('', () => {
     if (inlineDrawer) return drawer.close();
     folded[mode] = !folded[mode];
     try {
@@ -112,107 +167,130 @@ export function renderProgress(state, force = false) {
   });
   toggle.dataset.focus = 'toggle';
   toggle.setAttribute('aria-expanded', String(!collapsed));
-  toggle.setAttribute('aria-label', inlineDrawer ? 'Close progress' : collapsed ? 'Show progress' : 'Hide progress');
-  const head = h('div', 'section-heading');
-  head.append(h('strong', null, collapsed && mode === 'sidebar' ? '' : 'Request progress'), toggle);
-  host.append(head);
-  if (wait) host.append(h('strong', 'progress-alert', '! ' + (collapsed && mode === 'sidebar' ? '' : wait.reason)));
-  if (collapsed && mode === 'sidebar') {
-    const dots = h('div', 'progress-dots');
-    for (const s of row.stages) {
-      const dot = h('span', s.state, '●');
-      dot.title = s.name;
-      dots.append(dot);
-    }
-    host.append(dots, h('span', 'progress-vertical', phase));
+  toggle.title = inlineDrawer ? 'Close progress' : collapsed ? 'Expand progress' : 'Collapse progress';
+  toggle.setAttribute('aria-label', toggle.title);
+  if (side && !collapsed) toggle.append(h('span', null, 'Progress'));
+  const arrow = h('span', 'progress-chevron', '»');
+  arrow.setAttribute('aria-hidden', 'true');
+  toggle.append(arrow);
+  host.dataset.mode = mode;
+  const body = h('div', 'progress-body');
+  body.id = 'progressBody';
+  toggle.setAttribute('aria-controls', body.id);
+  if (side) {
+    toggle.classList.add('progress-rail-toggle');
+    const heading = h('div', 'progress-rail-head');
+    heading.append(toggle, positionButton(side, host));
+    host.append(heading);
+    if (!collapsed) body.append(requestHeading(row, false));
   } else {
-    host.append(h('strong', null, brief));
-    if (wait) host.append(action(wait, row.seq));
-    if (!collapsed) {
-      host.append(h('p', 'request-text', row.text), h('small', 'hint', time(row.start) + ' · ' + duration(row.start, row.end)));
-      const timeline = h('ol', 'progress-stages');
-      const delegation = (t) =>
-        h(
-          'li',
-          null,
-          [t.name, t.description, t.state, t.delivered ? 'delivered' : '', t.round > 1 ? 'round ' + t.round : '', duration(t.start, t.end)]
-            .filter(Boolean)
-            .join(' · '),
-        );
-      for (const stage of row.stages) {
-        const li = h(
-          'li',
-          stage.state,
-          [
-            stage.name,
-            stage.state,
-            stage.agents?.length > 1 ? stage.agents.length + ' agents' : stage.agents?.[0],
-            stage.round > 1 ? 'round ' + stage.round : '',
-            stage.start ? duration(stage.start, stage.end) : '',
-          ]
-            .filter(Boolean)
-            .join(' · '),
-        );
-        const tasks = row.tasks.filter((t) => !row.total && (t.stage === stage.name || stage.name === 'Answer'));
-        if (mode === 'sidebar' && tasks.length) {
-          const list = h('ul');
-          list.append(...tasks.map(delegation));
-          li.append(list);
-        }
-        timeline.append(li);
-      }
-      if (mode === 'top' && mobile) {
-        const steps = details(phase, false);
-        const bar = h('progress');
-        if (row.total) {
-          bar.max = row.total;
-          bar.value = row.stages.filter((s) => s.state === 'committed').length;
-        }
-        steps.append(bar, timeline);
-        host.append(steps);
-      } else host.append(timeline);
-      if (mode === 'top' || row.total) {
-        const d = details('Delegations', delegatesOpen);
-        d.className = 'delegations';
-        const list = h('ul');
-        list.append(...row.tasks.map(delegation));
-        d.append(list);
-        host.append(d);
-      }
-      for (const reason of row.reasons.filter((w) => !w.action))
-        host.append(
-          h(
-            'p',
-            'hint',
-            reason.reason + (reason.agent ? ' · ' + (state.team?.find((a) => a.id === reason.agent)?.name || reason.agent) : ''),
-          ),
-        );
-      const earlier = rows.slice(0, -1).reverse();
-      if (earlier.length) {
-        const count = earlier.flatMap((r) => r.tasks).filter((t) => ['queued', 'working'].includes(t.state)).length;
-        if (count)
-          host.append(
-            h(
-              'p',
-              'hint',
-              count + (count === 1 ? ' task from an earlier request is' : ' tasks from earlier requests are') + ' still running',
-            ),
-          );
-        const section = details('Earlier requests', earlierOpen);
-        section.className = 'earlier';
-        for (const r of earlier) {
-          const line = h('p', r.waiting ? 'progress-alert' : '', [r.text, r.status].join(' · '));
-          if (r.waiting) line.append(action(r.waiting, r.seq));
-          section.append(line);
-        }
-        host.append(section);
-      }
-    }
+    toggle.classList.add('progress-top-toggle');
+    const heading = requestHeading(row, true, toggle);
+    heading.append(positionButton(side, host));
+    host.append(heading);
   }
-  if (activeKey) [...host.querySelectorAll('[data-focus]')].find((el) => el.dataset.focus === activeKey)?.focus();
+  host.append(body);
+  if (collapsed) {
+    if (side) {
+      body.append(strip(row, position, brief));
+      compact = body.querySelector('.progress-vertical');
+    } else {
+      const line = h('div', 'progress-brief');
+      compact = h('span', null, brief);
+      line.append(compact);
+      if (wait) {
+        const alert = h('span', 'progress-alert-icon', '!');
+        alert.title = wait.reason;
+        line.prepend(alert);
+        line.append(action(wait, row.seq));
+      }
+      body.append(line);
+    }
+  } else {
+    const waitBox = wait && h('div', 'progress-wait');
+    if (waitBox) {
+      waitBox.append(h('strong', null, wait.reason));
+      if (wait.agent) waitBox.append(h('span', null, names.get(wait.agent) || wait.agent));
+      waitBox.append(action(wait, row.seq));
+      if (side) body.append(waitBox);
+    }
+    let stagesHost = body;
+    if (narrowTop && row.stages.length) {
+      stagesHost = disclosure('steps', '', opened);
+      compact = h('span', null, brief);
+      stagesHost.querySelector('summary').append(compact);
+      if (row.total) {
+        const bar = h('progress');
+        bar.max = row.total;
+        bar.value = row.stages.filter((s) => s.state === 'committed').length;
+        bar.setAttribute('aria-label', 'Completed steps');
+        stagesHost.querySelector('summary').append(bar);
+      }
+      body.append(stagesHost);
+    }
+    if (row.stages.length) stagesHost.append(timeline(row, side, activities));
+    if ((!side || row.total) && live.length) stagesHost.append(taskList(live, activities, true, wait?.agent));
+    if (waitBox && !side) body.append(waitBox);
+    if ((!side || row.total) && row.tasks.length) {
+      const d = disclosure('delegations', 'Delegations in this request (' + row.tasks.length + ')', opened);
+      d.append(taskList(row.tasks, activities, false, wait?.agent));
+      stagesHost.append(d);
+    }
+    for (const reason of row.reasons.filter((w) => !w.action)) {
+      body.append(h('p', 'progress-meta', [reason.reason, names.get(reason.agent) || reason.agent].filter(Boolean).join(' · ')));
+    }
+    const earlier = rows.slice(0, -1).reverse();
+    const count = earlier.reduce((n, r) => n + r.tasks.filter(isRunning).length, 0);
+    if (count)
+      body.append(
+        h(
+          'p',
+          'progress-meta',
+          count + (count === 1 ? ' task from an earlier request is' : ' tasks from earlier requests are') + ' still running',
+        ),
+      );
+    body.append(history(earlier, opened, action));
+  }
+  tick = live.length
+    ? (time = Date.now()) => {
+        updateActivityClocks(host, time);
+        const label = summary(true, time);
+        if (compact) {
+          compact.textContent = label;
+          compact.title = summary(false, time);
+        }
+        if (inlineDrawer) {
+          floating.textContent = (wait ? '! ' : '') + label;
+          floating.title = summary(false, time);
+        }
+      }
+    : () => {};
+  tick();
+  parent.scrollTop = scrollTop;
+  if (horizontalScroll && host.querySelector('.progress-stages')) host.querySelector('.progress-stages').scrollLeft = horizontalScroll;
+  if (changedPosition && activeKey === 'position' && inlineDrawer && !drawer.open) drawer.showModal();
+  if (activeKey) [...host.querySelectorAll('[data-focus]')].find((el) => el.dataset.focus === activeKey)?.focus({ preventScroll: true });
+}
+export function applyActivity(state, event) {
+  if (!state || state.conversationId !== event.conversationId) return;
+  const updates = new Map(event.updates.map((t) => [t.id, t]));
+  let changed = false;
+  for (const row of state.progress || [])
+    for (const task of row.tasks) {
+      const update = updates.get(task.id);
+      if (!update || task.agent !== event.agent || task.state !== 'working') continue;
+      Object.assign(task, { now: update.now, actions: update.actions, files: update.files });
+      changed = true;
+    }
+  for (const task of state.tasks || []) if (updates.has(task.id)) task.activity = updates.get(task.id).now?.text;
+  if (changed) renderProgress(state);
 }
 export function bindProgress(getState) {
-  globalThis.window?.matchMedia?.('(max-width: 899px)').addEventListener?.('change', () => {
-    if (layout && getState()) renderProgress(getState(), true);
-  });
+  globalThis.window.setInterval(() => {
+    if (!document.hidden) tick();
+  }, 1000);
+  for (const query of ['(max-width: 899px)', '(max-width: 700px)'])
+    globalThis.window?.matchMedia?.(query).addEventListener?.('change', () => {
+      if (layout && getState()) renderProgress(getState(), true);
+    });
 }

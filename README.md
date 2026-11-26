@@ -12,7 +12,9 @@ On first launch, setup checks the provider CLIs and Git. Choose **Run setup agai
 
 Use **Teams** beside the roster to save, rename, or apply a team. Templates keep role and model choices. Each new member starts with bypass off.
 
-Use **Settings → General → Progress layout** to follow the latest request beside or above the chat. Both layouts collapse and expand. Each remembers its own setting in your browser. Expand **Earlier requests** to see outstanding work from previous messages.
+Use the position button in the **Progress** header to move the panel above the chat or to its right. It also updates **Settings → General → Progress layout**. The double chevron collapses or expands the panel. Each position remembers its own collapse state. Expand **Earlier requests** to see outstanding work from previous messages.
+
+On desktop, drag the divider between the chat and the right panel to resize it. You can also focus the divider with **Tab**, adjust it with the arrow keys, or use **Home** and **End** for the narrowest and widest available sizes. Your browser remembers the width. On a narrow screen, tap the progress button to open the side panel.
 
 ## Quick start
 

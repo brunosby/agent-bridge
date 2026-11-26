@@ -1,4 +1,4 @@
-import { renderProgress } from './request-progress.js';
+import { applyActivity, renderProgress } from './request-progress.js';
 import { applyAgentAccent } from '../core/agent-accent.js';
 import { parseMilestoneMarkers } from '../core/milestone-markers.js';
 import { milestoneCommitCard, milestonePlanCard, renderMilestoneProgress } from './milestones.js';
@@ -15,7 +15,7 @@ import {
   refreshApprovalNames,
   updatePending,
 } from './approvals.js';
-import { renderState } from './agents.js';
+import { renderCard, renderState } from './agents.js';
 import { updateComposer } from './controls.js';
 import { bindSavedSearch } from './transcript-search.js';
 import { renderWorkflow, sizeBadge } from './task-workflow.js';
@@ -348,6 +348,12 @@ log.addEventListener('scroll', () => {
 });
 
 export function handle(ev) {
+  if (ev.kind === 'activity') {
+    applyActivity(store.state, ev);
+    const agent = store.state?.team.find((a) => a.id === ev.agent);
+    if (agent && ev.conversationId === store.state.conversationId) renderCard(agent);
+    return;
+  }
   if (!['state', 'delta'].includes(ev.kind)) results = null;
   switch (ev.kind) {
     case 'reset': {

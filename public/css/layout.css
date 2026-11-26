@@ -113,15 +113,18 @@
 
 .workspace-resizer {
   grid-area: resize;
+  border-inline-end: 1px solid var(--color-border);
+}
+
+.sidebar-resizer {
   display: none;
   place-items: center;
   background: var(--color-rail);
-  border-inline-end: 1px solid var(--color-border);
   cursor: col-resize;
   touch-action: none;
 }
 
-.workspace-resizer::after {
+.sidebar-resizer::after {
   content: '';
   width: 3px;
   height: 2rem;
@@ -129,11 +132,11 @@
   background: var(--color-text-muted);
 }
 
-.workspace-resizer:is(:hover, :focus-visible, :active) {
+.sidebar-resizer:is(:hover, :focus-visible, :active) {
   background: var(--color-surface-2);
 }
 
-.workspace-resizer:focus-visible {
+.sidebar-resizer:focus-visible {
   outline-offset: -2px;
 }
 

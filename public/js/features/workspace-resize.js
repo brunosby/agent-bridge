@@ -1,70 +1,86 @@
 import { $ } from '../core/dom.js';
 
-const separator = $('workspaceResizer');
-const app = separator.closest('.app');
-const storageKey = 'agent-bridge-workspace-width';
-const minWidth = Number(separator.getAttribute('aria-valuemin'));
-const maxWidth = Number(separator.getAttribute('aria-valuemax'));
-const step = 16;
-let width = Number(separator.getAttribute('aria-valuenow'));
-let drag = null;
+const app = $('workspaceResizer').closest('.app');
 
-function resize(nextWidth) {
-  width = Math.max(minWidth, Math.min(maxWidth, Math.round(nextWidth)));
-  app.style.setProperty('--workspace-width', width + 'px');
-  separator.setAttribute('aria-valuenow', String(width));
-}
-
-function saveWidth() {
+function bindDivider(separator, panel, direction) {
+  const variable = '--' + panel + '-width';
+  const storageKey = 'agent-bridge-' + panel + '-width';
+  const min = Number(separator.getAttribute('aria-valuemin'));
+  const max = Number(separator.getAttribute('aria-valuemax'));
+  let preferred = Number(separator.getAttribute('aria-valuenow'));
+  let width = preferred;
+  let limit = max;
+  let drag = null;
   try {
-    localStorage.setItem(storageKey, String(width));
+    const saved = Number(localStorage.getItem(storageKey));
+    if (Number.isFinite(saved) && saved > 0) preferred = Math.max(min, Math.min(max, saved));
   } catch {
-    // The divider still works when browser storage is unavailable.
+    // Storage is optional.
   }
+  function fit(available) {
+    limit = Math.max(min, Math.min(max, Math.floor(available)));
+    width = Math.min(limit, preferred);
+    app.style.setProperty(variable, width + 'px');
+    separator.setAttribute('aria-valuenow', String(width));
+    separator.setAttribute('aria-valuemax', String(limit));
+    separator.setAttribute('aria-valuetext', width + ' pixels');
+    return width;
+  }
+  function change(value) {
+    const next = Math.max(min, Math.min(limit, Math.round(value)));
+    if (next === width) return;
+    preferred = next;
+    fitPanels();
+  }
+  function save() {
+    try {
+      localStorage.setItem(storageKey, String(preferred));
+    } catch {
+      // Resizing still works without storage.
+    }
+  }
+  separator.addEventListener('pointerdown', (event) => {
+    if (drag || event.button !== 0 || !event.isPrimary) return;
+    event.preventDefault();
+    separator.focus({ preventScroll: true });
+    separator.setPointerCapture(event.pointerId);
+    drag = { id: event.pointerId, x: event.clientX, width };
+  });
+  separator.addEventListener('pointermove', (event) => {
+    if (drag?.id === event.pointerId) change(drag.width + direction * (event.clientX - drag.x));
+  });
+  separator.addEventListener('lostpointercapture', (event) => {
+    if (drag?.id !== event.pointerId) return;
+    if (width !== drag.width) save();
+    drag = null;
+  });
+  separator.addEventListener('keydown', (event) => {
+    const targets = { ArrowLeft: width - direction * 16, ArrowRight: width + direction * 16, Home: min, End: limit };
+    if (!Object.hasOwn(targets, event.key)) return;
+    event.preventDefault();
+    change(targets[event.key]);
+    save();
+  });
+  return { min, fit, separator };
 }
 
-try {
-  const savedWidth = Number(localStorage.getItem(storageKey));
-  if (Number.isFinite(savedWidth) && savedWidth > 0) resize(savedWidth);
-} catch {
-  // Use the default width.
+const workspace = bindDivider($('workspaceResizer'), 'workspace', 1);
+const progress = bindDivider($('progressResizer'), 'progress', -1);
+
+function fitPanels() {
+  const dividerWidth = progress.separator.offsetWidth;
+  if (!dividerWidth) {
+    workspace.fit(Infinity);
+    progress.fit(Infinity);
+    return;
+  }
+  // Keep the composer and conversation controls usable while both panels are open.
+  const available = app.clientWidth - workspace.separator.offsetWidth - dividerWidth - 360;
+  const leftWidth = workspace.fit(available - progress.min);
+  progress.fit(available - leftWidth);
 }
 
-separator.addEventListener('pointerdown', (event) => {
-  if (drag || event.button !== 0 || !event.isPrimary) return;
-  event.preventDefault();
-  separator.focus({ preventScroll: true });
-  separator.setPointerCapture(event.pointerId);
-  drag = { pointerId: event.pointerId, startX: event.clientX, startWidth: width };
-});
-
-separator.addEventListener('pointermove', (event) => {
-  if (drag?.pointerId === event.pointerId) resize(drag.startWidth + event.clientX - drag.startX);
-});
-
-separator.addEventListener('lostpointercapture', (event) => {
-  if (drag?.pointerId !== event.pointerId) return;
-  if (width !== drag.startWidth) saveWidth();
-  drag = null;
-});
-
-separator.addEventListener('keydown', (event) => {
-  switch (event.key) {
-    case 'ArrowLeft':
-      resize(width - step);
-      break;
-    case 'ArrowRight':
-      resize(width + step);
-      break;
-    case 'Home':
-      resize(minWidth);
-      break;
-    case 'End':
-      resize(maxWidth);
-      break;
-    default:
-      return;
-  }
-  event.preventDefault();
-  saveWidth();
-});
+fitPanels();
+const observer = new ResizeObserver(fitPanels);
+observer.observe(app);
+observer.observe(progress.separator);

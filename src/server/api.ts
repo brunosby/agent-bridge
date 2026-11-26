@@ -457,7 +457,7 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
     case 'settings':
       saveSettings(body || {});
       S.roles = loadRoles(ROLES_DIR);
-      publish({ kind: 'system', text: 'Settings saved.' });
+      if (Object.keys(body).length !== 1 || !Object.hasOwn(body, 'progressLayout')) publish({ kind: 'system', text: 'Settings saved.' });
       publishState();
       return { ok: true, settings: settingsView() };
     case 'accounts': {
