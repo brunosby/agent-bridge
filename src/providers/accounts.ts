@@ -1,5 +1,5 @@
-import { installer } from './installers.ts';
-import { execFile } from 'node:child_process';
+import { installer, openTerminal } from './installers.ts';
+import { execFile, spawn } from 'node:child_process';
 import type { AccountState, DriverConfig } from '../core/types.ts';
 
 interface Step {
@@ -86,17 +86,25 @@ export async function cliStatus(driver: string, cfg: DriverConfig = {}): Promise
 
   if (driver === 'claude') {
     const r = await run(command, ['auth', 'status']);
+    // Documented contract: `claude auth status` exits with 0 when signed in and 1 when not; the JSON only adds detail.
+    let j: { loggedIn?: boolean; authMethod?: string; subscriptionType?: string; loginExpiresAt?: string | null } | null = null;
     try {
-      const j = JSON.parse(r.out.slice(r.out.indexOf('{')));
-      if (!j.loggedIn) return { state: 'logged_out', version: inst.version, detail: 'Not signed in.' };
-      const how =
-        j.authMethod === 'claude.ai'
-          ? `Claude account${j.subscriptionType ? ` (${j.subscriptionType})` : ''}`
-          : j.authMethod || 'signed in';
-      return { state: 'ok', version: inst.version, detail: how, expiresAt: j.loginExpiresAt || null };
+      j = JSON.parse(r.out.slice(r.out.indexOf('{')));
     } catch {
-      return { state: r.code === 0 ? 'ok' : 'logged_out', version: inst.version, detail: r.out.split('\n')[0].slice(0, 200) };
+      j = null;
     }
+    if (r.code !== 0 || j?.loggedIn === false)
+      return {
+        state: 'logged_out',
+        version: inst.version,
+        detail: j ? 'Not signed in.' : r.out.split('\n')[0].slice(0, 200) || 'Not signed in.',
+      };
+    const how = !j
+      ? 'signed in'
+      : j.authMethod === 'claude.ai'
+        ? `Claude account${j.subscriptionType ? ` (${j.subscriptionType})` : ''}`
+        : j.authMethod || 'signed in';
+    return { state: 'ok', version: inst.version, detail: how, expiresAt: j?.loginExpiresAt || null };
   }
   if (driver === 'codex') {
     const r = await run(command, ['login', 'status']);
@@ -134,20 +142,31 @@ export async function cliStatus(driver: string, cfg: DriverConfig = {}): Promise
   return { state: 'unknown', version: inst.version };
 }
 
-/** Open a terminal window that runs the provider's own login command, for the user to finish. */
-export function openLoginTerminal(driver: string, cfg: DriverConfig = {}): string {
+/** Format the configured executable as a literal argument for the login terminal. */
+export function loginCommand(driver: string, cfg: DriverConfig = {}, platform = process.platform): string {
   const p = PROVIDERS[driver];
   if (!p) throw new Error('unknown provider');
-  const parts = [cfg.command || driver, ...p.login.command.split(' ').slice(1)];
-  const command = parts.join(' ');
-  if (process.platform === 'win32') {
-    execFile('cmd.exe', ['/c', 'start', `${driver}-login`, 'cmd.exe', '/k', ...parts], { windowsHide: false });
-  } else if (process.platform === 'darwin') {
-    execFile('osascript', ['-e', `tell application "Terminal" to do script "${command}"`]);
-  } else {
-    execFile('x-terminal-emulator', ['-e', command]);
-  }
-  return command;
+  const executable = String(cfg.command || driver);
+  if (/["&|<>^%!\r\n]/.test(executable))
+    throw new Error('The configured command contains characters that cannot be used in a terminal. Use the plain path to the CLI.');
+  const needsQuotes = platform === 'win32' ? /[\s()]/.test(executable) : !/^[a-zA-Z0-9_./+-]+$/.test(executable);
+  const quoted = needsQuotes
+    ? platform === 'win32'
+      ? '"' + executable + '"'
+      : "'" + executable.replaceAll("'", "'\\''") + "'"
+    : executable;
+  return [quoted, ...p.login.command.split(' ').slice(1)].join(' ');
+}
+
+/**
+ * Open a terminal window that runs the provider's own login command, for the user to finish.
+ * On Windows the window closes after a successful login, so `finished` reports the end of the login itself.
+ * Other systems hand the command to the desktop terminal, whose launcher returns at once: `finished` is null there.
+ */
+export async function openLoginTerminal(driver: string, cfg: DriverConfig = {}, platform = process.platform, launch = spawn) {
+  const command = loginCommand(driver, cfg, platform);
+  const child = await openTerminal(command, platform === 'win32' ? 'cmd.exe' : 'sh', platform, launch, { closeOnSuccess: true });
+  return { command, finished: platform === 'win32' ? child : null };
 }
 
 /** Combine the CLI status with what the agents reported while running (no access, usage limit). */

@@ -1,3 +1,4 @@
+import { signInState } from './login-watch.ts';
 import { requestContext, register, observeProgress, pendingWork, progressView } from './request-progress.ts';
 import { loggingPrefixes } from '../workspace/secret-patterns.ts';
 import { redact, redactRecord } from '../core/secret-detection.ts';
@@ -124,6 +125,7 @@ export function stateEvent() {
   return {
     kind: 'state',
     progressLayout: setting('progressLayout'),
+    signIn: signInState(),
     progress: progressView(S.conv, waits),
     pendingWork: waits,
     earlierDecisions: [...register(S.conv).values()]

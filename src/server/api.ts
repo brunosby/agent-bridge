@@ -48,6 +48,7 @@ import {
 } from './team.ts';
 import { loadRoles } from '../core/roles.ts';
 import { PROVIDERS, cliStatus, mergeStatus, nextStep, openLoginTerminal } from '../providers/accounts.ts';
+import { watchLogin } from './login-watch.ts';
 import { listConversations, removeConversation } from '../core/history.ts';
 import { searchSavedTranscript } from '../core/transcript-search.ts';
 import { restartServer, shutdown } from '../cli/main.ts';
@@ -475,13 +476,16 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
     }
     case 'login': {
       if (typeof body.driver !== 'string' || !Object.hasOwn(PROVIDERS, body.driver)) throw new Error('unknown provider');
-      const command = openLoginTerminal(body.driver, config[body.driver]);
+      const blocked = Boolean(providerBlocked(body.driver));
+      const { command, finished } = await openLoginTerminal(body.driver, config[body.driver]);
       delete providerRuntime[body.driver];
       delete cliCache[body.driver];
+      watchLogin(body.driver, finished, blocked);
       publish({
         kind: 'system',
-        text: `Opened a terminal running "${command}". Finish the sign-in there, then press Check again in Settings > Accounts.`,
+        text: `Opened a terminal running "${command}". Finish the sign-in there; Agent Bridge detects it and updates Settings > Accounts.`,
       });
+      publishState();
       return { ok: true };
     }
     case 'searchTranscript': {
