@@ -4,6 +4,10 @@ A team of AI coding agents from different providers (Claude Code, Codex, OpenCod
 
 You talk to an orchestrator. It hands tasks to the other agents by role, collects their results and reports back to you.
 
+![Agent Bridge showing the team roster, the conversation about sign-in validation, and the progress panel with review in progress.](docs/images/agent-bridge-workspace.png)
+
+*Demo conversation. Atlas delegates the form changes to Nova, then asks Sage to review keyboard accessibility.*
+
 For example, you ask for a login screen. The orchestrator asks the Coder to build it and the Reviewer to check it. If the Reviewer requests changes, the orchestrator can send the findings back to the Coder for up to two fix rounds by default. You can change that limit under **Settings > Conversation flow > Review fix rounds**. The orchestrator reports the outcome, including any open findings. You can step in at any point of that conversation. The agents work directly in the project folder you choose.
 
 Mixing providers means one model reviews another's work and each role can use the model it does best. Agent Bridge runs the CLIs you already have, so usage counts against your own provider accounts; it needs no account or key of its own.
