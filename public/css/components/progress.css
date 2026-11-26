@@ -31,6 +31,7 @@
   justify-self: start;
 }
 .progress-alert,
+.progress-dots .waiting,
 .progress-dots .blocked {
   color: var(--color-warning);
 }
@@ -52,6 +53,18 @@
 #progressTop {
   max-height: 36vh;
   overflow: auto;
+}
+.app[data-progress='top'][data-folded='true'] #requestProgress {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-block: var(--space-1);
+}
+#progressFloat.progress-alert {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border-color: var(--color-warning-border);
 }
 #progressTop .progress-stages {
   display: flex;

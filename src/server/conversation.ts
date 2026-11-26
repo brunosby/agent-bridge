@@ -1,5 +1,5 @@
 import { chosenTeam } from './saved-teams.ts';
-import { originPlan, restoreProgress } from './request-progress.ts';
+import { agentRequest, withRequest, originPlan, restoreProgress } from './request-progress.ts';
 import { activateSecretPatterns, loggingPrefixes } from '../workspace/secret-patterns.ts';
 import { markApprovalReady } from './shell-approvals.ts';
 import { reviewPublication, forgetReview } from './publication-approval.ts';
@@ -191,7 +191,11 @@ export function startAgents() {
 export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
   let silence: NodeJS.Timeout | undefined;
   const changeId = owner.team.find((member) => member.id === id)?.providerChangeId;
-  agent.on('event', async (event: AgentEvent) => {
+  agent.on('event', (event: AgentEvent) => {
+    if (event.kind !== 'turnEnd' && event.kind !== 'approval') return handleEvent(event);
+    return withRequest(owner, agentRequest(owner, id, event.taskIds), () => handleEvent(event));
+  });
+  async function handleEvent(event: AgentEvent) {
     if (S.conv !== owner || owner.agents[id] !== agent) return; // late events from a closed conversation or replaced agent
     clearTimeout(silence);
     if (agent.busy && !agent.approvals.size && !['turnEnd', 'tasksCancelled', 'unavailable'].includes(event.kind)) {
@@ -467,7 +471,7 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
     }
     if (lifecycle?.kind === 'tasksCancelled') cancelBatchPart(owner, id, 'cancelled: provider interrupted the task', lifecycle.taskIds);
     if (['taskStarted', 'tasksCancelled', 'approval', 'approvalClosed'].includes(ev.kind)) publishState();
-  });
+  }
 }
 
 export function armApprovalTimeout(agentId: string, ev: AgentEvent): void {

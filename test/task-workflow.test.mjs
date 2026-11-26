@@ -300,6 +300,35 @@ test('small delegation tells the coordinator which agent was skipped', async (t)
   assert.ok(!bridge.events.some((e) => e.kind === 'taskQueued' && e.agent === 'a3'));
 });
 
+test('a late question belongs to the earlier request and answers resume that request', async (t) => {
+  const bridge = await startBridge({
+    team,
+    rules: [
+      { agent: 'Lead', match: 'first request', waitForFile: 'release-first', reply: mark('QUESTION', JSON.stringify(questions)) },
+      { agent: 'Dev', match: 'second request', waitForFile: 'release-second', reply: 'Second answer' },
+    ],
+    settings: { autoRelay: false },
+  });
+  t.after(() => bridge.stop());
+  await bridge.api('send', { text: 'first request' });
+  const first = await bridge.waitFor((e) => e.kind === 'user' && e.text === 'first request');
+  await bridge.api('send', { text: 'second request', target: 'a2' });
+  fs.writeFileSync(path.join(bridge.work, 'release-first'), '');
+  const state = await bridge.waitFor((e) => e.kind === 'state' && e.earlierDecisions?.some((d) => d.seq === first.seq));
+  const old = state.progress.find((r) => r.seq === first.seq);
+  assert.equal(old.status, 'Waiting for you');
+  assert.equal(state.progress.at(-1).status, 'In progress');
+  const id = old.waiting.card;
+  await bridge.api('taskDecision', {
+    conversationId: state.conversationId,
+    seq: first.seq,
+    requestId: id,
+    action: 'answer',
+    answers: ['A'],
+  });
+  await bridge.waitFor((e) => e.kind === 'taskQueued' && e.requestSeq === first.seq && e.seq > state.seq);
+  fs.writeFileSync(path.join(bridge.work, 'release-second'), '');
+});
 test('removing the last agent fails without opening succession', async (t) => {
   const bridge = await startBridge({ team: [team[0]], rules: [] });
   t.after(() => bridge.stop());

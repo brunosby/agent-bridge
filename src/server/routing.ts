@@ -118,7 +118,7 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
   const needsDraft = architect && plan && !plan.specRequestedFrom;
   if (needsDraft) {
     plan.specRequestedFrom = architect;
-    recordWorkflow(owner);
+    recordWorkflow(owner, plan);
   }
   const requestedDraft = coders.length && lead && !architect && requestSpec(owner, lead, plan);
   const note = coders.length
@@ -133,7 +133,7 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
     if (!plan.routingNotices?.includes(note)) {
       (plan.routingNotices ??= []).push(note);
       (plan.pendingRoutingNotices ??= []).push(note);
-      recordWorkflow(owner);
+      recordWorkflow(owner, plan);
     }
     if (!targets.length && !requestedDraft && plan.pendingRoutingNotices?.length) {
       deliver(lead, 'No agent received the delegation. Adjust the next step.', { from: 'user', sourceSeq: plan.seq });
@@ -171,13 +171,14 @@ function activeLimitPause(owner: Conversation) {
 }
 
 function relayOrHold(owner: Conversation, item: HeldRelay): void {
-  if (!relay.auto || (owner.relay.halted && !activeLimitPause(owner) && !owner.plan?.pending && !owner.succession)) return;
+  const plan = originPlan(owner, item.requestSeq);
+  if (!relay.auto || (owner.relay.halted && !activeLimitPause(owner) && !plan?.pending && !owner.succession)) return;
   checkTokenLimit();
   if (preparingSmallBaseline(owner)) {
     owner.heldRelays.push(item);
     return;
   }
-  if (!owner.plan?.pending && !owner.succession && !owner.relay.halted && dispatchRelay(owner, item)) return;
+  if (!plan?.pending && !owner.succession && !owner.relay.halted && dispatchRelay(owner, item)) return;
   owner.heldRelays.push(item);
   publish({
     kind: 'system',
@@ -212,8 +213,10 @@ export function resumeRelay(owner: Conversation): void {
 
 export function drainHeld(owner: Conversation) {
   if (owner.heldRelays.length && preparingSmallBaseline(owner)) return;
-  while (owner.heldRelays.length && relay.auto && !owner.relay.halted && !owner.plan?.pending && !owner.succession) {
-    const item = owner.heldRelays.shift()!;
+  while (owner.heldRelays.length && relay.auto && !owner.relay.halted && !owner.succession) {
+    const index = owner.heldRelays.findIndex((h) => !originPlan(owner, h.requestSeq)?.pending);
+    if (index < 0) return;
+    const [item] = owner.heldRelays.splice(index, 1);
     if (dispatchRelay(owner, item, true)) continue;
     owner.heldRelays.unshift(item);
     publish({ kind: 'system', text: 'Some replies are still held by the hand-off limit. Resume again or raise the limit.' });

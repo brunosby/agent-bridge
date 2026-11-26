@@ -1,7 +1,7 @@
 import { savedTeams, manageTeam, applyTeam } from './saved-teams.ts';
 import { clearRoleDecisions } from './routing.ts';
 import { setup } from './setup.ts';
-import { register } from './request-progress.ts';
+import { withRequest, decisionOrigin, register } from './request-progress.ts';
 import { discardMilestones } from './milestones.ts';
 import { buildProviderHandoff } from './provider-handoff.ts';
 import { recordWorkflow, closeDecision, offerSuccession, resolveSuccession, resolveTask } from './task-workflow.ts';
@@ -74,6 +74,19 @@ export async function api(action: string, body: Record<string, any>): Promise<un
     const agent = owner && Object.hasOwn(owner.agents, id) ? owner.agents[id] : undefined;
     if (agent) return runAgentOperation(agent, () => dispatch(action, body));
   }
+  const owner = S.conv;
+  if (
+    owner &&
+    [
+      'resolveRole',
+      'resolveRecommendedRoles',
+      'resolveMilestonePlan',
+      'resolveMilestoneCommit',
+      'finalReview',
+      'coordinatorDecision',
+    ].includes(action)
+  )
+    return withRequest(owner, decisionOrigin(owner, body.requestId), () => dispatch(action, body));
   return dispatch(action, body);
 }
 

@@ -5,7 +5,7 @@ import { rosterText } from '../core/prompts.ts';
 import { reviewChanges } from '../workspace/git-context.ts';
 import { redact } from '../core/secret-detection.ts';
 import { loggingPrefixes } from '../workspace/secret-patterns.ts';
-import { latest, register, originPlan } from './request-progress.ts';
+import { requestContext, latest, register, originPlan } from './request-progress.ts';
 import { closeReview, openReview } from './review-mcp.ts';
 import { randomUUID } from 'node:crypto';
 import { config, setting } from '../config/settings.ts';
@@ -47,7 +47,10 @@ export function finishProviderDeliveries(owner: Conversation, id: string, failur
 
 export function deliver(toId: string, text: string, delivery: Delivery): void {
   const owner = S.conv;
-  const row = register(owner).get(delivery.requestSeq ?? delivery.sourceSeq ?? -1) ?? latest(owner);
+  const row =
+    register(owner).get(delivery.requestSeq ?? delivery.sourceSeq ?? -1) ??
+    register(owner).get(requestContext(owner) ?? -1) ??
+    latest(owner);
   delivery = {
     ...delivery,
     requestSeq: delivery.requestSeq ?? row?.seq,

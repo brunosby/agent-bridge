@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { milestonePending } from './milestones.ts';
 import type { BridgeEvent, Conversation, MilestoneView, TaskPlan } from '../core/types.ts';
 
@@ -22,13 +23,32 @@ type Request = {
   start: number;
   end?: number;
   tasks: Delegation[];
-  milestones: MilestoneView[];
+  milestones: (MilestoneView & { start?: number; end?: number })[];
   blocked: string[];
   approvals: Record<string, string>;
   original: string;
   preparing?: number;
   plan?: TaskPlan;
 };
+const context = new AsyncLocalStorage<{ owner: Conversation; seq: number }>();
+const successions = new WeakMap<Conversation, string>();
+const origins = new WeakMap<Conversation, Map<string, number>>();
+export function requestContext(owner: Conversation) {
+  const c = context.getStore();
+  return c?.owner === owner ? c.seq : undefined;
+}
+export function withRequest<T>(owner: Conversation, seq: number | undefined, run: () => T): T {
+  return seq ? context.run({ owner, seq }, run) : run();
+}
+export function decisionOrigin(owner: Conversation, id?: string) {
+  return id ? origins.get(owner)?.get(id) : undefined;
+}
+export function agentRequest(owner: Conversation, agent: string, ids: unknown) {
+  const tasks = Array.isArray(ids)
+    ? ids.flatMap((id) => owner.tasks.get(id) || [])
+    : [...owner.tasks.values()].filter((t) => t.agent === agent);
+  return tasks.findLast((t) => t.agent === agent && t.state === 'working')?.requestSeq ?? tasks.find((t) => t.agent === agent)?.requestSeq;
+}
 const registers = new WeakMap<Conversation, Map<number, Request>>();
 const roles: Record<string, string> = {
   orchestrator: 'Plan',
@@ -56,6 +76,30 @@ export function originPlan(owner: Conversation, seq?: number) {
 export function observeProgress(owner: Conversation, event: BridgeEvent) {
   const rows = register(owner);
   const now = event.at ?? Date.now();
+  if (event.kind === 'workflowChanged') {
+    const previous = successions.get(owner);
+    if (previous && previous !== event.succession?.id) {
+      origins.get(owner)?.delete(previous);
+      successions.delete(owner);
+    }
+    if (event.succession) successions.set(owner, event.succession.id);
+  }
+  if (
+    (event.requestId &&
+      ['approval', 'needRole', 'recommendRoles', 'finalReview', 'milestonePlanProposed', 'milestoneCommitProposed'].includes(event.kind)) ||
+    (event.kind === 'workflowChanged' && event.succession)
+  ) {
+    const id = event.requestId || event.succession.id;
+    let map = origins.get(owner);
+    if (!map) origins.set(owner, (map = new Map()));
+    const seq =
+      event.requestSeq ??
+      requestContext(owner) ??
+      agentRequest(owner, event.agent, undefined) ??
+      [...rows.values()].find((r) => r.tasks.some((t) => t.agent === event.agent && active(t)))?.seq ??
+      latest(owner)?.seq;
+    if (seq && !map.has(id)) map.set(id, seq);
+  } else if (event.requestId && event.kind.endsWith('Closed')) origins.get(owner)?.delete(event.requestId);
   if (event.kind === 'user' && event.seq) {
     rows.set(event.seq, {
       seq: event.seq,
@@ -71,6 +115,7 @@ export function observeProgress(owner: Conversation, event: BridgeEvent) {
       if (
         !row.tasks.some(active) &&
         !Object.keys(row.approvals).length &&
+        ![...(origins.get(owner)?.values() || [])].includes(row.seq) &&
         !row.plan?.pending &&
         !row.plan?.specNeedsRetry &&
         !row.blocked.length &&
@@ -139,13 +184,24 @@ export function observeProgress(owner: Conversation, event: BridgeEvent) {
     }
   }
   if (event.kind === 'approval') {
-    const row = [...rows.values()].find((r) => r.tasks.some((t) => t.agent === event.agent && t.state === 'working')) ?? latest(owner);
+    const row =
+      rows.get(decisionOrigin(owner, event.requestId) ?? -1) ??
+      [...rows.values()].find((r) => r.tasks.some((t) => t.agent === event.agent && t.state === 'working')) ??
+      latest(owner);
     if (row) row.approvals[event.requestId] = event.agent;
   } else if (event.kind === 'approvalClosed') {
     for (const row of rows.values()) delete row.approvals[event.requestId];
   } else if (event.kind === 'milestoneProgress') {
-    const row = rows.get(owner.plan?.seq ?? 0);
-    if (row) row.milestones = event.milestones;
+    const row = rows.get(event.requestSeq ?? requestContext(owner) ?? owner.plan?.seq ?? latest(owner)?.seq ?? 0);
+    if (row && Array.isArray(event.milestones))
+      row.milestones = event.milestones.map((m: MilestoneView) => {
+        const old = row.milestones.find((p) => p.number === m.number && p.title === m.title);
+        return {
+          ...m,
+          start: old?.start ?? (m.status === 'pending' ? undefined : now),
+          end: m.status === 'committed' ? (old?.end ?? now) : undefined,
+        };
+      });
   } else if (event.kind === 'delegationBlocked') {
     const row = rows.get(event.requestSeq);
     if (row) row.blocked = [...new Set([...row.blocked, ...(event.agents as string[])])];
@@ -156,6 +212,7 @@ export function restoreProgress(owner: Conversation, events: BridgeEvent[]) {
   for (const row of register(owner).values()) {
     row.approvals = {};
     row.blocked = [];
+    if (row.plan?.specRequestedFrom && !row.plan.finished && !row.plan.approved && !row.plan.pending) row.plan.specNeedsRetry = true;
     for (const task of row.tasks) if (active(task)) task.state = 'interrupted';
   }
 }
@@ -163,7 +220,7 @@ type Wait = { reason: string; action?: string; card?: string; agent?: string; se
 export function pendingWork(owner: Conversation): Wait[] {
   const waits: Wait[] = [];
   const add = (reason: string, action?: string, card?: string, agent?: string, seq = latest(owner)?.seq) =>
-    waits.push({ reason, action, card, agent, seq });
+    waits.push({ reason, action, card, agent, seq: decisionOrigin(owner, card) ?? seq });
   if (owner.succession) add('Choose a coordinator', 'Choose coordinator', owner.succession.id);
   for (const row of register(owner).values())
     for (const [id, agent] of Object.entries(row.approvals)) add('Tool approval requested', 'Open approval', id, agent, row.seq);
@@ -189,7 +246,14 @@ export function pendingWork(owner: Conversation): Wait[] {
   if (milestone) add(milestone.reason, milestone.action, milestone.card);
   if (owner.pendingFinal) add('Final confirmation', 'Open confirmation', owner.pendingFinal);
   for (const h of owner.heldRelays) add('Held reply to ' + h.targets.join(', '), 'Resume', 'resume', h.from, h.requestSeq);
-  for (const [id, task] of owner.batch?.pending || []) add('Waiting for batch member', undefined, undefined, id, forTask(owner, task)?.seq);
+  for (const [id, task] of owner.batch?.pending || [])
+    add(
+      'Waiting for ' + (owner.team.find((m) => m.id === id)?.name || id),
+      undefined,
+      undefined,
+      owner.team.find((m) => m.role === 'orchestrator')?.id,
+      forTask(owner, task)?.seq,
+    );
   for (const member of owner.team) {
     if (owner.providerChanges.has(member.id)) add('Switching provider', undefined, undefined, member.id);
     if (owner.agents[member.id]?.approvals.size && !waits.some((w) => w.agent === member.id && w.action === 'Open approval'))
@@ -217,11 +281,20 @@ export function progressView(owner: Conversation, waits: Wait[]) {
       end: running ? undefined : row.end,
       status: waiting ? 'Waiting for you' : running ? 'In progress' : broken ? 'Interrupted' : answered ? 'Answered' : 'Done',
       stages: row.milestones.length
-        ? row.milestones.map((m) => ({ name: m.title, state: m.status }))
-        : stages.map((name) => ({
-            name: answered ? 'Answer' : name,
-            state: row.tasks.some((t) => t.stage === name && active(t)) ? 'working' : row.tasks.findLast((t) => t.stage === name)?.state,
-          })),
+        ? row.milestones.map((m) => ({ name: m.title, state: m.status, start: m.start, end: m.end }))
+        : stages.map((name) => {
+            const tasks = row.tasks.filter((t) => t.stage === name),
+              live = tasks.filter(active);
+            const waitingOn = waiting?.agent && live.some((t) => t.agent === waiting.agent);
+            return {
+              name: answered ? 'Answer' : name,
+              state: waitingOn ? 'waiting' : live.length ? 'working' : tasks.at(-1)?.state,
+              start: tasks[0].start,
+              end: live.length ? undefined : tasks.reduce((end, t) => Math.max(end, t.end || t.start), 0),
+              agents: [...new Set((live.length ? live : tasks).map((t) => t.name))],
+              round: tasks.at(-1)?.round,
+            };
+          }),
       total: row.milestones.length || undefined,
       tasks: row.tasks,
       waiting,

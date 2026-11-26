@@ -58,13 +58,22 @@ export function renderProgress(state, force = false) {
   app.dataset.progress = mode;
   app.dataset.folded = String(folded[mode]);
   const collapsed = folded[mode] && !inlineDrawer;
-  const current = row.stages.filter((s) => ['working', 'checking', 'waiting_for_commit', 'blocked', 'queued'].includes(s.state));
-  const stage = current[0] || row.stages.at(-1);
+  const current = row.stages.filter((s) => ['working', 'checking', 'waiting_for_commit', 'waiting', 'blocked', 'queued'].includes(s.state));
+  const stage = current[0] || row.stages.find((s) => s.state === 'pending') || row.stages.at(-1);
   const phase = (row.total ? 'Step ' + (row.stages.indexOf(stage) + 1) + ' of ' + row.total + ' · ' : '') + (stage?.name || 'Request');
   const working = row.tasks.filter((t) => ['working', 'queued'].includes(t.state)).map((t) => t.name);
-  const brief = [phase, ...new Set(working), row.status].join(' · ');
+  const brief = [
+    phase,
+    ...new Set(working),
+    row.status,
+    stage?.round > 1 ? 'round ' + stage.round : '',
+    stage?.start ? duration(stage.start, stage.end) : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
   const wait = row.waiting;
   floating.textContent = (wait ? '! ' : '') + phase;
+  floating.classList.toggle('progress-alert', Boolean(wait));
   floating.onclick = () => drawer.showModal();
   drawer.onclick = (e) => {
     if (e.target === drawer) drawer.close();
@@ -131,7 +140,19 @@ export function renderProgress(state, force = false) {
             .join(' · '),
         );
       for (const stage of row.stages) {
-        const li = h('li', stage.state, stage.name + ' · ' + stage.state);
+        const li = h(
+          'li',
+          stage.state,
+          [
+            stage.name,
+            stage.state,
+            stage.agents?.length > 1 ? stage.agents.length + ' agents' : stage.agents?.[0],
+            stage.round > 1 ? 'round ' + stage.round : '',
+            stage.start ? duration(stage.start, stage.end) : '',
+          ]
+            .filter(Boolean)
+            .join(' · '),
+        );
         const tasks = row.tasks.filter((t) => !row.total && (t.stage === stage.name || stage.name === 'Answer'));
         if (mode === 'sidebar' && tasks.length) {
           const list = h('ul');

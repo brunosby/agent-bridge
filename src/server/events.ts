@@ -1,4 +1,4 @@
-import { register, observeProgress, pendingWork, progressView } from './request-progress.ts';
+import { requestContext, register, observeProgress, pendingWork, progressView } from './request-progress.ts';
 import { loggingPrefixes } from '../workspace/secret-patterns.ts';
 import { redact, redactRecord } from '../core/secret-detection.ts';
 import { successorChoices, watchCoordinator } from './task-workflow.ts';
@@ -18,9 +18,16 @@ import { projectLabel } from './project.ts';
 import { DRIVERS } from '../providers/registry.ts';
 
 export function publish(ev: BridgeEvent): BridgeEvent {
-  const full: BridgeEvent = { seq: ++S.seq, at: Date.now(), ...redactRecord(ev, loggingPrefixes()) };
+  const seq = S.conv && requestContext(S.conv);
+  const full: BridgeEvent = {
+    seq: ++S.seq,
+    at: Date.now(),
+    ...(seq && ev.kind !== 'state' && { requestSeq: seq }),
+    ...redactRecord(ev, loggingPrefixes()),
+  };
   if (S.conv && !['delta', 'text', 'tool', 'state', 'stderr'].includes(full.kind)) observeProgress(S.conv, full);
-  S.history.push(full);
+  // State is delivered as a fresh snapshot on reconnect, never replayed.
+  if (full.kind !== 'state') S.history.push(full);
   if (S.history.length > 20000) S.history.splice(0, S.history.length - 20000);
   const saved = full.kind === 'milestonePlanProposed' ? { ...full, command: '', commandSaved: false } : full;
   if (S.conv && !S.conv.transcript.destroyed) S.conv.transcript.write(JSON.stringify(saved) + '\n');
@@ -106,6 +113,8 @@ export function recordWorkflow(owner: Conversation, plan = owner.plan) {
     current: plan === owner.plan,
     succession: owner.succession ? { ...owner.succession } : null,
   });
+  const row = plan && register(owner).get(plan.seq);
+  if (row) row.plan = plan;
   publishState();
 }
 

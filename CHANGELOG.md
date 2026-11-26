@@ -58,6 +58,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
+- Late decisions and held replies keep their originating request when another user message is already active. Batch waits name the outstanding member on the coordinator card.
+
 - Reviewer deliveries queued during a provider switch keep the original user request.
 
 - Claude Code starts from its npm launcher on Windows. Startup failures now show the underlying error and point to `claude.command` immediately.
