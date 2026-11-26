@@ -72,14 +72,15 @@ export function sizeBadge(node, state, editable = true) {
 export function renderWorkflow(state) {
   const pending = state.taskPlan?.pending;
   const successor = state.succession;
+  const decisions = [...(state.earlierDecisions || []).map((p) => p.pending), pending, successor].filter(Boolean);
   for (const [id, card] of approvals) {
-    if (card.dataset.workflow && id !== pending?.id && id !== successor?.id) {
+    if (card.dataset.workflow && !decisions.some((d) => d.id === id)) {
       card.remove();
       approvals.delete(id);
       updatePending();
     }
   }
-  for (const request of [pending, successor].filter(Boolean)) {
+  for (const request of decisions) {
     const succession = request === successor;
     const choicesKey = succession ? JSON.stringify([request.choices, request.waiting, request.removed]) : '';
     const existing = approvals.get(request.id);
@@ -109,7 +110,7 @@ export function renderWorkflow(state) {
       try {
         await api(succession ? 'coordinatorDecision' : 'taskDecision', {
           conversationId: state.conversationId,
-          seq: state.taskPlan?.seq,
+          seq: state.earlierDecisions?.find((p) => p.pending.id === request.id)?.seq ?? state.taskPlan?.seq,
           requestId: request.id,
           action,
           ...values,

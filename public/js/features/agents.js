@@ -246,6 +246,8 @@ export function renderCard(a) {
   if (task && availability.available && availability.activity !== 'waiting') {
     c.status.textContent = working.length ? (working[0].activity || 'working') + ' · ' + working.length : 'queued · ' + tasks.length;
   }
+  const wait = store.state.pendingWork?.find((w) => w.agent === a.id && w.reason !== 'Agent is working');
+  if (wait) c.status.textContent = wait.reason;
   c.taskLink.hidden = !task?.sourceSeq;
   c.taskLink.dataset.seq = task?.sourceSeq || '';
   c.tokens.textContent = `${fmtTokens(a.tokens)} tok${a.cachedTokens ? ` (+${fmtTokens(a.cachedTokens)} cache)` : ''}`;

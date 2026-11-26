@@ -1,3 +1,4 @@
+import { register, observeProgress, pendingWork, progressView } from './request-progress.ts';
 import { loggingPrefixes } from '../workspace/secret-patterns.ts';
 import { redact, redactRecord } from '../core/secret-detection.ts';
 import { successorChoices, watchCoordinator } from './task-workflow.ts';
@@ -18,6 +19,7 @@ import { DRIVERS } from '../providers/registry.ts';
 
 export function publish(ev: BridgeEvent): BridgeEvent {
   const full: BridgeEvent = { seq: ++S.seq, at: Date.now(), ...redactRecord(ev, loggingPrefixes()) };
+  if (S.conv && !['delta', 'text', 'tool', 'state', 'stderr'].includes(full.kind)) observeProgress(S.conv, full);
   S.history.push(full);
   if (S.history.length > 20000) S.history.splice(0, S.history.length - 20000);
   const saved = full.kind === 'milestonePlanProposed' ? { ...full, command: '', commandSaved: false } : full;
@@ -96,11 +98,12 @@ export function teamState() {
   });
 }
 
-export function recordWorkflow(owner: Conversation) {
+export function recordWorkflow(owner: Conversation, plan = owner.plan) {
   if (owner !== S.conv) return;
   publish({
     kind: 'workflowChanged',
-    plan: owner.plan ? structuredClone(owner.plan) : null,
+    plan: plan ? structuredClone(plan) : null,
+    current: plan === owner.plan,
     succession: owner.succession ? { ...owner.succession } : null,
   });
   publishState();
@@ -108,8 +111,15 @@ export function recordWorkflow(owner: Conversation) {
 
 export function stateEvent() {
   const team = teamState();
+  const waits = pendingWork(S.conv);
   return {
     kind: 'state',
+    progressLayout: setting('progressLayout'),
+    progress: progressView(S.conv, waits),
+    pendingWork: waits,
+    earlierDecisions: [...register(S.conv).values()]
+      .filter((row) => row.seq !== S.conv.plan?.seq && row.plan?.pending)
+      .map((row) => ({ seq: row.seq, pending: row.plan!.pending })),
     taskPlan: S.conv.plan
       ? {
           seq: S.conv.plan.seq,
@@ -161,7 +171,7 @@ export function resetClients() {
 }
 
 function isPrivateEvent(event: BridgeEvent): boolean {
-  return ['projectBaseline', 'providerHandoff', 'providerHandoffDelivered'].includes(event.kind);
+  return ['delegationBlocked', 'projectBaseline', 'providerHandoff', 'providerHandoffDelivered'].includes(event.kind);
 }
 
 export function replayHistory(res: ServerResponse): void {

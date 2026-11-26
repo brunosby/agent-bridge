@@ -84,7 +84,11 @@
           <button id="stopAll" class="btn btn--danger" title="Interrupt every agent and pause the relay">Stop all</button>
         </div>
       </section>
+      <aside id="progressDock" aria-label="Request progress"><section id="requestProgress" hidden></section></aside>
+      <dialog id="progressDrawer" aria-label="Request progress"></dialog>
       <div class="conversation-log">
+        <div id="progressTop"></div>
+        <button class="btn" id="progressFloat" hidden aria-haspopup="dialog"></button>
         <details id="milestonePanel" class="log-filters milestone-panel" hidden>
           <summary id="milestoneSummary">Milestones</summary>
           <ol id="milestoneList"></ol>

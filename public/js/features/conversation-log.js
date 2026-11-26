@@ -1,3 +1,4 @@
+import { renderProgress } from './request-progress.js';
 import { applyAgentAccent } from '../core/agent-accent.js';
 import { parseMilestoneMarkers } from '../core/milestone-markers.js';
 import { milestoneCommitCard, milestonePlanCard, renderMilestoneProgress } from './milestones.js';
@@ -400,6 +401,7 @@ export function handle(ev) {
         sizeBadge(views.get(transcript.bySequence.get(store.state.taskPlan.seq))?.node, store.state, false);
       store.state = ev;
       renderWorkflow(ev);
+      renderProgress(ev);
       if (ev.taskPlan) sizeBadge(views.get(transcript.bySequence.get(ev.taskPlan.seq))?.node, ev);
       refreshNames(ev);
       renderMilestoneProgress(ev.milestones);

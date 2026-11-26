@@ -37,6 +37,7 @@ export interface SettingDef {
 
 /** Settings that the Settings screen can change (saved to config.local.json). */
 export const SETTINGS: Record<string, SettingDef> = {
+  progressLayout: { type: 'enum', values: ['sidebar', 'top'], default: 'sidebar' },
   userName: { type: 'string', default: 'the user' },
   routingMode: { type: 'enum', values: Object.keys(ROUTING_MODES), default: 'orchestrator' },
   autoRelay: { type: 'boolean', default: true },

@@ -8,6 +8,8 @@ For example, you ask for a login screen. The orchestrator asks the Coder to buil
 
 Mixing providers means one model reviews another's work and each role can use the model it does best. Agent Bridge runs the CLIs you already have, so usage counts against your own provider accounts; it needs no account or key of its own.
 
+Use **Settings → General → Progress layout** to follow the latest request beside or above the chat. Expand **Earlier requests** to see outstanding work from previous messages.
+
 ## Quick start
 
 1. Install Node.js 22.18+ and the CLI of at least one provider: Claude Code, Codex or OpenCode.

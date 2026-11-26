@@ -6,6 +6,7 @@ import { api } from '../core/api.js';
 import { loadCatalog } from '../main.js';
 import { addSys } from './conversation-log.js';
 export const SETTING_LABELS = {
+  progressLayout: ['Progress layout', 'Where to show progress for your latest request.'],
   userName: ['Your name', 'How the agents refer to you.'],
   routingMode: ['Default routing', 'Used by new conversations. The header switch changes only the open one.'],
   autoRelay: ['Auto-relay', 'Forward replies between agents automatically.'],
@@ -70,7 +71,14 @@ export function renderSettingsForm() {
         input = h('select');
         for (const v of def.values) {
           const m = store.catalog.routingModes.find((x) => x.id === v);
-          const names = { ask: 'Ask me', closest: 'Continue with the closest agent', off: 'Off', automatic: 'Automatic' };
+          const names = {
+            sidebar: 'Sidebar',
+            top: 'Top panel',
+            ask: 'Ask me',
+            closest: 'Continue with the closest agent',
+            off: 'Off',
+            automatic: 'Automatic',
+          };
           input.appendChild(new Option(m ? m.label : names[v] || v, v));
         }
         input.value = value;

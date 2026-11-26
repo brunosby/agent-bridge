@@ -80,6 +80,7 @@ export type TurnEnded = Extract<AgentTaskEvent, { kind: 'turnEnd' }>;
 export type SpecAttempt = 'draft' | 'correction';
 
 export interface TrackedTask {
+  requestSeq?: number;
   specAttempt?: SpecAttempt;
   id: string;
   agent: string;
@@ -92,6 +93,7 @@ export interface TrackedTask {
 export type TaskEvent = AgentTaskEvent | ({ kind: 'taskQueued'; state: 'queued' } & TrackedTask);
 
 export interface RelayPart {
+  requestSeq?: number;
   from: string;
   text: string;
   shortText?: string;
@@ -294,6 +296,7 @@ export type MilestoneEvent =
 export type AgentIdentity = Pick<AgentSpec, 'id' | 'name' | 'driver' | 'role'>;
 
 export interface HeldRelay {
+  requestSeq?: number;
   from: string;
   parts: RelayPart[];
   targets: string[];

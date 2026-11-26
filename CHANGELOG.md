@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Added
 
+- Follow the latest request in a sidebar or top panel, including delegations, approvals and earlier requests still running.
+
 - Single-use links authenticate the browser tab. Restarting preserves access in that tab. Reopening from the launcher revokes previous access. The conversation records tab openings, code use and reuse alerts.
 - Push and PR approval cards identify known secrets in outgoing commits and PR text, including text files with image extensions. Cards show each applied exception and its reason. Projects can add detection rules and enable a pre-push hook in Settings.
 - Publication checks use the destination refs and the remote default branch to identify outgoing commits. Private remotes can use system and user Git credentials. The pre-push hook also checks the default branch when publishing a new ref.

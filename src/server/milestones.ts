@@ -77,6 +77,19 @@ export function restoreMilestoneViews(owner: Conversation, previous: unknown) {
   if (restored.length) archivedViews.set(owner, restored);
 }
 
+export function milestonePending(owner: Conversation) {
+  const flow = flows.get(owner);
+  const card = flow?.proposal || flow?.commit;
+  return card
+    ? {
+        reason: flow?.proposal ? 'Milestone plan needs approval' : 'Milestone commit needs approval',
+        action: 'Open milestone',
+        card: card.id,
+      }
+    : flow?.busy || hasActiveMilestones(owner)
+      ? { reason: 'Milestone in progress' }
+      : undefined;
+}
 export function hasActiveMilestones(owner: Conversation) {
   const flow = flows.get(owner);
   return owner.routingMode === 'orchestrator' && Boolean(flow && activeMilestone(flow));

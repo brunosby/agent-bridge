@@ -1,3 +1,4 @@
+import { latest, originPlan, forTask } from './request-progress.ts';
 import { cancelMilestoneDecision, hasActiveMilestones, milestoneInstructions } from './milestones.ts';
 // Routing: who receives each message, review rounds, missing roles, delivery to agents.
 import type {
@@ -90,9 +91,10 @@ function reviewRoundNote(text: string): string {
 function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): boolean {
   const eligible = item.targets.filter((id) => canQueueWork(statusFor(owner, id)) && !owner.batch?.pending.has(id));
   const lead = orchestratorId();
-  const plan = owner.plan;
+  const plan = originPlan(owner, item.requestSeq);
   const needsSpec = plan?.size === 'large' && (!plan.approved || plan.awaitingSpecRevision);
   const coders = needsSpec ? eligible.filter((id) => owner.team.some((member) => member.id === id && member.role === 'coder')) : [];
+  if (coders.length) publish({ kind: 'delegationBlocked', requestSeq: item.requestSeq ?? plan?.seq, agents: coders });
   let targets = eligible.filter((id) => !coders.includes(id));
   const skipped = plan?.size === 'small' && item.from === lead ? targets.slice(1) : [];
   if (skipped.length) targets = targets.slice(0, 1);
@@ -118,7 +120,7 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
     plan.specRequestedFrom = architect;
     recordWorkflow(owner);
   }
-  const requestedDraft = coders.length && lead && !architect && requestSpec(owner, lead);
+  const requestedDraft = coders.length && lead && !architect && requestSpec(owner, lead, plan);
   const note = coders.length
     ? 'Specification approval is pending. ' +
       coders.map((id) => '@' + id).join(', ') +
@@ -151,6 +153,7 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
     const intro = item.parts.length > 1 ? '[Results from ' + item.parts.length + ' agents]\n\n' : '';
     const draft = needsDraft && to === architect ? '\nPrepare the specification and decisions as [[SPEC]] for user approval.' : '';
     deliver(to, intro + body + draft, {
+      requestSeq: item.requestSeq,
       from: item.from,
       sourceSeq: item.sourceSeq,
       specAttempt: draft ? 'draft' : undefined,
@@ -219,7 +222,7 @@ export function drainHeld(owner: Conversation) {
 
 export function completeBatch(owner: Conversation, agent: string, taskId: string, text?: string, sourceSeq?: number, shortText?: string) {
   if (owner !== S.conv) return;
-  const batch = finishBatchPart(owner, agent, taskId, text, sourceSeq, shortText);
+  const batch = finishBatchPart(owner, agent, taskId, text, sourceSeq, shortText, forTask(owner, taskId)?.seq);
   if (!batch) return;
   const orch = orchestratorId();
   if (batch.pending.size) {
@@ -234,13 +237,17 @@ export function completeBatch(owner: Conversation, agent: string, taskId: string
   }
   publish({ kind: 'batchCompleted', agents: batch.results.map((part) => part.from) } satisfies BatchEvent);
   if (!batch.results.length || !orch || (!owner.succession && !canQueueWork(statusFor(owner, orch)))) return;
-  relayOrHold(owner, {
-    kind: 'batch',
-    targets: [orch],
-    parts: batch.results,
-    from: batch.results[0].from,
-    sourceSeq: sourceSeq ?? batch.results.findLast((item) => item.sourceSeq)?.sourceSeq,
-  });
+  for (const seq of new Set(batch.results.map((part) => part.requestSeq))) {
+    const parts = batch.results.filter((part) => part.requestSeq === seq);
+    relayOrHold(owner, {
+      kind: 'batch',
+      requestSeq: seq,
+      targets: [orch],
+      parts,
+      from: parts[0].from,
+      sourceSeq: parts.findLast((part) => part.sourceSeq)?.sourceSeq,
+    });
+  }
 }
 
 export function cancelBatchPart(owner: Conversation, agent: string, reason: string, taskIds?: string[]) {
@@ -248,7 +255,7 @@ export function cancelBatchPart(owner: Conversation, agent: string, reason: stri
   if (taskId && (!taskIds || taskIds.includes(taskId))) completeBatch(owner, agent, taskId, '(' + reason + ')');
 }
 
-export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; sourceSeq?: number }): void {
+export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; sourceSeq?: number; requestSeq?: number }): void {
   const raw = (ev.text || '').trim();
   const reviewer = S.conv.team.some((member) => member.id === fromId && member.role === 'reviewer');
   const reviewNote = reviewer ? reviewRoundNote(raw) : '';
@@ -281,12 +288,9 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
 
   // In orchestrator mode only the orchestrator closes the work; a worker's [[DONE]] still goes back to it.
   const closes = S.conv.routingMode !== 'orchestrator' || fromId === orch;
+  const plan = originPlan(owner, ev.requestSeq);
   const done = DONE_MARKER.test(summary ? body : text);
-  if (
-    done &&
-    closes &&
-    (owner.plan?.pending || owner.plan?.awaitingSpecRevision || (owner.plan?.specRequestedFrom && !owner.plan.approved))
-  ) {
+  if (done && closes && (plan?.pending || plan?.awaitingSpecRevision || (plan?.specRequestedFrom && !plan.approved))) {
     publish({ kind: 'info', agent: fromId, text: 'The task is waiting for a decision or a specification before it can finish.' });
     return;
   }
@@ -295,10 +299,11 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
     return;
   }
   if (done && closes) {
-    if (owner.plan) {
-      owner.plan.finished = true;
-      recordWorkflow(owner);
+    if (plan) {
+      plan.finished = true;
+      recordWorkflow(owner, plan);
     }
+    if (ev.requestSeq && ev.requestSeq !== latest(owner)?.seq) return;
     S.conv.relay.halted = true;
     delete owner.relay.limitPause;
     publish({ kind: 'system', text: `@${fromId} marked the work as done. Waiting for you.` });
@@ -331,6 +336,7 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
   }
   relayOrHold(owner, {
     kind: 'reply',
+    requestSeq: ev.requestSeq,
     from: fromId,
     parts: [{ from: fromId, text, shortText }],
     targets,
@@ -708,7 +714,11 @@ export async function userSend(text: string, target?: string, mentionChecks?: un
       for (const to of targets) {
         const instructions = to === orchestratorId() ? milestoneInstructions(owner) : '';
         const message = '[Message from ' + setting('userName') + ']' + note + '\n' + canonical;
-        deliver(to, instructions ? instructions + '\n\n' + message : message, { from: 'user', sourceSeq: source.seq });
+        deliver(to, instructions ? instructions + '\n\n' + message : message, {
+          from: 'user',
+          sourceSeq: source.seq,
+          requestSeq: source.seq,
+        });
       }
       publishState();
     });

@@ -186,7 +186,7 @@ export function loadConversation(
   }
   for (const spec of summary.team) retiredAgents.delete(spec.id);
   const events = all.filter((e) => typeof e.seq === 'number' && e.kind !== 'state' && e.kind !== 'stderr');
-  let lastSeq = events.reduce((m, e) => Math.max(m, e.seq ?? 0), 0);
+  let lastSeq = all.reduce((m, e) => Math.max(m, e.seq ?? 0), 0);
   const lastAt = summary.lastAt || Date.now();
 
   // Older logs used the provider name as the agent id; map it to the ids of the rebuilt team.
@@ -238,7 +238,7 @@ export function loadConversation(
     interrupted.get(agent)?.push(taskId);
   }
   for (const [agent, taskIds] of interrupted) {
-    events.push({ seq: ++lastSeq, at: lastAt, kind: 'tasksCancelled', agent, taskIds });
+    events.push({ seq: ++lastSeq, at: lastAt, kind: 'tasksCancelled', agent, taskIds, interrupted: true });
   }
   return { ...summary, events, lastSeq, lastAgentId, retiredAgents };
 }

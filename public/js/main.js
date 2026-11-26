@@ -1,4 +1,5 @@
 // Entry point of the page. The feature modules below register their buttons when imported.
+import { bindProgress } from './features/request-progress.js';
 import './features/add-agent.js';
 import './features/settings.js';
 import './features/conversations.js';
@@ -10,6 +11,7 @@ import { $ } from './core/dom.js';
 import { renderState } from './features/agents.js';
 import { addSys } from './features/conversation-log.js';
 import { setupRequestNotifications } from './features/request-notifications.js';
+bindProgress(() => store.state);
 export async function loadCatalog() {
   store.catalog = await api('catalog');
   const r = $('routing');

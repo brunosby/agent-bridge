@@ -3,15 +3,19 @@ import { DRIVERS } from '../providers/registry.ts';
 import { canReceiveWork } from '../core/agent-status.ts';
 import { rosterText } from '../core/prompts.ts';
 import { reviewChanges } from '../workspace/git-context.ts';
+import { redact } from '../core/secret-detection.ts';
+import { loggingPrefixes } from '../workspace/secret-patterns.ts';
+import { latest, register, originPlan } from './request-progress.ts';
 import { closeReview, openReview } from './review-mcp.ts';
 import { randomUUID } from 'node:crypto';
 import { config, setting } from '../config/settings.ts';
-import { publish, recordWorkflow } from './events.ts';
+import { publish, publishState, recordWorkflow } from './events.ts';
 import { statusFor } from './team.ts';
 import { orchestratorId, S } from './state.ts';
 
 /** Send a message to one agent, adding the team roster or a role note when they changed. */
 type Delivery = {
+  requestSeq?: number;
   originalRequest?: string;
   specAttempt?: SpecAttempt;
   from: string;
@@ -32,6 +36,8 @@ export function finishProviderDeliveries(owner: Conversation, id: string, failur
   if (!queued) return;
   queues?.delete(id);
   for (const { text, delivery } of queued) {
+    const row = register(owner).get(delivery.requestSeq ?? -1);
+    if (row?.preparing) row.preparing--;
     if (delivery.taskId && owner.batch?.pending.get(id) !== delivery.taskId) continue;
     if (!failure) deliver(id, text, delivery);
     else if (delivery.discarded) delivery.discarded(failure);
@@ -41,11 +47,18 @@ export function finishProviderDeliveries(owner: Conversation, id: string, failur
 
 export function deliver(toId: string, text: string, delivery: Delivery): void {
   const owner = S.conv;
+  const row = register(owner).get(delivery.requestSeq ?? delivery.sourceSeq ?? -1) ?? latest(owner);
+  delivery = {
+    ...delivery,
+    requestSeq: delivery.requestSeq ?? row?.seq,
+    originalRequest: delivery.originalRequest ?? row?.original ?? owner.lastUserText,
+  };
   if (owner.providerChanges.has(toId)) {
     let queues = providerQueues.get(owner);
     if (!queues) providerQueues.set(owner, (queues = new Map()));
     let queued = queues.get(toId);
     if (!queued) queues.set(toId, (queued = []));
+    if (row) row.preparing = (row.preparing || 0) + 1;
     queued.push({ text, delivery: { ...delivery, originalRequest: delivery.originalRequest ?? owner.lastUserText ?? '' } });
     return;
   }
@@ -67,6 +80,7 @@ export function deliver(toId: string, text: string, delivery: Delivery): void {
     spec.role === role &&
     (!delivery.taskId || owner.batch?.pending.get(toId) === delivery.taskId);
   const discard = () => delivery.discarded?.('agent or batch changed while preparing the delivery');
+  if (row) row.preparing = (row.preparing || 0) + 1;
   const pending = (previous || Promise.resolve())
     .then(async () => {
       if (!valid()) return discard();
@@ -97,6 +111,8 @@ export function deliver(toId: string, text: string, delivery: Delivery): void {
   queue.set(toId, pending);
   void pending.then(() => {
     if (queue.get(toId) === pending) queue.delete(toId);
+    if (row?.preparing) row.preparing--;
+    if (owner === S.conv) publishState();
   });
 }
 
@@ -113,7 +129,7 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
   }
   const id = taskId || randomUUID();
   const extras: string[] = [];
-  const plan = owner.plan;
+  const plan = originPlan(owner, delivery.requestSeq);
   const notices =
     plan && !plan.finished && (!sourceSeq || sourceSeq >= plan.seq) && toId === orchestratorId() ? plan.pendingRoutingNotices : undefined;
   if (notices?.length) extras.push(...notices.map((note) => '[Agent Bridge routing] ' + note));
@@ -148,8 +164,8 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
         (declined ? ' Declined roles: ' + declined + '.' : ''),
     );
   }
-  if (owner.plan?.approved?.length && owner.team.some((m) => m.id === toId && ['coder', 'reviewer'].includes(m.role)))
-    extras.push('[Approved specification] ' + owner.plan.approved.join(', '));
+  if (plan?.approved?.length && owner.team.some((m) => m.id === toId && ['coder', 'reviewer'].includes(m.role)))
+    extras.push('[Approved specification] ' + plan.approved.join(', '));
   extras.push(...context);
   S.conv.lastSender[toId] = from;
   if (from !== 'user') publish({ kind: 'routed', from, to: toId, relayed: true, hop: S.conv.relay.hops });
@@ -157,12 +173,25 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
     id,
     ...(delivery.specAttempt && { specAttempt: delivery.specAttempt }),
     agent: toId,
+    requestSeq: delivery.requestSeq,
     from,
     sourceSeq: sourceSeq ?? owner.plan?.seq ?? null,
     state: 'queued' as const,
   };
   S.conv.tasks.set(id, task);
-  publish({ kind: 'taskQueued', ...task } satisfies TaskEvent);
+  const member = owner.team.find((m) => m.id === toId);
+  publish({
+    kind: 'taskQueued',
+    ...task,
+    role: member?.role,
+    name: member?.name,
+    description: redact(text, loggingPrefixes())
+      .split('\n')
+      .filter((line) => line && !line.startsWith('['))
+      .slice(0, 2)
+      .join(' ')
+      .slice(0, 180),
+  });
   try {
     agent.send(extras.length ? extras.join('\n\n') + '\n\n' + text : text, id);
     if (notices?.length && plan && plan === owner.plan && plan.pendingRoutingNotices === notices) {

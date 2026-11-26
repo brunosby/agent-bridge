@@ -1,3 +1,4 @@
+import { originPlan, restoreProgress } from './request-progress.ts';
 import { activateSecretPatterns, loggingPrefixes } from '../workspace/secret-patterns.ts';
 import { markApprovalReady } from './shell-approvals.ts';
 import { reviewPublication, forgetReview } from './publication-approval.ts';
@@ -125,7 +126,8 @@ function prepareConversation({ workDir, restoreId, team, routingMode }: OpenOpti
     const activePaths = new Set([workDir, ...owner.team.flatMap((spec) => (spec.worktree && spec.cwd ? [spec.cwd] : []))]);
     owner.project = Object.fromEntries(Object.entries(owner.project).filter(([cwd]) => activePaths.has(cwd)));
     for (const cwd of activePaths) captureProject(owner, cwd, !saved);
-    const workflow = saved?.events.findLast((event) => event.kind === 'workflowChanged');
+    const workflow = saved?.events.findLast((event) => event.kind === 'workflowChanged' && event.current !== false);
+    if (saved) restoreProgress(owner, saved.events);
     owner.plan = workflow?.plan ?? undefined;
     owner.succession = workflow?.succession ?? undefined;
     if (saved) restoreMilestoneViews(owner, saved.events.findLast((event) => event.kind === 'milestoneProgress')?.milestones);
@@ -204,6 +206,8 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
     }
     if (event.kind === 'inputAccepted') {
       settleProviderHandoff(owner, id, taskIdsFromLog(event.taskIds), true);
+      publish({ kind: 'inputAccepted', agent: id, taskIds: taskIdsFromLog(event.taskIds) });
+      publishState();
       return;
     }
     // Provider message and tool keys are only unique within their own session.
@@ -389,16 +393,19 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
         return;
       }
       delete owner.lastAnswerSeq[id];
-      const plan = owner.plan;
-      const currentTasks = plan ? finishedTasks.filter((task) => (task.sourceSeq ?? 0) >= plan.seq) : [];
-      if (lifecycle.ok && owner.plan && currentTasks.length) {
-        if (owner.plan.size === 'small') void checkGrowth(owner);
+      const plan = originPlan(owner, finishedTasks.at(-1)?.requestSeq);
+      const currentTasks = plan
+        ? finishedTasks.filter((task) => (task.requestSeq ? task.requestSeq === plan.seq : (task.sourceSeq ?? 0) >= plan.seq))
+        : [];
+      if (lifecycle.ok && plan && currentTasks.length) {
+        if (plan === owner.plan && plan.size === 'small') void checkGrowth(owner);
         const handled = readTaskBlocks(
           owner,
           id,
           workflow?.blocks || [],
           Boolean(text?.trim() || markers?.roles.length || milestone?.proposed),
           currentTasks.find((t) => t.specAttempt === 'correction')?.specAttempt ?? currentTasks.find((t) => t.specAttempt)?.specAttempt,
+          plan,
         );
         if (handled) {
           const batchId = owner.batch?.pending.get(id);
@@ -435,10 +442,17 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
           return;
         }
       }
-      onTurnEnd(id, { ...lifecycle, text: text ?? lifecycle.text, seq: published.seq, sourceSeq });
+      onTurnEnd(id, {
+        ...lifecycle,
+        text: text ?? lifecycle.text,
+        seq: published.seq,
+        sourceSeq,
+        requestSeq: finishedTasks.at(-1)?.requestSeq,
+      });
+      publishState();
     }
     if (lifecycle?.kind === 'tasksCancelled') cancelBatchPart(owner, id, 'cancelled: provider interrupted the task', lifecycle.taskIds);
-    if (ev.kind === 'taskStarted' || ev.kind === 'tasksCancelled') publishState();
+    if (['taskStarted', 'tasksCancelled', 'approval', 'approvalClosed'].includes(ev.kind)) publishState();
   });
 }
 

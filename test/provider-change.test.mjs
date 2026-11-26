@@ -46,7 +46,13 @@ test('provider change keeps identity, worktree and usage and sends the handoff o
     assert.equal(member(bridge.state(), agent.id).driver, 'fake');
     const result = await bridge.api('changeProvider', { agent: agent.id, driver: newDriver, model: 'fake-large', effort: 'high' });
     assert.equal(result.ready, true);
-    const switched = await idle(bridge, agent.id, beforeSwitch.seq);
+    const switched = await bridge.waitFor(
+      (event) =>
+        event.seq > beforeSwitch.seq &&
+        event.kind === 'state' &&
+        member(event, agent.id)?.driver === newDriver &&
+        member(event, agent.id)?.status.availability === 'ready',
+    );
     const old = member(initial, agent.id);
     const updated = member(switched, agent.id);
     assert.equal(updated.driver, newDriver);

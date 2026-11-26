@@ -1,3 +1,4 @@
+import { originPlan, register } from './request-progress.ts';
 import { randomUUID } from 'node:crypto';
 import { canReceiveWork } from '../core/agent-status.ts';
 import type { Conversation, AgentSpec, Size, SpecAttempt, TaskDecision, TaskPlan } from '../core/types.ts';
@@ -12,36 +13,39 @@ import { isRecommended } from '../core/roles.ts';
 
 export { recordWorkflow } from './events.ts';
 
-function openDecision(owner: Conversation, decision: TaskDecision) {
-  owner.plan!.pending = decision;
+function openDecision(owner: Conversation, decision: TaskDecision, plan = owner.plan!) {
+  plan.pending = decision;
   publish({ kind: 'workflowRequest', requestId: decision.id, agent: decision.agent, decision });
 }
 
-export function closeDecision(owner: Conversation, action: string, advance = false) {
-  const plan = owner.plan;
+export function closeDecision(owner: Conversation, action: string, advance = false, plan = owner.plan) {
   if (!plan?.pending) return;
   publish({ kind: 'workflowClosed', requestId: plan.pending.id, action });
   delete plan.pending;
   if (advance) {
     const next = plan.queuedDecisions?.shift();
-    if (next) openDecision(owner, next);
+    if (next) openDecision(owner, next, plan);
   } else delete plan.queuedDecisions;
-  recordWorkflow(owner);
+  recordWorkflow(owner, plan);
 }
 
-export function requestSpec(owner: Conversation, lead: string) {
-  const plan = owner.plan;
+export function requestSpec(owner: Conversation, lead: string, plan = owner.plan) {
   if (!plan || plan.approved || plan.pending?.kind === 'spec' || plan.queuedDecisions?.some((d) => d.kind === 'spec')) return;
   const architect = owner.team.find((member) => member.role === 'architect' && canReceiveWork(statusFor(owner, member.id)));
   if (architect) {
     if (plan.specRequestedFrom === architect.id) return;
     plan.specRequestedFrom = architect.id;
-    recordWorkflow(owner);
-    deliver(architect.id, 'Draft the specification and decisions as [[SPEC]] for this task:\n' + owner.lastUserText, {
-      from: lead,
-      sourceSeq: plan.seq,
-      specAttempt: 'draft',
-    });
+    recordWorkflow(owner, plan);
+    deliver(
+      architect.id,
+      'Draft the specification and decisions as [[SPEC]] for this task:\n' +
+        (register(owner).get(plan.seq)?.original ?? owner.lastUserText),
+      {
+        from: lead,
+        sourceSeq: plan.seq,
+        specAttempt: 'draft',
+      },
+    );
     return true;
   } else if (!offerRecommendedRoles(owner, lead, [{ id: 'architect', reason: 'Prepare the specification for approval before coding.' }])) {
     publish({ kind: 'system', text: 'An available Architect is needed for the specification. Add one or change the task size.' });
@@ -60,28 +64,27 @@ export function preparingSmallBaseline(owner: Conversation): boolean {
         if (owner !== S.conv || owner.plan !== plan) return;
         plan.baseline = baseline;
         delete plan.baselineDeferred;
-        recordWorkflow(owner);
+        recordWorkflow(owner, plan);
         drainHeld(owner);
       })
       .finally(() => capturingBaseline.delete(plan));
   }
   return true;
 }
-export function classify(owner: Conversation, size: Size, reason: string, manual: boolean) {
-  const plan = owner.plan;
+export function classify(owner: Conversation, size: Size, reason: string, manual: boolean, plan = owner.plan) {
   if (!plan || (!manual && plan.manual)) return;
   if (size !== 'large') {
     delete plan.specRequestedFrom;
     delete plan.specNeedsRetry;
     delete plan.awaitingSpecRevision;
     plan.queuedDecisions = plan.queuedDecisions?.filter((d) => d.kind !== 'spec');
-    if (plan.pending?.kind === 'spec') closeDecision(owner, 'size changed', true);
+    if (plan.pending?.kind === 'spec') closeDecision(owner, 'size changed', true, plan);
   }
   plan.size = size;
   plan.reason = reason.slice(0, 320);
   plan.classified = true;
   plan.manual = manual;
-  recordWorkflow(owner);
+  recordWorkflow(owner, plan);
   preparingSmallBaseline(owner);
 }
 
@@ -95,7 +98,7 @@ export async function checkGrowth(owner: Conversation) {
   const text = 'The small task now spans ' + reason + '. Reassess its size.';
   publish({ kind: 'system', text });
   if (lead) owner.pendingRoleNote[lead] = [owner.pendingRoleNote[lead], text].filter(Boolean).join('\n');
-  recordWorkflow(owner);
+  recordWorkflow(owner, p);
 }
 
 export function readTaskBlocks(
@@ -104,8 +107,8 @@ export function readTaskBlocks(
   blocks: { kind: string; size?: string; value: string }[],
   hasAction: boolean,
   specAttempt?: SpecAttempt,
+  p = owner.plan,
 ) {
-  const p = owner.plan;
   if (!p || owner.routingMode !== 'orchestrator') return false;
   const role = owner.team.find((a) => a.id === agent)?.role;
   let handled = false;
@@ -113,7 +116,7 @@ export function readTaskBlocks(
   let receivedSpec = false;
   for (const block of blocks) {
     if (block.kind === 'SIZE' && agent === orchestratorId()) {
-      classify(owner, block.size as Size, block.value, false);
+      classify(owner, block.size as Size, block.value, false, p);
     } else if (
       (block.kind === 'QUESTION' && agent === orchestratorId()) ||
       (block.kind === 'SPEC' && role === 'architect' && p.size === 'large')
@@ -133,8 +136,8 @@ export function readTaskBlocks(
             text:
               'A ' + (decision.kind === 'spec' ? 'specification' : 'question') + ' was queued. It will open after the current decision.',
           });
-        } else openDecision(owner, decision);
-        recordWorkflow(owner);
+        } else openDecision(owner, decision, p);
+        recordWorkflow(owner, p);
       } catch (error) {
         publish({ kind: 'error', agent, text: 'Invalid decision block: ' + String(error) });
         if (block.kind === 'SPEC') {
@@ -143,7 +146,7 @@ export function readTaskBlocks(
         }
         if (p.correctionRequested) continue;
         p.correctionRequested = true;
-        recordWorkflow(owner);
+        recordWorkflow(owner, p);
         deliver(agent, 'Correct your ' + block.kind + ' block: ' + String(error), { from: 'user', sourceSeq: p.seq });
       }
     }
@@ -160,7 +163,7 @@ export function readTaskBlocks(
     if (specAttempt === 'correction') {
       p.specRequestedFrom = agent;
       p.specNeedsRetry = true;
-      recordWorkflow(owner);
+      recordWorkflow(owner, p);
       publish({
         kind: 'error',
         agent,
@@ -180,7 +183,7 @@ export function readTaskBlocks(
   if (blocks.some((b) => b.kind === 'SIZE') && !hasAction && agent === orchestratorId()) {
     if (!p.nudged) {
       p.nudged = true;
-      recordWorkflow(owner);
+      recordWorkflow(owner, p);
       deliver(agent, 'Size recorded. Take the first action for this task now.', { from: 'user', sourceSeq: p.seq });
     } else
       publish({
@@ -194,14 +197,15 @@ export function readTaskBlocks(
 }
 
 export function resolveTask(owner: Conversation, body: Record<string, any>) {
-  const plan = owner.plan;
+  const plan = originPlan(owner, body.seq);
   if (!plan || owner.id !== body.conversationId || body.seq !== plan.seq) throw new Error('This task is no longer current.');
+  if (plan !== owner.plan && !plan.pending && !plan.specNeedsRetry) throw new Error('This task is no longer current.');
   const lead = orchestratorId();
   if (!lead || owner.succession) throw new Error('Choose the coordinator first.');
   if (plan.finished) throw new Error('This task is finished.');
   if (body.action === 'size') {
     if (!['small', 'medium', 'large'].includes(body.size)) throw new Error('Unknown task size.');
-    classify(owner, body.size, 'Selected by you', true);
+    classify(owner, body.size, 'Selected by you', true, plan);
     deliver(lead, 'The user selected task size ' + body.size + '. Continue the current task accordingly.', {
       from: 'user',
       sourceSeq: plan.seq,
@@ -218,12 +222,17 @@ export function resolveTask(owner: Conversation, body: Record<string, any>) {
     if (!architect) throw new Error('An available Architect is needed to retry.');
     delete plan.specNeedsRetry;
     plan.specRequestedFrom = architect.id;
-    recordWorkflow(owner);
-    deliver(architect.id, 'Retry the specification for this task using [[SPEC]] and [[/SPEC]]:\n' + owner.lastUserText, {
-      from: 'user',
-      sourceSeq: plan.seq,
-      specAttempt: 'draft',
-    });
+    recordWorkflow(owner, plan);
+    deliver(
+      architect.id,
+      'Retry the specification for this task using [[SPEC]] and [[/SPEC]]:\n' +
+        (register(owner).get(plan.seq)?.original ?? owner.lastUserText),
+      {
+        from: 'user',
+        sourceSeq: plan.seq,
+        specAttempt: 'draft',
+      },
+    );
     return;
   }
   if (!canReceiveWork(statusFor(owner, lead))) throw new Error('The coordinator is unavailable.');
@@ -255,7 +264,7 @@ export function resolveTask(owner: Conversation, body: Record<string, any>) {
     message = pending.questions.map((q, i) => '[Answer to question ' + (i + 1) + '] ' + q.question + '\n' + body.answers[i]).join('\n\n');
   } else throw new Error('Invalid decision.');
   if (!owner.agents[recipient]) throw new Error('The intended recipient is unavailable.');
-  closeDecision(owner, body.action, true);
+  closeDecision(owner, body.action, true, plan);
   publish({ kind: 'system', text: message });
   deliver(recipient, message, { from: 'user', sourceSeq: plan.seq, specAttempt: body.action === 'revise' ? 'draft' : undefined });
   drainHeld(owner);

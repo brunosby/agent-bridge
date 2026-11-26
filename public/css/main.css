@@ -21,4 +21,5 @@
 @import url('components/approvals.css') layer(components);
 @import url('components/dialogs.css') layer(components);
 @import url('responsive.css') layer(responsive);
+@import url('components/progress.css') layer(responsive);
 @import url('utilities.css') layer(utilities);

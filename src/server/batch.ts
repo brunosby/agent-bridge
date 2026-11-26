@@ -16,11 +16,12 @@ export function finishBatchPart(
   text?: string,
   sourceSeq?: number,
   shortText?: string,
+  requestSeq?: number,
 ): DeliveryBatch | undefined {
   const batch = owner.batch;
   if (!batch || batch.pending.get(agent) !== taskId) return;
   batch.pending.delete(agent);
-  if (text !== undefined) batch.results.push({ from: agent, text, sourceSeq, shortText });
+  if (text !== undefined) batch.results.push({ from: agent, text, sourceSeq, shortText, ...(requestSeq && { requestSeq }) });
   if (!batch.pending.size) owner.batch = null;
   return batch;
 }
