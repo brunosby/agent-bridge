@@ -9,6 +9,7 @@ interface Step {
 }
 
 export interface AccountStatus {
+  signedIn?: boolean;
   state: AccountState;
   detail?: string;
   version?: string;
@@ -108,12 +109,14 @@ export async function cliStatus(driver: string, cfg: DriverConfig = {}): Promise
     const r = await run(command, ['auth', 'list']);
     // eslint-disable-next-line no-control-regex -- strips ANSI colour codes from the CLI output
     const text = r.out.replace(/\x1b\[[0-9;]*m/g, '');
-    const none = /no credentials|0 credentials/i.test(text) || !text.trim();
+    if (r.code !== 0) return { state: 'unknown', version: inst.version, detail: 'Could not check OpenCode sign-in.' };
+    const none = /no credentials|\b0 credentials/i.test(text) || !text.trim();
     // OpenCode's built-in provider serves its free models without any sign-in, so "no credentials" is still usable.
     if (none)
       return {
         state: 'ok',
         version: inst.version,
+        signedIn: false,
         detail: 'Free OpenCode models work without signing in. Use "Switch account" (opencode auth login) to connect other providers.',
       };
     return {

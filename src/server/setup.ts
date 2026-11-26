@@ -23,6 +23,9 @@ export async function refreshPath(platform = process.platform, read = run, env =
     if (!entries.has(dir.toLowerCase())) entries.set(dir.toLowerCase(), dir);
   env[key] = [...entries.values()].join(';');
 }
+export function setupAccount(status: Awaited<ReturnType<typeof cliStatus>>) {
+  return status.state === 'ok' && status.signedIn === false ? { ...status, state: 'logged_out' as const } : status;
+}
 export function shortcutArgs(desktop: boolean) {
   return ['//nologo', path.join(APP_DIR, 'bin', 'create-shortcut.vbs'), ...(desktop ? ['/desktop'] : [])];
 }
@@ -39,7 +42,7 @@ export async function setup(body: Record<string, unknown>) {
       Object.keys(PROVIDERS).map(async (id) => {
         const status = await cliStatus(id, config[id]);
         cliCache[id] = { at: Date.now(), status };
-        return { id, label: PROVIDERS[id].label, ...status, ...installer(id) };
+        return { id, label: PROVIDERS[id].label, ...setupAccount(status), ...installer(id) };
       }),
     );
     const git = await checkInstalled('git');
@@ -59,7 +62,7 @@ export async function setup(body: Record<string, unknown>) {
       for (const member of body.members) {
         if (!member || !Object.hasOwn(PROVIDERS, member.driver)) throw new Error('Unknown setup provider.');
         if (!available.has(member.driver))
-          available.set(member.driver, (await cliStatus(member.driver, config[member.driver])).state === 'ok');
+          available.set(member.driver, setupAccount(await cliStatus(member.driver, config[member.driver])).state === 'ok');
         if (!available.get(member.driver)) throw new Error('Provider no longer available. Check again.');
       }
       const members = templateMembers(body.members);

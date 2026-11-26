@@ -58,6 +58,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
+- Setup offers sign-in for anonymous OpenCode sessions and suggests authenticated providers for the starting team.
+
 - Late decisions and held replies keep their originating request when another user message is already active. Batch waits name the outstanding member on the coordinator card.
 
 - Reviewer deliveries queued during a provider switch keep the original user request.

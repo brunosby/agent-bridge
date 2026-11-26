@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { openInstaller, installer } from '../src/providers/installers.ts';
-import { refreshPath, shortcutArgs, setup } from '../src/server/setup.ts';
+import { refreshPath, shortcutArgs, setupAccount, setup } from '../src/server/setup.ts';
 import { startBridge } from './helpers/bridge.mjs';
 const probe = fileURLToPath(new URL('../bin/ts-check.ts', import.meta.url));
 test('probe exercises native TypeScript, including the real Windows preflight', () => {
@@ -92,6 +92,11 @@ test('setup can be reopened, keeps desktop opt-in, and switches to a guide witho
     sent.some((b) => b.action === 'shortcut' || b.action === 'install'),
     false,
   );
+});
+test('setup suggests authenticated providers and offers sign-in for anonymous OpenCode', () => {
+  assert.equal(setupAccount({ state: 'ok', signedIn: false }).state, 'logged_out');
+  assert.equal(setupAccount({ state: 'ok', signedIn: true }).state, 'ok');
+  assert.equal(setupAccount({ state: 'no_access' }).state, 'no_access');
 });
 test('skipping setup persists across restarts', async () => {
   let b = await startBridge({ team: [{ driver: 'fake', role: 'coder' }], rules: [] });
