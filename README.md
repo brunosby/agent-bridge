@@ -4,7 +4,7 @@ A team of AI coding agents from different providers (Claude Code, Codex, OpenCod
 
 You talk to an orchestrator. It hands tasks to the other agents by role, collects their results and reports back to you.
 
-For example, you ask for a login screen. The orchestrator asks the Coder to build it and the Reviewer to check it. If the Reviewer requests changes, the orchestrator can send the findings back to the Coder for up to two fix rounds by default. You can change that limit under **Settings > General > Review fix rounds**. The orchestrator reports the outcome, including any open findings. You can step in at any point of that conversation. The agents work directly in the project folder you choose.
+For example, you ask for a login screen. The orchestrator asks the Coder to build it and the Reviewer to check it. If the Reviewer requests changes, the orchestrator can send the findings back to the Coder for up to two fix rounds by default. You can change that limit under **Settings > Conversation flow > Review fix rounds**. The orchestrator reports the outcome, including any open findings. You can step in at any point of that conversation. The agents work directly in the project folder you choose.
 
 Mixing providers means one model reviews another's work and each role can use the model it does best. Agent Bridge runs the CLIs you already have, so usage counts against your own provider accounts; it needs no account or key of its own.
 
@@ -14,7 +14,9 @@ Use **Manage** beside the team roster to save, rename, or apply a team. Template
 
 In orchestrator mode, **Max hops** counts each agent the orchestrator delegates to. Results can return even at the limit. The default budget is 8 delegations for an unclassified or small task, 16 for medium and 32 for large. Other routing modes count every hand-off against the base limit. **Resume** resets the counter.
 
-Enable **Manual mode** under **Settings > General** to read agent replies without forwarding them. Use **Pause** to hold replies for **Resume**. A button in the conversation header opens the manual mode setting directly.
+Use the Settings sidebar to browse by section, or search by setting name, description or configuration key. **Save** applies your edited fields across sections. To configure role recommendations, open **Settings > Team > Recommend roles**.
+
+Enable **Manual mode** under **Settings > Conversation flow** to read agent replies without forwarding them. Use **Pause** to hold replies for **Resume**. A button in the conversation header opens the manual mode setting directly.
 
 Use the position button in the **Progress** header to move the panel above the chat or to its right. It also updates **Settings → General → Progress layout**. The double chevron collapses or expands the panel. Each position remembers its own collapse state. Expand **Earlier requests** to see outstanding work from previous messages.
 
@@ -56,7 +58,7 @@ Roles live in `roles/`, one JSON file each; copy one to create a new role.
 
 - Open the page from the launcher. A single-use link authenticates that browser tab for the session. The link expires after 60 seconds. Restart preserves access in the same tab. Reopening the launcher rotates the session token and disconnects previously authenticated tabs. The conversation records tab openings, successful code exchanges and reuse alerts with timestamps. For five minutes after a link is used, a second attempt triggers a reuse alert. After that, the link is still rejected as invalid.
 - The approval check recognizes literal Bridge ports with `localhost`, `127.0.0.1` or `[::1]`. Other host spellings and computed ports may escape that check. The conversation API and event stream still require the current token.
-- Before approving a `git push` or `gh pr create` requested through Bridge, review the local secret scan. The card identifies the commit, file, line and rule. Resolve each finding or confirm a scoped exception. The card lists each applied exception with its reason. When checking a private destination, Bridge uses system and user Git settings in a directory outside the repository. If authentication fails, it scans the full reachable history. Use **Settings > General** to enable the optional pre-push hook for terminal pushes.
+- Before approving a `git push` or `gh pr create` requested through Bridge, review the local secret scan. The card identifies the commit, file, line and rule. Resolve each finding or confirm a scoped exception. The card lists each applied exception with its reason. When checking a private destination, Bridge uses system and user Git settings in a directory outside the repository. If authentication fails, it scans the full reachable history. Use **Settings > Git & publishing** to enable the optional pre-push hook for terminal pushes.
 - Provider permissions determine which commands reach the approval card. A Codex sandbox with network access can push directly. The optional hook checks terminal and provider pushes in that repository unless Git skips hooks with `--no-verify`.
 - The scanner checks known credential formats and sensitive filenames. Text files are scanned even when they have image extensions. Binary files and LFS objects are listed separately. To add project-specific token prefixes, create `.agent-bridge/secret-patterns.json` with a `prefixes` array, for example `{"prefixes":["internal_key_"]}`. Use `rules` for path-specific prefixes, such as `{"rules":[{"prefix":"internal_key_","pathSuffix":".ini"}]}`. Set `genericAssignments` to `true` to also check high-entropy password, secret and token assignments. These settings add checks. Exceptions require confirmation in the approval card.
 - Sign in through each provider’s CLI.

@@ -111,7 +111,9 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
   const { limit, size } = hopBudget(owner.routingMode, relay.maxHops, plan);
   const cost = targets.reduce((sum, id) => sum + hopCost(owner.routingMode, lead, item.from, id), 0);
   if (eligible.length && (limit === 0 || (cost > 0 && owner.relay.hops + cost > limit))) {
-    const context = [size && size + ' task', 'base ' + relay.maxHops + ' in Settings > General > Max hops'].filter(Boolean).join(', ');
+    const context = [size && size + ' task', 'base ' + relay.maxHops + ' in Settings > Conversation flow > Max hops']
+      .filter(Boolean)
+      .join(', ');
     publish({ kind: 'system', text: `Relay paused after ${owner.relay.hops} hand-offs (limit ${limit}, ${context}).` });
     owner.relay.limitPause = 'hops';
     owner.relay.halted = true;
@@ -215,7 +217,7 @@ export function resumeRelay(owner: Conversation): void {
     return;
   }
   if (owner.heldRelays.length && !relay.auto) {
-    publish({ kind: 'system', text: 'Turn off manual mode in Settings > General before resuming the held replies.' });
+    publish({ kind: 'system', text: 'Turn off manual mode in Settings > Conversation flow before resuming the held replies.' });
     return;
   }
   clearRoleDecisions(owner, 'resume');

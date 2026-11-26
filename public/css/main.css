@@ -22,4 +22,5 @@
 @import url('components/dialogs.css') layer(components);
 @import url('responsive.css') layer(responsive);
 @import url('components/progress.css') layer(responsive);
+@import url('components/settings.css') layer(responsive);
 @import url('utilities.css') layer(utilities);

@@ -34,7 +34,7 @@ The code follows a "ports and adapters" layout: the core does not know how provi
 
 - ES modules loaded natively by the browser (`<script type="module">`), no bundler.
 - CSS uses cascade layers in this order: `tokens` (custom properties for light and dark themes), `base`, `layout` (app shell), `components`, `responsive` (viewport breakpoints), and `utilities`.
-- Viewport breakpoints live in `public/css/responsive.css`. At 640 px and wider, dialogs are centred and approval buttons can share a row. At 900 px and wider, the team, routing and usage appear in a sidebar. Below 900 px, the **Workspace** button opens that panel. At 550 px in height and below, the page can scroll to keep the conversation and composer reachable.
+- Shared viewport breakpoints live in `public/css/responsive.css`. Most dialogs are centred at 640 px and wider, and approval buttons can share a row. Settings has its own component stylesheet and switches from a sidebar to horizontally scrollable navigation at 760 px and below. At 900 px and wider, the team, routing and usage appear in a sidebar. Below 900 px, the **Workspace** button opens that panel. At 550 px in height and below, the page can scroll to keep the conversation and composer reachable.
 
 ## Tests
 

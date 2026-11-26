@@ -28,7 +28,7 @@ test('a batch returns at the limit and Resume delivers the next delegation once'
     assert.equal(bridge.state().relay.hops, 2);
     await bridge.api('relay', { auto: false });
     await bridge.api('relay', { resume: true });
-    await bridge.waitFor((ev) => ev.kind === 'system' && ev.text.includes('Turn off manual mode in Settings > General'));
+    await bridge.waitFor((ev) => ev.kind === 'system' && ev.text.includes('Turn off manual mode in Settings > Conversation flow'));
     await bridge.api('relay', { auto: true });
     await Promise.all([bridge.api('relay', { resume: true }), bridge.api('relay', { resume: true })]);
     await bridge.waitFor((ev) => ev.kind === 'text' && ev.text.includes('All results received.'));

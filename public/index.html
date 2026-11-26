@@ -17,7 +17,7 @@
           <button id="toggleControls" class="btn toolbar__toggle" aria-expanded="false" aria-controls="workspacePanel">Workspace</button>
           <nav class="toolbar__group" aria-label="Workspace">
             <button id="openConversations" class="btn" title="Restore an earlier conversation or start a new one">Conversations</button>
-            <button id="openSettings" class="btn" title="General settings, accounts and roles">Settings</button>
+            <button id="openSettings" class="btn" title="Workspace settings, project options and providers">Settings</button>
             <details id="appActions" class="app-actions">
               <summary class="btn">App <span aria-hidden="true">▾</span></summary>
               <div class="app-actions__options">
@@ -274,75 +274,105 @@
       </div>
     </dialog>
     <dialog id="settingsDialog" class="dialog" aria-labelledby="settingsTitle">
-      <div class="dialog__head">
+      <header class="dialog__head">
         <h2 id="settingsTitle" class="dialog__title">Settings</h2>
-        <div class="tabs" role="tablist" aria-label="Settings sections">
-          <button
-            id="settings-tab-general"
-            aria-controls="tab-general"
-            aria-selected="true"
-            tabindex="0"
-            data-tab="general"
-            class="tab active"
-            role="tab"
-          >
-            General
-          </button>
-          <button
-            id="settings-tab-accounts"
-            aria-controls="tab-accounts"
-            aria-selected="false"
-            tabindex="-1"
-            data-tab="accounts"
-            class="tab"
-            role="tab"
-          >
-            Accounts
-          </button>
-          <button
-            id="settings-tab-roles"
-            aria-controls="tab-roles"
-            aria-selected="false"
-            tabindex="-1"
-            data-tab="roles"
-            class="tab"
-            role="tab"
-          >
-            Roles
-          </button>
-        </div>
-        <button class="btn btn--icon close" data-close="settingsDialog" aria-label="Close">✕</button>
-      </div>
-      <div id="tab-general" aria-labelledby="settings-tab-general" class="dialog__body tabpane" role="tabpanel">
-        <button class="btn" id="runSetup">Run setup again</button>
-        <div id="settingsForm" class="form"></div>
-        <div class="form">
-          <label class="check"><input type="checkbox" id="requestNotifications" disabled /> Notify me when an agent needs a decision</label>
-          <div class="actions">
-            <output id="requestNotificationsStatus" class="hint" aria-live="polite"></output>
-            <button id="enableRequestNotifications" class="btn" disabled>Enable browser notifications</button>
+        <input id="settingsSearch" type="search" placeholder="Search settings" aria-label="Search settings" /><button
+          class="btn btn--icon"
+          id="closeSettings"
+          aria-label="Close settings"
+        >
+          ✕
+        </button>
+      </header>
+      <nav id="settingsNav" aria-label="Settings sections">
+        <span>Workspace</span><button type="button" data-section="general" aria-controls="tab-general">General</button>
+        <button type="button" data-section="flow" aria-controls="tab-flow">Conversation flow</button>
+        <button type="button" data-section="team" aria-controls="tab-team">Team</button>
+        <button type="button" data-section="safety" aria-controls="tab-safety">Approvals &amp; safety</button>
+        <span>This project</span><button type="button" data-section="project" aria-controls="tab-project">Git &amp; publishing</button>
+        <span>Providers</span
+        ><button type="button" data-section="accounts" aria-controls="tab-accounts">Accounts<span id="accountsCount" hidden></span></button>
+        <button type="button" data-section="roles" aria-controls="tab-roles">Roles</button>
+        <button type="button" data-section="other" aria-controls="tab-other" hidden>Other</button>
+      </nav>
+      <div id="settingsForm">
+        <section id="tab-general" aria-labelledby="heading-general" hidden>
+          <h3 id="heading-general">General</h3>
+          <p class="section-lead">How Agent Bridge looks and starts on this computer.</p>
+          <div class="settings-card" data-card="Start and notifications">
+            <h4>Start and notifications</h4>
+            <div class="setting-row">
+              <div>
+                <label for="requestNotifications">Notify me when an agent needs a decision</label
+                ><output class="hint" id="requestNotificationsStatus" aria-live="polite"></output>
+              </div>
+              <div class="setting-control">
+                <input type="checkbox" role="switch" id="requestNotifications" disabled /><button
+                  class="btn"
+                  id="enableRequestNotifications"
+                  disabled
+                >
+                  Enable browser notifications
+                </button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <strong>First-run setup</strong>
+                <p class="hint">Check provider accounts, install tools or create a Windows shortcut.</p>
+              </div>
+              <button class="btn" id="runSetup">Run setup again</button>
+            </div>
           </div>
-        </div>
-
-        <div class="actions">
-          <span id="settingsMsg" class="hint"></span><button id="saveSettings" class="btn btn--primary">Save</button>
-        </div>
+        </section>
+        <section id="tab-flow" aria-labelledby="heading-flow" hidden>
+          <h3 id="heading-flow">Conversation flow</h3>
+          <p class="section-lead">How replies move between agents and when the conversation pauses.</p>
+        </section>
+        <section id="tab-team" aria-labelledby="heading-team" hidden>
+          <h3 id="heading-team">Team</h3>
+          <p class="section-lead">Default roles and permissions for new agents.</p>
+        </section>
+        <section id="tab-safety" aria-labelledby="heading-safety" hidden>
+          <h3 id="heading-safety">Approvals &amp; safety</h3>
+          <p class="section-lead">What agents can do without asking you.</p>
+        </section>
+        <section id="tab-project" aria-labelledby="heading-project" hidden>
+          <h3 id="heading-project">Git &amp; publishing <span class="hint" id="settingsProject"></span></h3>
+          <p class="section-lead">Applies to the project of the open conversation.</p>
+          <div class="settings-card" data-card="Secret check">
+            <h4>Secret check</h4>
+            <div class="setting-row">
+              <div>
+                <strong>Pre-push secret check</strong>
+                <p class="hint">Check pushes from this repository, including pushes made in a terminal.</p>
+                <output id="hookStatus" aria-live="polite"></output>
+              </div>
+              <button class="btn" id="changeHook" hidden>Install</button>
+            </div>
+          </div>
+        </section>
+        <section id="tab-accounts" aria-labelledby="heading-accounts" hidden>
+          <h3 id="heading-accounts">Accounts</h3>
+          <p class="section-lead">Status of each provider’s CLI on this computer. Sign in through the provider’s own CLI.</p>
+          <div class="list" id="accountList"></div>
+          <div class="actions"><button class="btn" id="refreshAccounts">Check again</button></div>
+        </section>
+        <section id="tab-roles" aria-labelledby="heading-roles" hidden>
+          <h3 id="heading-roles">Roles</h3>
+          <p class="section-lead">Each role is a JSON file in the roles folder. Copy a file to add a role.</p>
+          <div class="list" id="roleList"></div>
+        </section>
+        <section id="tab-other" aria-labelledby="heading-other" hidden>
+          <h3 id="heading-other">Other</h3>
+          <p class="section-lead">Additional settings available in this version.</p>
+        </section>
+        <p id="settingsEmpty" role="status" hidden>No setting matches this search.</p>
       </div>
-      <div id="tab-accounts" aria-labelledby="settings-tab-accounts" class="dialog__body tabpane" role="tabpanel" hidden>
-        <p class="hint">
-          Status of each provider's CLI on this computer. Signing in always happens in the provider's own CLI; Agent Bridge never sees or
-          stores credentials.
-        </p>
-        <div id="accountList" class="list"></div>
-        <div class="actions"><button id="refreshAccounts" class="btn">Check again</button></div>
-      </div>
-      <div id="tab-roles" aria-labelledby="settings-tab-roles" class="dialog__body tabpane" role="tabpanel" hidden>
-        <p class="hint">
-          Roles live in the <code>roles</code> folder, one JSON file each. Copy a file to create a new role; it appears after saving
-          settings or restarting.
-        </p>
-        <div id="roleList" class="list"></div>
-      </div>
+      <footer class="settings-footer">
+        <output id="settingsMsg" role="status"></output><button id="discardSettings" class="btn" disabled>Discard</button
+        ><button id="saveSettings" class="btn btn--primary" disabled>Save</button>
+      </footer>
     </dialog>
   </body>
 </html>

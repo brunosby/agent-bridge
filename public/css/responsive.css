@@ -13,15 +13,6 @@
     width: min(560px, 94vw);
   }
 
-  .tabs {
-    order: 0;
-    width: auto;
-  }
-
-  .tab {
-    flex: none;
-  }
-
   .approval .actions button {
     flex: 0 1 auto;
   }

@@ -21,10 +21,10 @@ All notable changes to this project are documented here. The format follows Keep
 - Tasks in orchestrator mode show an editable size estimate. Large tasks require an approved specification before coding. Coordinators can collect decisions in a question card, and the user can select a successor when a coordinator leaves or becomes unavailable.
 - Manual pauses retain incoming replies. Stopping all agents discards cancelled work. Provider control requests report timeouts, and a quiet turn remains open for the user to inspect.
 - Read-only roles now route shell requests through the approval policy even in bypass mode. External writes require approval, and the Reviewer excludes additional credential filenames.
-- Worker reports can include a summary card in the chat. By default only the summary is relayed to the orchestrator, with any Reviewer verdict and review-round guidance. Other recipients receive the full report. Toggle this in **Settings > General**.
+- Worker reports can include a summary card in the chat. By default only the summary is relayed to the orchestrator, with any Reviewer verdict and review-round guidance. Other recipients receive the full report. Toggle this in **Settings > Conversation flow**.
 - Change the provider of an idle agent from its details. The agent keeps its name, mentions, history and worktree. The new provider gets a handoff summary, and incoming work waits for it to start.
 - Use **Customize** on a role recommendation or missing-role card to choose the agent’s name, provider, model and options before adding it.
-- **Settings > General > Automatically approve read-only commands** covers supported workspace reads. PowerShell support includes recursive listings and literal values for `Get-ChildItem -Depth`, `-Filter` and `-Include`.
+- **Settings > Approvals & safety > Automatically approve read-only commands** covers supported workspace reads. PowerShell support includes recursive listings and literal values for `Get-ChildItem -Depth`, `-Filter` and `-Include`.
 - **Allow for session** remembers approved, supported test commands for the same agent, directory and conversation. For Claude Code, this includes PowerShell test pipelines that start with a directory change inside the workspace and use filters such as `Select-String` and `Select -First`. Patterns with special characters must be single-quoted.
 - Rename an agent from its details while it works. Mentions keep their agent ID, and saved history shows the current name.
 - Tests: end-to-end conversation tests with a scripted provider (no CLIs or tokens needed) and unit tests; CI on Windows and Linux.
@@ -33,7 +33,7 @@ All notable changes to this project are documented here. The format follows Keep
 - `docs/architecture.md`.
 - Inline `@mentions` use the referenced agent’s colour. Each agent keeps the same colour across the workspace, chat and history, even when agents share a provider or model.
 - Researcher card warns when the model's context window is small for research.
-- The orchestrator can recommend roles for substantial work. A card lists up to three roles with the reason and the recommended model, and nothing is added without your choice (**Settings > General > Recommend roles**).
+- The orchestrator can recommend roles for substantial work. A card lists up to three roles with the reason and the recommended model, and nothing is added without your choice (**Settings > Team > Recommend roles**).
 - **Search saved history** finds messages from the whole saved conversation, including those outside the loaded history, with one result per message.
 - Browser notifications for pending approvals, role decisions, milestone decisions and final review while the page is hidden or unfocused. A single tab sends each notification once.
 - The Reviewer can read the filtered patch of one listed file through the Bridge's own `bridge_diff` MCP tool when the diff is over the size limit. Secret paths stay omitted. Verified with Claude Code, Codex and OpenCode.
@@ -41,6 +41,8 @@ All notable changes to this project are documented here. The format follows Keep
 - The orchestrator can propose a milestone plan for Git projects. An approved plan tracks progress, supports a per-project verification command and creates local commits limited to eligible changes. Commit approval defaults to **Ask me**.
 
 ### Changed
+
+- Settings now groups controls by section, searches across sections, and previews changes before saving. Git hook status and actions appear under Git & publishing for the open project.
 
 - The **Manage** button beside the team roster opens saved teams.
 

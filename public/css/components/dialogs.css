@@ -12,7 +12,7 @@
 #setupDialog section + section {
   margin-top: var(--space-4);
 }
-/* Dialogs (Conversations, Add agent, Settings) and their content: tabs, lists, accounts, roles. Full screen on phones. */
+/* Dialogs (Conversations, Add agent, Settings) and their lists, accounts and roles. Full screen on phones. */
 .dialog {
   width: 100vw;
   max-width: 100vw;
@@ -59,25 +59,6 @@
   flex: 1;
   overflow-y: auto;
   padding: var(--space-4);
-}
-
-.tabs {
-  display: flex;
-  gap: var(--space-1);
-  order: 3;
-  width: 100%;
-}
-
-.tab {
-  flex: 1;
-  padding: var(--space-1) var(--space-3);
-}
-
-.tab.active {
-  color: var(--color-action-text);
-  border-color: var(--color-action-text);
-  background: var(--color-own-message);
-  font-weight: 600;
 }
 
 .new-conv {
