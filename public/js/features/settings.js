@@ -84,7 +84,8 @@ export const SETTING_LAYOUT = {
 const fields = new Map();
 const form = $('settingsForm');
 const dialog = $('settingsDialog');
-const nav = [...$('settingsNav').querySelectorAll('[data-section]')];
+const sectionMenu = $('settingsNav');
+const nav = [...sectionMenu.querySelectorAll('[data-section]')];
 let currentSection = 'general';
 let saving = false;
 let opening = 0;
@@ -251,11 +252,18 @@ function loadRolesOnce() {
   rolesLoaded = true;
   void renderRoles().then(filterSettings);
 }
+function revealActiveTab() {
+  if (!dialog.open || sectionMenu.scrollWidth <= sectionMenu.clientWidth) return;
+  sectionMenu.querySelector('[aria-current="page"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+}
+globalThis.window?.addEventListener('resize', revealActiveTab);
+
 export function showTab(name) {
   currentSection = name;
   $('settingsSearch').value = '';
   if (name === 'roles') loadRolesOnce();
   filterSettings();
+  revealActiveTab();
   form.scrollTop = 0;
 }
 for (const tab of nav) {
@@ -281,6 +289,7 @@ for (const tab of nav) {
 $('settingsSearch').oninput = () => {
   if ($('settingsSearch').value.trim()) loadRolesOnce();
   filterSettings();
+  revealActiveTab();
   form.scrollTop = 0;
 };
 $('refreshAccounts').onclick = () => renderAccounts(true).then(filterSettings);
@@ -346,8 +355,8 @@ async function openSettings(focusManualMode = false) {
   rolesLoaded = false;
   $('roleList').replaceChildren();
   renderSettingsForm();
-  showTab(focusManualMode ? 'flow' : 'general');
   dialog.showModal();
+  showTab(focusManualMode ? 'flow' : 'general');
   if (focusManualMode) fields.get('autoRelay')?.input.focus();
   else $('settingsSearch').focus();
   void renderAccounts().then(filterSettings);
