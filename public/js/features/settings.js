@@ -130,6 +130,7 @@ export async function renderAccounts(refresh = false) {
       if (acc.version) head.appendChild(h('span', 'hint', acc.version));
       row.appendChild(head);
       if (acc.detail) row.appendChild(h('div', 'hint', acc.detail));
+      if (store.state?.signIn?.waiting?.includes(acc.driver)) row.appendChild(h('div', 'hint', 'Waiting for sign-in…'));
       if (acc.next) {
         const step = h('div', 'next');
         step.appendChild(h('div', null, acc.next.text));
@@ -150,7 +151,7 @@ export async function renderAccounts(refresh = false) {
         }
         if (acc.next.action === 'login') {
           const b = h('button', 'primary', acc.state === 'logged_out' ? 'Sign in' : 'Sign in again');
-          b.title = 'Opens a terminal window that runs the sign-in command. Finish it there, then press Check again.';
+          b.title = 'Opens a terminal window that runs the sign-in command. Finish it there; Agent Bridge detects the sign-in.';
           b.onclick = () => api('login', { driver: acc.driver }).catch((e) => alert(e.message));
           step.appendChild(b);
         }
@@ -295,6 +296,19 @@ for (const [index, tab] of tabs.entries()) {
   };
 }
 $('refreshAccounts').onclick = () => renderAccounts(true);
+// Follow a sign-in started from this dialog: refresh when it starts or ends, and when the user comes back to the page.
+let lastAccountsFocus = 0;
+const accountsVisible = () => $('settingsDialog').open && !$('accountList').closest('[hidden]');
+globalThis.window?.addEventListener('bridge-sign-in', () => {
+  if (accountsVisible()) void renderAccounts(true);
+});
+const accountsReturn = () => {
+  if (document.visibilityState === 'hidden' || !accountsVisible() || Date.now() - lastAccountsFocus < 10000) return;
+  lastAccountsFocus = Date.now();
+  void renderAccounts(true);
+};
+globalThis.window?.addEventListener('focus', accountsReturn);
+document.addEventListener('visibilitychange', accountsReturn);
 $('openSettings').onclick = async () => {
   await loadCatalog();
   renderSettingsForm();

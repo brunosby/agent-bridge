@@ -56,8 +56,10 @@ async function check(refresh = false) {
       guide.target = '_blank';
       guide.rel = 'noopener noreferrer';
       row.append(guide);
-    } else if (item.id !== 'git' && (item.state !== 'ok' || freeOnly))
+    } else if (item.id !== 'git' && (item.state !== 'ok' || freeOnly)) {
+      if (store.state?.signIn?.waiting?.includes(item.id)) label.append(h('small', 'setup-waiting', 'Waiting for sign-in…'));
       row.append(control('Sign in', () => api('login', { driver: item.id })));
+    }
     list.append(row);
   }
   $('setupShortcut').hidden = !data.windows;
@@ -103,7 +105,26 @@ export function openSetup() {
     $('setupMessage').textContent = e.message;
   });
 }
+// Re-check when a followed sign-in starts or ends, and when the user comes back to the page.
+let lastFocusCheck = 0;
+function recheck() {
+  if (!$('setupDialog')?.open) return;
+  void check().catch((e) => {
+    $('setupMessage').textContent = e.message;
+  });
+}
+export function bindSetupRefresh(win = globalThis.window, now = Date.now) {
+  win?.addEventListener('bridge-sign-in', recheck);
+  const onReturn = () => {
+    if (win.document.visibilityState === 'hidden' || now() - lastFocusCheck < 10000) return;
+    lastFocusCheck = now();
+    recheck();
+  };
+  win?.addEventListener('focus', onReturn);
+  win?.document?.addEventListener('visibilitychange', onReturn);
+}
 if ($('setupDialog')) {
+  bindSetupRefresh();
   $('runSetup').onclick = openSetup;
   $('setupRefresh').onclick = () =>
     check(true).catch((e) => {

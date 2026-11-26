@@ -58,6 +58,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
+- After **Sign in**, Agent Bridge follows the login and updates the setup and Settings > Accounts by itself: on Windows when the login window closes, and on every system by checking the provider status every 5 seconds for up to 10 minutes, and when you return to the page. Claude Code uses the documented exit code of `claude auth status`. Idle agents of that provider that could not work restart once the sign-in is confirmed. No credential file is read.
+- **Sign in** opens the provider's login in a new console window on Windows. It no longer fails with "Windows cannot find 'claude-login'". A configured CLI path with spaces stays quoted, and a terminal that cannot be opened is reported in the conversation.
 - Setup includes OpenCode in the starting team when only free models are available and offers optional sign-in.
 - The Windows launcher checks Node in a hidden window. The missing-Node test isolates the search path regardless of how Windows capitalizes `PATH`.
 

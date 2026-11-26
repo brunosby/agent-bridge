@@ -397,6 +397,8 @@ export function handle(ev) {
       if (store.state?.taskPlan) sizeBadge(views.get(transcript.bySequence.get(store.state.taskPlan.seq))?.node, store.state);
       break;
     case 'state':
+      if (JSON.stringify(store.state?.signIn) !== JSON.stringify(ev.signIn))
+        queueMicrotask(() => globalThis.window?.dispatchEvent(new globalThis.window.CustomEvent('bridge-sign-in', { detail: ev.signIn })));
       if (store.state?.taskPlan && store.state.taskPlan.seq !== ev.taskPlan?.seq)
         sizeBadge(views.get(transcript.bySequence.get(store.state.taskPlan.seq))?.node, store.state, false);
       store.state = ev;
