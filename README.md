@@ -12,7 +12,7 @@ On first launch, setup checks the provider CLIs and Git. Choose **Run setup agai
 
 Use **Teams** beside the roster to save, rename, or apply a team. Templates keep role and model choices. Each new member starts with bypass off.
 
-Use **Settings → General → Progress layout** to follow the latest request beside or above the chat. Expand **Earlier requests** to see outstanding work from previous messages.
+Use **Settings → General → Progress layout** to follow the latest request beside or above the chat. Both layouts collapse and expand. Each remembers its own setting in your browser. Expand **Earlier requests** to see outstanding work from previous messages.
 
 ## Quick start
 
