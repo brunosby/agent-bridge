@@ -34,14 +34,14 @@ export function renderState() {
     ? [project.name, project.branch || (project.detached ? 'Detached HEAD' : project.git ? 'Git' : 'No Git')].join(' · ')
     : '';
   const r = store.state.relay;
-  $('auto').checked = r.auto;
+  $('manualModeSettings').hidden = r.auto !== false;
   if (document.activeElement !== $('maxHops')) $('maxHops').value = r.maxHops;
   const resume = $('resume');
   resume.classList.toggle('btn--primary', Boolean(r.held));
   resume.textContent = r.held ? 'Resume (' + r.held + ')' : 'Resume';
   resume.title = r.held ? 'Resume queued hand-offs' : 'Reset the hop counter and resume the relay';
   const pill = $('relayState');
-  pill.textContent = r.halted ? `paused · ${r.hops}/${r.maxHops}` : `hops ${r.hops}/${r.maxHops}`;
+  pill.textContent = `${r.halted ? 'paused ·' : 'hops'} ${r.hops}/${r.effectiveMaxHops ?? r.maxHops}`;
   pill.classList.toggle('halted', r.halted);
   // Nobody can edit files: say so before the user asks for a change.
   const hasEditor = store.state.team.some((a) => roleOf(a.role)?.canEdit === 'all');

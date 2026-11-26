@@ -44,10 +44,10 @@
           <h2 id="routingTitle">Routing</h2>
           <div id="relayControls" class="relay-settings" role="group" aria-label="Relay">
             <select id="routing" aria-label="Routing mode" title="How replies move between agents"></select>
-            <label class="field-inline" title="Forward replies between agents automatically">
-              <input type="checkbox" id="auto" /> Auto-relay
-            </label>
-            <label class="field-inline" title="Maximum agent-to-agent hand-offs before the relay pauses">
+            <label
+              class="field-inline"
+              title="Base limit before the relay pauses. In orchestrator mode, only delegations from the orchestrator count."
+            >
               Max hops <input type="number" id="maxHops" min="0" max="500" />
             </label>
           </div>
@@ -77,6 +77,9 @@
             <span id="projectContext" class="hint"></span>
           </div>
           <span id="relayState" class="pill"></span>
+          <button id="manualModeSettings" class="btn" title="Open manual mode in Settings" hidden>
+            Manual mode: replies are not forwarded
+          </button>
           <button id="pendingCount" class="btn" hidden></button>
         </div>
         <div class="conversation-bar__actions" role="group" aria-label="Session actions">

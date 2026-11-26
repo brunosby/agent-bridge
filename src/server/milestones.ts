@@ -164,8 +164,7 @@ function announce(owner: Conversation, agent: string, text: string, asResponse =
   publish({ kind: 'system', text });
   const limit = Number(setting('tokenLimit'));
   const exhausted = limit > 0 && Object.values(owner.agents).reduce((sum, member) => sum + member.tokens, 0) >= limit;
-  if (owner.relay.userPaused || exhausted || (asResponse && (!relay.auto || owner.relay.hops >= relay.maxHops))) return;
-  if (asResponse) owner.relay.hops += 1;
+  if (owner.relay.userPaused || exhausted || (asResponse && (!relay.auto || relay.maxHops === 0 || owner.relay.limitPause))) return;
   deliver(agent, '[Message from Agent Bridge]\n' + text + '\n' + milestoneInstructions(owner), { from: 'user' });
 }
 

@@ -49,6 +49,10 @@ test('decision cards preserve drafts across live updates and submit the edited i
     sizeBadge(node, current);
     sizeBadge(node, current);
     assert.equal(node.querySelectorAll('.retry-spec').length, 1);
+    assert.equal(node.querySelector('.retry-spec').textContent, 'Retry specification');
+    current.taskPlan.specNeedsRetry = 'manual';
+    sizeBadge(node, current);
+    assert.equal(node.querySelector('.retry-spec').textContent, 'Request specification');
     await node.querySelector('.retry-spec').onclick();
     assert.deepEqual(sent.at(-1), ['/api/taskDecision', { conversationId: 'sample', seq: 4, action: 'retrySpec' }]);
     sizeBadge(node, current, false);

@@ -2,10 +2,10 @@ import { originPlan, register } from './request-progress.ts';
 import { randomUUID } from 'node:crypto';
 import { canReceiveWork } from '../core/agent-status.ts';
 import type { Conversation, AgentSpec, Size, SpecAttempt, TaskDecision, TaskPlan } from '../core/types.ts';
-import { S } from './state.ts';
+import { relay, S } from './state.ts';
 import { publish, recordWorkflow } from './events.ts';
 import { deliver } from './delivery.ts';
-import { drainHeld, offerRecommendedRoles, orchestratorId } from './routing.ts';
+import { relayOrHold, drainHeld, offerRecommendedRoles, orchestratorId } from './routing.ts';
 import { addAgent, setRole, statusFor, validateAgentChoice } from './team.ts';
 import { buildProviderHandoff } from './provider-handoff.ts';
 import { captureTaskBaseline, growth, question, saveSpecification, specification } from './task-plan.ts';
@@ -29,23 +29,41 @@ export function closeDecision(owner: Conversation, action: string, advance = fal
   recordWorkflow(owner, plan);
 }
 
-export function requestSpec(owner: Conversation, lead: string, plan = owner.plan) {
-  if (!plan || plan.approved || plan.pending?.kind === 'spec' || plan.queuedDecisions?.some((d) => d.kind === 'spec')) return;
-  const architect = owner.team.find((member) => member.role === 'architect' && canReceiveWork(statusFor(owner, member.id)));
-  if (architect) {
-    if (plan.specRequestedFrom === architect.id) return;
-    plan.specRequestedFrom = architect.id;
+export function requestSpec(owner: Conversation, lead: string, plan = owner.plan, preferredArchitect?: string) {
+  if (!plan || plan.finished || plan.approved || plan.pending?.kind === 'spec' || plan.queuedDecisions?.some((d) => d.kind === 'spec'))
+    return;
+  if (owner.heldRelays.some((item) => item.kind === 'spec' && item.requestSeq === plan.seq)) return;
+  const available = owner.team.filter((member) => member.role === 'architect' && canReceiveWork(statusFor(owner, member.id)));
+  const architect = available.find((member) => member.id === preferredArchitect) ?? available[0];
+  if (!relay.auto) {
+    if (plan.specNeedsRetry || plan.specRequestedFrom) return;
+    plan.specNeedsRetry = 'manual';
+    plan.specRequestedFrom = architect?.id;
+    publish({
+      kind: 'system',
+      text:
+        'Manual mode: the specification request was not sent. ' +
+        (architect ? '' : 'Add an available Architect first. ') +
+        'Choose Request specification on the original task to send it.',
+    });
     recordWorkflow(owner, plan);
-    deliver(
-      architect.id,
-      'Draft the specification and decisions as [[SPEC]] for this task:\n' +
-        (register(owner).get(plan.seq)?.original ?? owner.lastUserText),
-      {
-        from: lead,
-        sourceSeq: plan.seq,
-        specAttempt: 'draft',
-      },
-    );
+    return;
+  }
+  if (architect) {
+    if (plan.specRequestedFrom === architect.id && plan.specNeedsRetry !== 'manual') return;
+    relayOrHold(owner, {
+      kind: 'spec',
+      from: lead,
+      targets: [architect.id],
+      requestSeq: plan.seq,
+      sourceSeq: plan.seq,
+      parts: [
+        {
+          from: lead,
+          text: register(owner).get(plan.seq)?.original ?? owner.lastUserText ?? 'Draft the specification for the current task.',
+        },
+      ],
+    });
     return true;
   } else if (!offerRecommendedRoles(owner, lead, [{ id: 'architect', reason: 'Prepare the specification for approval before coding.' }])) {
     publish({ kind: 'system', text: 'An available Architect is needed for the specification. Add one or change the task size.' });
@@ -219,13 +237,15 @@ export function resolveTask(owner: Conversation, body: Record<string, any>) {
       owner.team.find(
         (member) => member.role === 'architect' && member.id === plan.specRequestedFrom && canReceiveWork(statusFor(owner, member.id)),
       ) ?? owner.team.find((member) => member.role === 'architect' && canReceiveWork(statusFor(owner, member.id)));
-    if (!architect) throw new Error('An available Architect is needed to retry.');
+    if (!architect) throw new Error('An available Architect is needed to request a specification.');
+    const firstDraft = plan.specNeedsRetry === 'manual';
     delete plan.specNeedsRetry;
     plan.specRequestedFrom = architect.id;
     recordWorkflow(owner, plan);
     deliver(
       architect.id,
-      'Retry the specification for this task using [[SPEC]] and [[/SPEC]]:\n' +
+      (firstDraft ? 'Draft' : 'Retry') +
+        ' the specification for this task using [[SPEC]] and [[/SPEC]]:\n' +
         (register(owner).get(plan.seq)?.original ?? owner.lastUserText),
       {
         from: 'user',

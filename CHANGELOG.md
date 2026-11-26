@@ -44,6 +44,10 @@ All notable changes to this project are documented here. The format follows Keep
 
 - The **Manage** button beside the team roster opens saved teams.
 
+- In manual mode, large tasks show a pending specification request in the chat and progress panel. Choose **Request specification** to send the original task to an Architect.
+
+- Orchestrator routing counts delegations per recipient and scales the hand-off budget with task size. The conversation shows the effective limit. Manual mode is now in Settings, with an indicator in the conversation header and progress panel.
+
 - Source split into layers (`core`, `providers`, `server`, `config`, `cli`, `workspace`) and converted to strict TypeScript, run directly by Node 22.18+.
 - Page split into ES modules; CSS reorganised into cascade layers with design tokens and components.
 - Final approval uses detected Git changes since the last user message. In folders without Git, a reported successful edit can trigger approval. Restored work without a comparison point can still require approval. Completing the last milestone also opens the final review.

@@ -220,7 +220,7 @@ export function restoreProgress(owner: Conversation, events: BridgeEvent[]) {
   for (const row of register(owner).values()) {
     row.approvals = {};
     row.blocked = [];
-    if (row.plan?.specRequestedFrom && !row.plan.finished && !row.plan.approved && !row.plan.pending) row.plan.specNeedsRetry = true;
+    if (row.plan?.specRequestedFrom && !row.plan.finished && !row.plan.approved && !row.plan.pending) row.plan.specNeedsRetry ??= true;
     for (const task of row.tasks)
       if (active(task)) {
         task.state = 'interrupted';
@@ -247,7 +247,10 @@ export function pendingWork(owner: Conversation): Wait[] {
           item.agent,
           row.seq,
         );
-    if (p?.specNeedsRetry) add('Specification needs another attempt', 'Retry specification', 'retry', p.specRequestedFrom, row.seq);
+    if (p?.specNeedsRetry === 'manual' && !p.finished)
+      add('Specification request has not been sent', 'Request specification', 'retry', p.specRequestedFrom, row.seq);
+    else if (p?.specNeedsRetry && !p.finished)
+      add('Specification needs another attempt', 'Retry specification', 'retry', p.specRequestedFrom, row.seq);
     else if (p?.specRequestedFrom && !p.pending && !p.approved && !p.finished)
       add('Preparing specification', undefined, undefined, p.specRequestedFrom, row.seq);
     for (const id of row.blocked) add('Coder delegation needs to be resent', undefined, undefined, id, row.seq);
@@ -278,7 +281,8 @@ export function pendingWork(owner: Conversation): Wait[] {
   if (owner.relay.limitPause) add('Hand-offs paused by ' + owner.relay.limitPause, 'Resume', 'resume');
   return waits;
 }
-export function progressView(owner: Conversation, waits: Wait[]) {
+export function progressView(owner: Conversation, waits: Wait[], manualMode = false) {
+  const current = manualMode ? latest(owner) : undefined;
   return [...register(owner).values()].map((row) => {
     const reasons = waits.filter((w) => w.seq === row.seq && w.reason !== 'Agent is working');
     const waiting = reasons.find((w) => w.action);
@@ -310,7 +314,7 @@ export function progressView(owner: Conversation, waits: Wait[]) {
       total: row.milestones.length || undefined,
       tasks: row.tasks,
       waiting,
-      reasons,
+      reasons: row === current ? [...reasons, { reason: 'Manual mode: replies are not forwarded' }] : reasons,
     };
   });
 }

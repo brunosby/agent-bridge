@@ -5,6 +5,7 @@ import { Window } from 'happy-dom';
 
 test('agent card shows the role and a short model name, with the full id and effort in the tooltip', async (t) => {
   const window = new Window({ url: 'http://localhost' });
+  const { document } = window;
   window.document.write(readFileSync(new URL('../public/index.html', import.meta.url), 'utf8').replace(/<script[^>]+><\/script>/g, ''));
   Object.assign(globalThis, {
     document: window.document,
@@ -107,6 +108,11 @@ test('agent card shows the role and a short model name, with the full id and eff
       totalTokens: 0,
     };
     handle(state);
+    assert.equal(document.querySelector('#manualModeSettings').hidden, false);
+    handle({ ...state, relay: { ...state.relay, auto: true, effectiveMaxHops: 16 } });
+    assert.equal(document.querySelector('#manualModeSettings').hidden, true);
+    assert.equal(document.querySelector('#relayState').textContent, 'hops 0/16');
+    assert.equal(document.querySelector('#maxHops').value, '8');
     assert.notEqual(tone(cards.a1.el), tone(cards.a2.el));
     const peerColor = tone(cards.a2.el);
     handle({ kind: 'delta', agent: 'a1', key: 'stream', text: '@Pe' });

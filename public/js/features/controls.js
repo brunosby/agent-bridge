@@ -202,7 +202,6 @@ input.addEventListener('keydown', (e) => {
     else selectMention((active + matches.length + (e.key === 'ArrowDown' ? 1 : -1)) % matches.length);
   }
 });
-$('auto').onchange = (e) => api('relay', { auto: e.target.checked });
 $('maxHops').onchange = (e) => api('relay', { maxHops: Number(e.target.value) });
 $('routing').onchange = (e) =>
   api('routing', { mode: e.target.value })

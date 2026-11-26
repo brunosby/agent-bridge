@@ -12,6 +12,10 @@ On first launch, setup checks the provider CLIs and Git. Choose **Run setup agai
 
 Use **Manage** beside the team roster to save, rename, or apply a team. Templates keep role and model choices. Each new member starts with bypass off.
 
+In orchestrator mode, **Max hops** counts each agent the orchestrator delegates to. Results can return even at the limit. The default budget is 8 delegations for an unclassified or small task, 16 for medium and 32 for large. Other routing modes count every hand-off against the base limit. **Resume** resets the counter.
+
+Enable **Manual mode** under **Settings > General** to read agent replies without forwarding them. Use **Pause** to hold replies for **Resume**. A button in the conversation header opens the manual mode setting directly.
+
 Use the position button in the **Progress** header to move the panel above the chat or to its right. It also updates **Settings → General → Progress layout**. The double chevron collapses or expands the panel. Each position remembers its own collapse state. Expand **Earlier requests** to see outstanding work from previous messages.
 
 On desktop, drag the divider between the chat and the right panel to resize it. You can also focus the divider with **Tab**, adjust it with the arrow keys, or use **Home** and **End** for the narrowest and widest available sizes. Your browser remembers the width. On a narrow screen, tap the progress button to open the side panel.

@@ -428,12 +428,12 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
         if (milestone.invalid) publish({ kind: 'info', agent: id, text: 'Ignored a malformed milestone declaration.' });
         else if (milestone.proposed) {
           try {
-            if (owner.plan && owner.plan.size !== 'large') {
+            if (plan && plan.size !== 'large') {
               publish({ kind: 'info', agent: id, text: 'Milestones require a large task. Change the task size to use them.' });
               return;
             }
-            if (owner.plan && (!owner.plan.approved || owner.plan.awaitingSpecRevision)) {
-              requestSpec(owner, id);
+            if (plan && (!plan.approved || plan.awaitingSpecRevision)) {
+              requestSpec(owner, id, plan);
               return;
             }
             if (offerMilestonePlan(owner, id, milestone.proposed)) return;

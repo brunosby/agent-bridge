@@ -22,7 +22,8 @@ export interface TaskPlan {
   pending?: TaskDecision;
   queuedDecisions?: TaskDecision[];
   specRequestedFrom?: string;
-  specNeedsRetry?: boolean;
+  /** 'manual' means the first draft still needs the user's explicit send. */
+  specNeedsRetry?: boolean | 'manual';
   pendingRoutingNotices?: string[];
   awaitingSpecRevision?: boolean;
   baselineDeferred?: boolean;
@@ -301,7 +302,7 @@ export interface HeldRelay {
   parts: RelayPart[];
   targets: string[];
   sourceSeq?: number;
-  kind: 'reply' | 'batch';
+  kind: 'reply' | 'batch' | 'spec';
 }
 
 export interface ProviderHandoff {

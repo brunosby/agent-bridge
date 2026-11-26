@@ -1,3 +1,4 @@
+import { hopBudget } from '../core/relay-limit.ts';
 import { activityPublisher } from './task-activity.ts';
 import { signInState } from './login-watch.ts';
 import { requestContext, register, observeProgress, pendingWork, progressView } from './request-progress.ts';
@@ -192,7 +193,7 @@ export function stateEvent() {
     kind: 'state',
     progressLayout: setting('progressLayout'),
     signIn: signInState(),
-    progress: progressView(S.conv, waits),
+    progress: progressView(S.conv, waits, !relay.auto),
     pendingWork: waits,
     earlierDecisions: [...register(S.conv).values()]
       .filter((row) => row.seq !== S.conv.plan?.seq && row.plan?.pending)
@@ -220,7 +221,12 @@ export function stateEvent() {
       ...[...S.conv.retiredAgents.values()].map((member) => ({ ...member, removed: true })),
       ...team.map(({ id, name, driver, role }) => ({ id, name, driver, role, removed: false })),
     ],
-    relay: { ...relay, ...S.conv.relay, held: S.conv.heldRelays.length },
+    relay: {
+      ...relay,
+      ...S.conv.relay,
+      effectiveMaxHops: hopBudget(S.conv.routingMode, relay.maxHops, S.conv.plan).limit,
+      held: S.conv.heldRelays.length,
+    },
     tokenLimit: Number(setting('tokenLimit')),
     totalTokens: team.reduce((s, a) => s + a.tokens, 0),
     totalCachedTokens: team.reduce((s, a) => s + a.cachedTokens, 0),

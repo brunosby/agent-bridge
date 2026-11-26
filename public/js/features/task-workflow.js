@@ -43,7 +43,7 @@ export function sizeBadge(node, state, editable = true) {
   let retry = head.querySelector('.retry-spec');
   if (editable && plan.specNeedsRetry && !select.disabled) {
     if (!retry) {
-      retry = button(head, 'Retry specification', async () => {
+      retry = button(head, '', async () => {
         retry.disabled = true;
         try {
           await api('taskDecision', { conversationId: state.conversationId, seq: plan.seq, action: 'retrySpec' });
@@ -54,6 +54,7 @@ export function sizeBadge(node, state, editable = true) {
       });
       retry.className = 'retry-spec';
     }
+    retry.textContent = plan.specNeedsRetry === 'manual' ? 'Request specification' : 'Retry specification';
   } else retry?.remove();
   select.onchange = async () => {
     select.disabled = true;

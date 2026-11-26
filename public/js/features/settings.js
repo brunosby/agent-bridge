@@ -9,8 +9,14 @@ export const SETTING_LABELS = {
   progressLayout: ['Progress layout', 'Where to show progress for your latest request.'],
   userName: ['Your name', 'How the agents refer to you.'],
   routingMode: ['Default routing', 'Used by new conversations. The header switch changes only the open one.'],
-  autoRelay: ['Auto-relay', 'Forward replies between agents automatically.'],
-  maxHops: ['Max hand-offs', 'Pause after this many agent-to-agent hand-offs (0 = never relay).'],
+  autoRelay: [
+    'Manual mode: show replies without forwarding them',
+    'Agents still reply in the chat, but nothing is forwarded to the next agent. Use Pause to stop the flow and keep the replies for later.',
+  ],
+  maxHops: [
+    'Max hops',
+    'Maximum agent hand-offs before the relay pauses. In orchestrator mode, only delegations from the orchestrator count. Medium tasks get twice the base limit and large tasks four times. Set 0 to disable automatic hand-offs.',
+  ],
   tokenLimit: ['Token limit per conversation', 'Pause hand-offs when all agents together pass this many tokens (0 = no limit).'],
   approvalTimeoutSec: ['Approval timeout (seconds)', 'Decline an unanswered approval after this time (0 = wait forever).'],
   bypassNewAgents: ['Bypass on for new agents', 'New agents start with bypass mode on.'],
@@ -62,7 +68,7 @@ export function renderSettingsForm() {
       const lab = h('label', 'check');
       input = h('input');
       input.type = 'checkbox';
-      input.checked = Boolean(value);
+      input.checked = key === 'autoRelay' ? !(store.state?.relay?.auto ?? value ?? true) : Boolean(value);
       lab.append(input, document.createTextNode(` ${title}`));
       form.appendChild(lab);
     } else {
@@ -104,7 +110,8 @@ $('saveSettings').onclick = async () => {
   const out = {};
   for (const el of $('settingsForm').querySelectorAll('[data-key]')) {
     const t = el.dataset.type;
-    out[el.dataset.key] = t === 'boolean' ? el.checked : t === 'number' ? Number(el.value) : t === 'list' ? el.value.split('\n') : el.value;
+    const checked = el.dataset.key === 'autoRelay' ? !el.checked : el.checked;
+    out[el.dataset.key] = t === 'boolean' ? checked : t === 'number' ? Number(el.value) : t === 'list' ? el.value.split('\n') : el.value;
   }
   try {
     const r = await api('settings', out);
@@ -309,12 +316,13 @@ const accountsReturn = () => {
 };
 globalThis.window?.addEventListener('focus', accountsReturn);
 document.addEventListener('visibilitychange', accountsReturn);
-$('openSettings').onclick = async () => {
+async function openSettings(focusManualMode = false) {
   await loadCatalog();
   renderSettingsForm();
   $('settingsMsg').textContent = '';
   showTab('general');
   $('settingsDialog').showModal();
+  if (focusManualMode) $('settingsForm').querySelector('[data-key="autoRelay"]')?.focus();
   const conversationId = store.state?.conversationId;
   try {
     const status = await api('publicationHook');
@@ -336,4 +344,6 @@ $('openSettings').onclick = async () => {
   } catch {
     /* Projects without a supported Git hooks directory have no install action. */
   }
-};
+}
+$('openSettings').onclick = () => openSettings();
+$('manualModeSettings').onclick = () => openSettings(true);

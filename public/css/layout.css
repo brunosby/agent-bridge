@@ -207,12 +207,6 @@
   justify-content: space-between;
   min-height: 2rem;
 }
-.relay-settings input[type='checkbox'] {
-  order: 1;
-  min-height: 0;
-  width: 1rem;
-  height: 1rem;
-}
 
 .conversation-bar {
   grid-area: title;

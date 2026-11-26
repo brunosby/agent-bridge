@@ -12,6 +12,7 @@ import type {
   RoleSuggestion,
   TurnEnded,
 } from '../core/types.ts';
+import { hopBudget, hopCost } from '../core/relay-limit.ts';
 import { startPlan } from './task-plan.ts';
 import { preparingSmallBaseline, closeDecision, recordWorkflow, requestSpec } from './task-workflow.ts';
 import { parseSummary } from '../../public/js/core/summary-markers.js';
@@ -93,12 +94,25 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
   const lead = orchestratorId();
   const plan = originPlan(owner, item.requestSeq);
   const needsSpec = plan?.size === 'large' && (!plan.approved || plan.awaitingSpecRevision);
+  if (
+    item.kind === 'spec' &&
+    (!needsSpec || (plan.specNeedsRetry !== 'manual' && plan.specRequestedFrom && item.targets.includes(plan.specRequestedFrom)))
+  )
+    return true;
+  if (item.kind === 'spec' && !eligible.some((id) => owner.team.some((m) => m.id === id && m.role === 'architect'))) {
+    publish({ kind: 'system', text: 'The requested Architect is unavailable. Choose an Architect or change the task size.' });
+    return true;
+  }
   const coders = needsSpec ? eligible.filter((id) => owner.team.some((member) => member.id === id && member.role === 'coder')) : [];
   if (coders.length) publish({ kind: 'delegationBlocked', requestSeq: item.requestSeq ?? plan?.seq, agents: coders });
   let targets = eligible.filter((id) => !coders.includes(id));
   const skipped = plan?.size === 'small' && item.from === lead ? targets.slice(1) : [];
   if (skipped.length) targets = targets.slice(0, 1);
-  if (owner.relay.hops + targets.length > relay.maxHops) {
+  const { limit, size } = hopBudget(owner.routingMode, relay.maxHops, plan);
+  const cost = targets.reduce((sum, id) => sum + hopCost(owner.routingMode, lead, item.from, id), 0);
+  if (eligible.length && (limit === 0 || (cost > 0 && owner.relay.hops + cost > limit))) {
+    const context = [size && size + ' task', 'base ' + relay.maxHops + ' in Settings > General > Max hops'].filter(Boolean).join(', ');
+    publish({ kind: 'system', text: `Relay paused after ${owner.relay.hops} hand-offs (limit ${limit}, ${context}).` });
     owner.relay.limitPause = 'hops';
     owner.relay.halted = true;
     return false;
@@ -115,12 +129,12 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
     owner.team.find((member) => member.role === 'orchestrator')?.id ?? (owner.routingMode === 'orchestrator' ? lead : undefined);
   const architect =
     needsSpec && item.from === lead ? targets.find((id) => owner.team.some((m) => m.id === id && m.role === 'architect')) : undefined;
-  const needsDraft = architect && plan && !plan.specRequestedFrom;
+  const needsDraft = architect && plan && (!plan.specRequestedFrom || plan.specNeedsRetry === 'manual' || item.kind === 'spec');
   if (needsDraft) {
+    if (plan.specNeedsRetry === 'manual') delete plan.specNeedsRetry;
     plan.specRequestedFrom = architect;
     recordWorkflow(owner, plan);
   }
-  const requestedDraft = coders.length && lead && !architect && requestSpec(owner, lead, plan);
   const note = coders.length
     ? 'Specification approval is pending. ' +
       coders.map((id) => '@' + id).join(', ') +
@@ -135,7 +149,7 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
       (plan.pendingRoutingNotices ??= []).push(note);
       recordWorkflow(owner, plan);
     }
-    if (!targets.length && !requestedDraft && plan.pendingRoutingNotices?.length) {
+    if (!targets.length && !requestSpec(owner, lead, plan) && plan.pendingRoutingNotices?.length) {
       deliver(lead, 'No agent received the delegation. Adjust the next step.', { from: 'user', sourceSeq: plan.seq });
     }
   }
@@ -145,7 +159,7 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
       item.kind === 'reply' && owner.routingMode === 'orchestrator' && item.from === orchestratorId() ? addBatchPart(owner, to) : undefined,
   }));
   for (const { to, taskId } of deliveries) {
-    owner.relay.hops++;
+    owner.relay.hops += hopCost(owner.routingMode, lead, item.from, to);
     const summarize = to === orchestrator && setting('summarizeAgentReplies');
     const body = item.parts
       .map((part) => '[Message from @' + part.from + ']\n' + (summarize ? (part.shortText ?? part.text) : part.text))
@@ -161,6 +175,7 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
       discarded: taskId ? (reason) => completeBatch(owner, to, taskId, '(not delivered: ' + reason + ')') : undefined,
     });
   }
+  if (targets.length && coders.length && lead && !architect) requestSpec(owner, lead, plan);
   return true;
 }
 
@@ -170,7 +185,7 @@ function activeLimitPause(owner: Conversation) {
   );
 }
 
-function relayOrHold(owner: Conversation, item: HeldRelay): void {
+export function relayOrHold(owner: Conversation, item: HeldRelay): void {
   const plan = originPlan(owner, item.requestSeq);
   if (!relay.auto || (owner.relay.halted && !activeLimitPause(owner) && !plan?.pending && !owner.succession)) return;
   checkTokenLimit();
@@ -200,7 +215,7 @@ export function resumeRelay(owner: Conversation): void {
     return;
   }
   if (owner.heldRelays.length && !relay.auto) {
-    publish({ kind: 'system', text: 'Enable auto-relay before resuming the held replies.' });
+    publish({ kind: 'system', text: 'Turn off manual mode in Settings > General before resuming the held replies.' });
     return;
   }
   clearRoleDecisions(owner, 'resume');
@@ -258,6 +273,9 @@ export function cancelBatchPart(owner: Conversation, agent: string, reason: stri
   if (taskId && (!taskIds || taskIds.includes(taskId))) completeBatch(owner, agent, taskId, '(' + reason + ')');
 }
 
+// An unavailable target can otherwise prompt another identical free turn indefinitely.
+const unavailableNotified = new WeakMap<object, Set<string>>();
+
 export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; sourceSeq?: number; requestSeq?: number }): void {
   const raw = (ev.text || '').trim();
   const reviewer = S.conv.team.some((member) => member.id === fromId && member.role === 'reviewer');
@@ -293,7 +311,11 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
   const closes = S.conv.routingMode !== 'orchestrator' || fromId === orch;
   const plan = originPlan(owner, ev.requestSeq);
   const done = DONE_MARKER.test(summary ? body : text);
-  if (done && closes && (plan?.pending || plan?.awaitingSpecRevision || (plan?.specRequestedFrom && !plan.approved))) {
+  if (
+    done &&
+    closes &&
+    (plan?.pending || plan?.awaitingSpecRevision || plan?.specNeedsRetry === 'manual' || (plan?.specRequestedFrom && !plan.approved))
+  ) {
     publish({ kind: 'info', agent: fromId, text: 'The task is waiting for a decision or a specification before it can finish.' });
     return;
   }
@@ -316,7 +338,16 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
     publishState();
     return;
   }
-  if (!relay.auto || (owner.relay.halted && !activeLimitPause(owner) && !owner.succession && !owner.plan?.pending)) return;
+  if (!relay.auto) {
+    if (owner.routingMode === 'orchestrator' && fromId === orch && plan?.size === 'large' && !plan.approved) {
+      const targets = routeTargets(fromId, summary ? body : text);
+      const architect = targets.find((id) => owner.team.some((member) => member.id === id && member.role === 'architect'));
+      if (architect || owner.team.some((member) => member.role === 'coder' && targets.includes(member.id)))
+        requestSpec(owner, fromId, plan, architect);
+    }
+    return;
+  }
+  if (owner.relay.halted && !activeLimitPause(owner) && !owner.succession && !owner.plan?.pending) return;
   const requested = routeTargets(fromId, summary ? body : text).filter((id) => owner.agents[id] || owner.succession?.agent === id);
   const targets = requested.filter(
     (id) => (owner.succession?.agent === id || canQueueWork(statusFor(owner, id))) && !owner.batch?.pending.has(id),
@@ -328,9 +359,23 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
   if (note) publish({ kind: 'system', text: note });
   if (!targets.length) {
     if (note && fromId === orch) {
-      if (!owner.relay.halted && !checkTokenLimit() && owner.relay.hops < relay.maxHops) {
-        owner.relay.hops += 1;
-        deliver(orch, '[Message from Agent Bridge]\n' + note, { from: 'user' });
+      const { limit } = hopBudget(owner.routingMode, relay.maxHops, plan);
+      const cost = Number(owner.routingMode !== 'orchestrator');
+      const request = plan ?? latest(owner) ?? owner;
+      const notified = unavailableNotified.get(request) ?? new Set<string>();
+      if (
+        !owner.relay.halted &&
+        !checkTokenLimit() &&
+        limit > 0 &&
+        (!cost || owner.relay.hops + cost <= limit) &&
+        (cost || blocked.some((id) => !notified.has(id)))
+      ) {
+        if (!cost) {
+          for (const id of blocked) notified.add(id);
+          unavailableNotified.set(request, notified);
+        }
+        owner.relay.hops += cost;
+        deliver(orch, '[Message from Agent Bridge]\n' + note, { from: 'user', requestSeq: ev.requestSeq });
       }
       return;
     }

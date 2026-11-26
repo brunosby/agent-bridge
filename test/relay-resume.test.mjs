@@ -8,12 +8,14 @@ const team = [
   { driver: 'fake', role: 'researcher', name: 'Research' },
 ];
 
-test('Resume delivers a gathered reply once after the hop limit', async () => {
+test('a batch returns at the limit and Resume delivers the next delegation once', async () => {
   const bridge = await startBridge({
     team,
     settings: { maxHops: 2 },
     rules: [
-      { agent: 'Lead', match: 'Results from 2 agents', reply: 'Both results received.\n[[DONE]]' },
+      { agent: 'Lead', match: 'Results from 2 agents', reply: '@a3 follow up' },
+      { agent: 'Lead', match: 'follow-up complete', reply: 'All results received.\n[[DONE]]' },
+      { agent: 'Research', match: 'follow up', reply: 'follow-up complete' },
       { agent: 'Lead', match: 'start', reply: '@a2 build\n@a3 inspect' },
       { agent: 'Dev', reply: 'build ready' },
       { agent: 'Research', reply: 'inspection ready' },
@@ -22,10 +24,19 @@ test('Resume delivers a gathered reply once after the hop limit', async () => {
   try {
     await bridge.api('send', { text: 'start' });
     await bridge.waitFor((ev) => ev.kind === 'state' && ev.relay.limitPause === 'hops' && ev.relay.held === 1);
-    assert.equal(bridge.events.filter((ev) => ev.kind === 'routed' && ev.to === 'a1').length, 0);
-    await Promise.all([bridge.api('relay', { resume: true }), bridge.api('relay', { resume: true })]);
-    await bridge.waitFor((ev) => ev.kind === 'text' && ev.text.includes('Both results received.'));
     assert.equal(bridge.events.filter((ev) => ev.kind === 'routed' && ev.to === 'a1').length, 1);
+    assert.equal(bridge.state().relay.hops, 2);
+    await bridge.api('relay', { auto: false });
+    await bridge.api('relay', { resume: true });
+    await bridge.waitFor((ev) => ev.kind === 'system' && ev.text.includes('Turn off manual mode in Settings > General'));
+    await bridge.api('relay', { auto: true });
+    await Promise.all([bridge.api('relay', { resume: true }), bridge.api('relay', { resume: true })]);
+    await bridge.waitFor((ev) => ev.kind === 'text' && ev.text.includes('All results received.'));
+    assert.equal(bridge.events.filter((ev) => ev.kind === 'routed' && ev.to === 'a3').length, 2);
+    assert.deepEqual(
+      bridge.events.filter((ev) => ev.kind === 'routed' && ev.from === 'a1').map((ev) => ev.hop),
+      [1, 2, 1],
+    );
   } finally {
     await bridge.stop();
   }
