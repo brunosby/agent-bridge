@@ -8,7 +8,7 @@ import { startAndWait, statusOf } from '../src/server/agent-lifecycle.ts';
 
 function fixture(t) {
   const dir = mkdtempSync(path.join(tmpdir(), 'bridge claude startup '));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
   const script = path.join(dir, 'models.cjs');
   writeFileSync(
     script,

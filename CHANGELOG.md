@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Added
 
+- First-run setup checks provider accounts and Git, offers confirmed installation and Windows shortcuts, and helps choose a starting team. Windows launchers check native TypeScript support before opening the server.
+
 - Save named teams, select a default for new conversations, and replace a paused team after outstanding work is resolved. Agents with missing roles wait for a replacement role.
 
 - Follow the latest request in a sidebar or top panel, including delegations, approvals and earlier requests still running.

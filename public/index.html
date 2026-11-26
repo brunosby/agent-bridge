@@ -225,6 +225,27 @@
       </div>
     </dialog>
 
+    <dialog id="setupDialog" class="dialog" aria-labelledby="setupTitle">
+      <header class="dialog__head"><h2 id="setupTitle" class="dialog__title">Set up Agent Bridge</h2></header>
+      <div class="dialog__body form">
+        <section aria-label="Tools and accounts">
+          <div id="setupItems"></div>
+          <button id="setupRefresh" class="btn">Check again</button>
+        </section>
+        <section>
+          <h3>Starting team</h3>
+          <div id="setupTeam" class="form"></div>
+        </section>
+        <section id="setupShortcut" hidden>
+          <button id="setupCreate" class="btn">Create Start menu shortcut</button
+          ><label class="check"><input type="checkbox" id="setupDesktop" /> Also add to the desktop</label>
+        </section>
+        <p id="setupMessage" role="status" class="hint"></p>
+        <div class="actions">
+          <button id="setupSkip" class="btn">Skip setup</button><button id="setupDone" class="btn btn--primary">Finish</button>
+        </div>
+      </div>
+    </dialog>
     <dialog id="teamsDialog" class="dialog" aria-labelledby="teamsTitle">
       <header class="dialog__head">
         <h2 id="teamsTitle">Teams</h2>
@@ -277,6 +298,7 @@
         <button class="btn btn--icon close" data-close="settingsDialog" aria-label="Close">✕</button>
       </div>
       <div id="tab-general" aria-labelledby="settings-tab-general" class="dialog__body tabpane" role="tabpanel">
+        <button class="btn" id="runSetup">Run setup again</button>
         <div id="settingsForm" class="form"></div>
         <div class="form">
           <label class="check"><input type="checkbox" id="requestNotifications" disabled /> Notify me when an agent needs a decision</label>

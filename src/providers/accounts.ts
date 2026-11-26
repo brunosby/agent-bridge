@@ -1,3 +1,4 @@
+import { installer } from './installers.ts';
 import { execFile } from 'node:child_process';
 import type { AccountState, DriverConfig } from '../core/types.ts';
 
@@ -33,32 +34,17 @@ interface RunResult {
  *
  * States: not_installed | logged_out | no_access | rate_limited | ok | unknown
  */
-export const PROVIDERS: Record<string, { label: string; install: Step; login: Step }> = {
+export const PROVIDERS: Record<string, { label: string; login: Step }> = {
   claude: {
     label: 'Claude Code',
-    install: {
-      text: 'Install Claude Code (official installer for Windows PowerShell):',
-      command: 'irm https://claude.ai/install.ps1 | iex',
-      docs: 'https://code.claude.com/docs/en/setup',
-    },
     login: { text: 'Sign in with your Claude account or an API key:', command: 'claude auth login' },
   },
   codex: {
     label: 'Codex',
-    install: {
-      text: 'Install the Codex CLI with npm:',
-      command: 'npm install -g @openai/codex',
-      docs: 'https://developers.openai.com/codex/cli',
-    },
     login: { text: 'Sign in with ChatGPT or an API key:', command: 'codex login' },
   },
   opencode: {
     label: 'OpenCode',
-    install: {
-      text: 'Install OpenCode with npm (it needs its install script):',
-      command: 'npm install -g --allow-scripts=opencode-ai opencode-ai',
-      docs: 'https://opencode.ai/docs/',
-    },
     login: {
       text: 'Connect a provider (OpenCode Zen, OpenRouter, DeepSeek, ...) with a login or an API key:',
       command: 'opencode auth login',
@@ -84,7 +70,7 @@ function run(command: string, args: string[], timeoutMs = 15000): Promise<RunRes
   });
 }
 
-async function checkInstalled(command: string): Promise<{ installed: boolean; detail?: string; version?: string }> {
+export async function checkInstalled(command: string): Promise<{ installed: boolean; detail?: string; version?: string }> {
   const r = await run(command, ['--version'], 10000);
   if (r.notFound || (r.code !== 0 && !r.out)) return { installed: false };
   if (r.code !== 0) return { installed: false, detail: r.out.split('\n')[0].slice(0, 200) };
@@ -175,7 +161,12 @@ export function nextStep(
   const p = PROVIDERS[driver];
   switch (status.state) {
     case 'not_installed':
-      return { text: p.install.text, command: p.install.command, docs: p.install.docs, action: null };
+      return {
+        text: 'Install ' + p.label + ' for this operating system.',
+        command: installer(driver).command,
+        docs: installer(driver).guide,
+        action: null,
+      };
     case 'logged_out':
       return { text: p.login.text, command: p.login.command, action: 'login' };
     case 'no_access':

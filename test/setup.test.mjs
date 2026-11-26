@@ -1,0 +1,108 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { Window } from 'happy-dom';
+import { readFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { fileURLToPath } from 'node:url';
+import { openInstaller, installer } from '../src/providers/installers.ts';
+import { refreshPath, shortcutArgs, setup } from '../src/server/setup.ts';
+import { startBridge } from './helpers/bridge.mjs';
+const probe = fileURLToPath(new URL('../bin/ts-check.ts', import.meta.url));
+test('probe exercises native TypeScript, including the real Windows preflight', () => {
+  assert.equal(spawnSync(process.execPath, [probe], { encoding: 'utf8' }).stdout.trim(), 'ok');
+  const result = spawnSync(process.execPath, ['--no-strip-types', probe], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.notEqual(result.stdout.trim(), 'ok');
+  if (process.platform === 'win32') {
+    const launcher = fileURLToPath(new URL('../bin/check-node.vbs', import.meta.url));
+    const run = spawnSync('cscript.exe', ['//nologo', launcher], { input: 'C\r\n', encoding: 'utf8', timeout: 10000 });
+    assert.equal(run.status, 0, run.stdout + run.stderr);
+  }
+});
+test('known installer targets select visible terminals, and Windows PATH is refreshed in system/user order', async () => {
+  const opened = [];
+  const spawn = (...args) => {
+    opened.push(args);
+    const child = new EventEmitter();
+    child.unref = () => {};
+    queueMicrotask(() => child.emit('spawn'));
+    return child;
+  };
+  for (const [id, platform] of [
+    ['claude', 'win32'],
+    ['codex', 'win32'],
+    ['opencode', 'linux'],
+    ['git', 'darwin'],
+  ])
+    await openInstaller(id, platform, spawn);
+  assert.deepEqual(
+    opened.map((a) => a[0]),
+    ['powershell.exe', 'cmd.exe', 'x-terminal-emulator', 'osascript'],
+  );
+  assert.equal(
+    opened.every((a) => a[2].windowsHide === false),
+    true,
+  );
+  assert.equal(installer('git', 'linux').command, '');
+  await assert.rejects(openInstaller('custom', 'win32', spawn), /Unknown/);
+  assert.equal(opened.length, 4);
+  const env = { Path: 'inherited;SYSTEM' };
+  await refreshPath('win32', async () => ({ stdout: 'system;user' }), env);
+  assert.equal(env.Path, 'system;user;inherited');
+  assert.equal(shortcutArgs(false).includes('/desktop'), false);
+  assert.ok(shortcutArgs(true).includes('/desktop'));
+  await assert.rejects(setup({ action: 'shortcut' }), /Confirmation/);
+});
+test('setup can be reopened, keeps desktop opt-in, and switches to a guide without an installer', async (t) => {
+  const win = new Window({ url: 'http://localhost' });
+  t.after(() => win.happyDOM.close());
+  win.document.write(readFileSync(new URL('../public/index.html', import.meta.url), 'utf8').replace(/<script[^>]+><\/script>/g, ''));
+  globalThis.document = win.document;
+  globalThis.Option = win.Option;
+  let windows = false;
+  const sent = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const body = JSON.parse(options.body);
+    sent.push(body);
+    return {
+      ok: true,
+      json: async () =>
+        body.action === 'status'
+          ? { windows, items: [{ id: 'git', label: 'Git', state: 'not_installed', command: '', guide: 'https://git-scm.com/install/' }] }
+          : { ok: true },
+    };
+  });
+  const { openSetup } = await import('../public/js/features/setup.js');
+  const el = (id) => win.document.getElementById(id);
+  openSetup();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(el('setupDialog').open);
+  assert.ok(el('setupShortcut').hidden);
+  assert.match(el('setupItems').textContent, /Open install guide/);
+  await el('setupSkip').onclick();
+  assert.equal(el('setupDialog').open, false);
+  assert.equal(sent.at(-1).action, 'finish');
+  windows = true;
+  el('runSetup').click();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(el('setupShortcut').hidden, false);
+  assert.equal(el('setupDesktop').checked, false);
+  assert.equal(
+    sent.some((b) => b.action === 'shortcut' || b.action === 'install'),
+    false,
+  );
+});
+test('skipping setup persists across restarts', async () => {
+  let b = await startBridge({ team: [{ driver: 'fake', role: 'coder' }], rules: [] });
+  try {
+    assert.equal((await b.api('catalog')).setupCompleted, false);
+    await b.api('setup', { action: 'finish' });
+    const dir = b.root;
+    await b.stop();
+    b = await startBridge({ dir, team: [{ driver: 'fake', role: 'coder' }], rules: [] });
+    assert.equal((await b.api('catalog')).setupCompleted, true);
+  } finally {
+    await b.stop();
+  }
+});

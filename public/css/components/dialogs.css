@@ -1,3 +1,17 @@
+.setup-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.setup-item > div:first-child {
+  flex: 1 1 12rem;
+}
+#setupDialog section + section {
+  margin-top: var(--space-4);
+}
 /* Dialogs (Conversations, Add agent, Settings) and their content: tabs, lists, accounts, roles. Full screen on phones. */
 .dialog {
   width: 100vw;

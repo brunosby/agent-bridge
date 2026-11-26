@@ -1,4 +1,5 @@
 // Entry point of the page. The feature modules below register their buttons when imported.
+import { openSetup } from './features/setup.js';
 import { bindProgress } from './features/request-progress.js';
 import './features/add-agent.js';
 import './features/settings.js';
@@ -30,5 +31,8 @@ export async function loadCatalog() {
 setupRequestNotifications();
 initializeSession()
   .then(loadCatalog)
-  .then(connect)
+  .then(() => {
+    connect();
+    if (store.catalog.setupCompleted === false) openSetup();
+  })
   .catch((e) => addSys(e.message, true));

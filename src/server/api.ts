@@ -1,5 +1,6 @@
 import { savedTeams, manageTeam, applyTeam } from './saved-teams.ts';
 import { clearRoleDecisions } from './routing.ts';
+import { setup } from './setup.ts';
 import { register } from './request-progress.ts';
 import { discardMilestones } from './milestones.ts';
 import { buildProviderHandoff } from './provider-handoff.ts';
@@ -96,8 +97,11 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       return manageTeam(body);
     case 'applyTeam':
       return applyTeam(body);
+    case 'setup':
+      return setup(body);
     case 'catalog':
       return {
+        setupCompleted: config.setupCompleted === true,
         roles: Object.values(S.roles).map(({ instructions: _instructions, ...r }) => r),
         drivers: Object.entries(DRIVERS).map(([id, d]) => ({
           id,

@@ -10,10 +10,7 @@ Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 dir = fso.GetParentFolderName(WScript.ScriptFullName)
 
-If sh.Run("cmd /c where node >nul 2>nul", 0, True) <> 0 Then
-  MsgBox "Node.js 22.18 or newer is required." & vbCrLf & "Install it and try again.", vbExclamation, "Agent Bridge"
-  WScript.Quit 1
-End If
+If sh.Run("wscript.exe """ & dir & "\bin\check-node.vbs""", 0, True) <> 0 Then WScript.Quit 1
 
 args = ""
 hasCwd = False
