@@ -42,6 +42,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Changed
 
+- The **Manage** button beside the team roster opens saved teams.
+
 - Source split into layers (`core`, `providers`, `server`, `config`, `cli`, `workspace`) and converted to strict TypeScript, run directly by Node 22.18+.
 - Page split into ES modules; CSS reorganised into cascade layers with design tokens and components.
 - Final approval uses detected Git changes since the last user message. In folders without Git, a reported successful edit can trigger approval. Restored work without a comparison point can still require approval. Completing the last milestone also opens the final review.

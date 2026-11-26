@@ -10,7 +10,7 @@ Mixing providers means one model reviews another's work and each role can use th
 
 On first launch, setup checks the provider CLIs and Git. Choose **Run setup again** in Settings to revisit accounts, install tools, or create a Windows shortcut.
 
-Use **Teams** beside the roster to save, rename, or apply a team. Templates keep role and model choices. Each new member starts with bypass off.
+Use **Manage** beside the team roster to save, rename, or apply a team. Templates keep role and model choices. Each new member starts with bypass off.
 
 Use the position button in the **Progress** header to move the panel above the chat or to its right. It also updates **Settings → General → Progress layout**. The double chevron collapses or expands the panel. Each position remembers its own collapse state. Expand **Earlier requests** to see outstanding work from previous messages.
 
