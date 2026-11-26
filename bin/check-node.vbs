@@ -1,23 +1,31 @@
 Option Explicit
-Dim sh, fs, dir, probe, version, message, choice, console, answer, exitCode
+Dim sh, fs, dir, capture, outputPath, version, message, choice, console, answer, exitCode
 Set sh = CreateObject("WScript.Shell")
 Set fs = CreateObject("Scripting.FileSystemObject")
 dir = fs.GetParentFolderName(WScript.ScriptFullName)
 console = InStr(1, WScript.FullName, "cscript.exe", vbTextCompare) > 0
 version = "not found"
-On Error Resume Next
-Set probe = sh.Exec("node """ & dir & "\ts-check.ts""")
-If Err.Number = 0 Then
-  answer = Trim(Replace(Replace(probe.StdOut.ReadAll, vbCr, ""), vbLf, ""))
-  Do While probe.Status = 0
-    WScript.Sleep 10
-  Loop
-  exitCode = probe.ExitCode
-  If exitCode = 0 And answer = "ok" Then WScript.Quit 0
-  Set probe = sh.Exec("node --version")
-  version = Trim(Replace(Replace(probe.StdOut.ReadAll, vbCr, ""), vbLf, ""))
+' Run both probes with the console hidden, including when launched by wscript.
+sh.CurrentDirectory = dir
+outputPath = fs.BuildPath(fs.GetSpecialFolder(2), fs.GetTempName())
+Set capture = fs.CreateTextFile(outputPath, False)
+capture.Close
+sh.Environment("Process")("BRIDGE_NODE_PROBE_OUT") = outputPath
+Function ReadProbe(command, ByRef result)
+  Dim stream
+  ReadProbe = sh.Run("cmd.exe /d /v:off /c " & command & " >""%BRIDGE_NODE_PROBE_OUT%"" 2>nul", 0, True)
+  Set stream = fs.OpenTextFile(outputPath, 1)
+  result = ""
+  If Not stream.AtEndOfStream Then result = Trim(Replace(Replace(stream.ReadAll, vbCr, ""), vbLf, ""))
+  stream.Close
+End Function
+exitCode = ReadProbe("node ts-check.ts", answer)
+If exitCode = 0 And answer = "ok" Then
+  fs.DeleteFile outputPath
+  WScript.Quit 0
 End If
-On Error GoTo 0
+If ReadProbe("node --version", answer) = 0 Then version = answer
+fs.DeleteFile outputPath
 message = "Found Node.js: " & version & ". Agent Bridge needs native TypeScript support (22.18+ on Node 22, 23.6+ on Node 23, or a newer major version)."
 If console Then
   WScript.Echo message

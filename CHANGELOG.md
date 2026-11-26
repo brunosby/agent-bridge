@@ -58,7 +58,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
-- Setup offers sign-in for anonymous OpenCode sessions and suggests authenticated providers for the starting team.
+- Setup includes OpenCode in the starting team when only free models are available and offers optional sign-in.
+- The Windows launcher checks Node in a hidden window. The missing-Node test isolates the search path regardless of how Windows capitalizes `PATH`.
 
 - Late decisions and held replies keep their originating request when another user message is already active. Batch waits name the outstanding member on the coordinator card.
 

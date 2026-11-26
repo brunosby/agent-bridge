@@ -36,9 +36,10 @@ async function check(refresh = false) {
   for (const item of data.items) {
     const row = h('section', 'setup-item'),
       label = h('div');
+    const freeOnly = item.id === 'opencode' && item.state === 'ok' && item.signedIn === false;
     label.append(
       h('strong', null, item.label),
-      h('div', 'hint', [item.state.replaceAll('_', ' '), item.version].filter(Boolean).join(' · ')),
+      h('div', 'hint', [freeOnly ? 'Free models only' : item.state.replaceAll('_', ' '), item.version].filter(Boolean).join(' · ')),
     );
     if (item.id === 'git') label.append(h('small', null, 'Used for worktrees, milestones, publication checks and the Claude Bash tool.'));
     row.append(label);
@@ -55,7 +56,8 @@ async function check(refresh = false) {
       guide.target = '_blank';
       guide.rel = 'noopener noreferrer';
       row.append(guide);
-    } else if (item.id !== 'git' && item.state !== 'ok') row.append(control('Sign in', () => api('login', { driver: item.id })));
+    } else if (item.id !== 'git' && (item.state !== 'ok' || freeOnly))
+      row.append(control('Sign in', () => api('login', { driver: item.id })));
     list.append(row);
   }
   $('setupShortcut').hidden = !data.windows;
@@ -76,7 +78,7 @@ async function check(refresh = false) {
     const name = role[0].toUpperCase() + role.slice(1);
     const select = h('select'),
       field = h('label', 'field', name);
-    for (const a of available) select.add(new Option(a.label, a.id));
+    for (const a of available) select.add(new Option(a.signedIn === false ? a.label + ' (free models only)' : a.label, a.id));
     select.add(new Option('Exclude from team', ''));
     select.value = available[i === 1 && available.length > 1 ? 1 : 0].id;
     field.append(select);
