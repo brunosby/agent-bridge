@@ -99,6 +99,44 @@ test('interrupt and send pins the confirmed turn and conversation, and records c
   assert.ok(cancelled.seq < sent.seq);
   await assert.rejects(b.api('send', body), /already finished/);
 });
+test('reorder validates ownership, preserves the acting coordinator and persists for restore and templates', async (t) => {
+  const b = await run(t, {
+    team: team.map((a) => ({ ...a, role: 'coder' })),
+    rules: [
+      { agent: 'Lead', match: 'launch job', reply: '@Dev long job' },
+      { agent: 'Dev', match: 'long job', waitForFile: 'finish', reply: 'result' },
+    ],
+  });
+  const { conversationId } = b.state();
+  const order = ['a2', 'a3', 'a1'];
+  const reorder = (ids, conv = conversationId) => b.api('reorder', { conversationId: conv, order: ids });
+  for (const invalid of [['a1'], ['a1', 'a1', 'a3'], ['a1', 'a2', 'absent']]) await assert.rejects(reorder(invalid), /membership/);
+  await assert.rejects(reorder(order, 'old'), /conversation changed/i);
+  await b.api('send', { text: 'launch job' });
+  await active(b, 'a2');
+  await assert.rejects(reorder(order), /coordinates/);
+  await reorder(['a1', 'a3', 'a2']);
+  writeFileSync(path.join(b.work, 'finish'), 'ok');
+  await b.waitFor((e) => e.kind === 'system' && e.text.includes('replied to you'));
+  await reorder(order);
+  assert.deepEqual(
+    (await b.api('manageTeam', { operation: 'save', name: 'Reordered' })).teams[0].members.map((m) => m.name),
+    ['Dev', 'Research', 'Lead'],
+  );
+  for (const mode of ['pipeline', 'roundrobin']) {
+    await b.api('routing', { mode });
+    assert.equal((await b.api('previewTarget', { target: 'auto' })).targets[0].id, 'a2');
+    await b.api('send', { text: mode });
+    await b.waitFor((e) => e.kind === 'routed' && e.from === 'a2' && e.to === 'a3');
+    await b.api('interrupt', {});
+  }
+  await b.api('new', { workDir: b.work });
+  await b.api('restore', { id: conversationId });
+  assert.deepEqual(
+    (await b.api('previewTarget', { target: 'all' })).targets.map((a) => a.id),
+    order,
+  );
+});
 test('a missing OpenAPI uses the local queue and an expired live session is recovered without resending', async (t) => {
   const agent = new OpenCodeAgent({ cwd: '.', config: {} });
   agent.sessionId = 'lost';

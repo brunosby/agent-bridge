@@ -14,6 +14,8 @@ Mixing providers means one model reviews another's work and each role can use th
 
 On first launch, setup checks the provider CLIs and Git. Choose **Run setup again** in Settings to revisit accounts, install tools, or create a Windows shortcut.
 
+Drag a team card to reorder the agents, or open its details and choose **Move up**, **Move down**, or **Move to top**. Pipeline and Round robin follow the card order.
+
 When the coordinator asks a question and delegates work in the same reply, the question card holds those instructions. Choose **Send now** to release eligible work before answering. The card shows the result for each agent. Answering or dismissing the question returns any remaining instructions to the coordinator.
 
 While an agent is working, send a correction normally to let it incorporate the update at its next opportunity. The chat reports when the provider confirms receipt. Older OpenCode servers deliver updates after the current turn. To stop the displayed turn first, choose **Interrupt and send**. Edits already made stay in the project.

@@ -2,8 +2,10 @@
 .card {
   --accent: var(--agent-accent, var(--color-text-muted));
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  grid-template-areas: 'avatar name' 'avatar role' '. status';
+  position: relative;
+  user-select: none;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: 'avatar name handle' 'avatar role handle' '. status handle';
   gap: 0 var(--space-2);
   align-items: center;
   width: 100%;
@@ -14,6 +16,33 @@
 }
 .card:hover:not(:disabled) {
   border-color: var(--accent);
+}
+.drag-handle {
+  grid-area: handle;
+  display: grid;
+  place-items: center;
+  min-width: 24px;
+  min-height: 24px;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .card:not(:hover):not(:focus-visible) .drag-handle {
+    opacity: 0;
+  }
+}
+.card[data-dragging] {
+  transform: translateY(var(--drag-offset));
+  z-index: 1;
+  opacity: 0.8;
+  cursor: grabbing;
+}
+.card[data-drop-edge='before'] {
+  box-shadow: 0 -3px var(--accent);
+}
+.card[data-drop-edge='after'] {
+  box-shadow: 0 3px var(--accent);
 }
 .agent-avatar {
   grid-area: avatar;

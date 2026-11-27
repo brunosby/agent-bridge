@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format follows Keep
 
 - Update a busy agent’s delegation and see delivery confirmations. Held updates remain tied to the original task. **Interrupt and send** waits for the confirmed turn to finish before delivering new instructions.
 - OpenCode can receive corrections during an active session on compatible servers. The Bridge preserves the selected model, session permissions, and one result per completed batch.
+- Reorder team cards by dragging or using the move buttons in agent details. The saved order controls Pipeline and Round robin routing.
 
 - First-run setup checks provider accounts and Git, offers confirmed installation and Windows shortcuts, and helps choose a starting team. Windows launchers check native TypeScript support before opening the server.
 

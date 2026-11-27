@@ -14,7 +14,7 @@ import { cancelMilestoneDecision, resolveMilestoneCommit, resolveMilestonePlan }
 // API actions called by the page.
 import type { Agent, RoutingMode } from '../core/types.ts';
 import { currentTurn } from './interrupt-send.ts';
-import { S } from './state.ts';
+import { S, orchestratorId } from './state.ts';
 import { agentName, logError, publish, publishState } from './events.ts';
 import { DRIVERS } from '../providers/registry.ts';
 import { LOGS_DIR, ROLES_DIR, SETTINGS, config, safeRegex, saveLocalConfig, setting } from '../config/settings.ts';
@@ -116,6 +116,36 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       if (body.conversationId !== S.conv.id) throw new Error('Conversation changed.');
       resolveStaleUpdate(body.key, body.action);
       return { ok: true };
+    case 'reorder': {
+      const owner = S.conv;
+      if (body.conversationId !== owner.id) throw new Error('Conversation changed before reordering.');
+      const members = new Map(owner.team.map((member) => [member.id, member]));
+      const order: unknown = body.order;
+      if (
+        !Array.isArray(order) ||
+        order.length !== members.size ||
+        new Set(order).size !== members.size ||
+        order.some((id) => !members.has(id))
+      )
+        throw new Error('Team membership changed. Reorder the current team.');
+      const team = order.map((id) => members.get(id)!);
+      if (
+        orchestratorId(team) !== orchestratorId() &&
+        (owner.batch?.pending.size ||
+          owner.heldRelays.length ||
+          [...register(owner).values()].some((r) => r.plan?.pending || r.plan?.queuedDecisions?.length) ||
+          owner.staleUpdates.size ||
+          (owner.routingMode === 'orchestrator' && owner.tasks.size) ||
+          owner.pendingRoleRequest ||
+          owner.pendingRecommendation ||
+          owner.pendingFinal)
+      )
+        throw new Error('Finish or stop the current work before changing who coordinates it.');
+      owner.team = team;
+      owner.rosterVersion++;
+      publishState();
+      return { ok: true };
+    }
     case 'applyTeam':
       return applyTeam(body);
     case 'setup':

@@ -1,5 +1,5 @@
 import { applyAgentAccent } from '../core/agent-accent.js';
-import { agentWarnings, describeAgent, modelInfo, sortModels } from '../core/agent-view.js';
+import { agentInitials, agentWarnings, describeAgent, modelInfo, sortModels } from '../core/agent-view.js';
 // Header: agent cards (role, model, effort, bypass), relay status and the message target menu.
 import { $, fmtTokens, h } from '../core/dom.js';
 import { agentOf, cards, roleOf, store } from '../core/store.js';
@@ -8,6 +8,7 @@ import { providerForm } from './agent-provider.js';
 import { updatePending } from './approvals.js';
 import { api } from '../core/api.js';
 import { addSys, jumpToSequence } from './conversation-log.js';
+import { installAgentDrag, moveAgent } from './team-order.js';
 const detailsDialog = $('agentDetails');
 
 $('addAgent').onclick = openAddDialog;
@@ -53,6 +54,9 @@ export function renderState() {
     'New tokens = input, output and cache writes (what the token limit counts). Cached = tokens read from the prompt cache, which cost much less.';
   tok.classList.toggle('halted', Boolean(store.state.tokenLimit && store.state.totalTokens >= store.state.tokenLimit));
   if (document.activeElement !== $('routing')) $('routing').value = store.state.routingMode;
+  $('routing').title = ['pipeline', 'roundrobin'].includes(store.state.routingMode)
+    ? 'Replies follow the order of the team cards.'
+    : 'How replies move between agents';
   renderTargets();
   updatePending();
 }
@@ -99,7 +103,10 @@ export function renderCard(a) {
       if (confirm(`Remove ${agentOf(a.id)?.name || a.id} from the conversation?`))
         api('removeAgent', { agent: a.id }).catch((e) => alert(e.message));
     };
-    el.append(avatar, name, roleName, status);
+    el.dataset.agentId = a.id;
+    const handle = h('span', 'drag-handle', '⋮⋮');
+    el.append(avatar, name, roleName, status, handle);
+    installAgentDrag(el, handle);
 
     const row = h('div', 'card-row');
     const role = h('select', 'role');
@@ -182,6 +189,16 @@ export function renderCard(a) {
     meta.append(drv, tokens, taskLink);
     const actions = h('div', 'agent-details__actions');
     actions.append(stop, retry, remove);
+    const moves = ['Move up', 'Move down', 'Move to top'].map((label, i) => {
+      const button = h('button', 'btn', label);
+      button.onclick = () => {
+        const pos = store.state.team.findIndex((member) => member.id === a.id);
+        detailsDialog.close();
+        void moveAgent(a.id, [pos - 1, pos + 1, 0][i], store.state.conversationId);
+      };
+      actions.append(button);
+      return button;
+    });
     const switchProvider = providerForm(a.id, (show) => {
       model.hidden = effort.hidden = !show;
     });
@@ -199,6 +216,8 @@ export function renderCard(a) {
     c = cards[a.id] = {
       el,
       avatar,
+      handle,
+      moves,
       name,
       roleName,
       details,
@@ -220,13 +239,15 @@ export function renderCard(a) {
       nameInput,
     };
   }
+  const members = store.state.team || [];
+  const pos = members.findIndex((member) => member.id === a.id);
+  c.moves[0].disabled = c.moves[2].disabled = pos <= 0;
+  c.moves[1].disabled = pos < 0 || pos === members.length - 1;
+  c.handle.setAttribute('aria-label', 'Drag to reorder ' + a.name);
   const availability = describeAgent(a);
   c.el.className = `card${a.busy ? ' busy' : ''}${a.waitingApproval ? ' waiting' : ''}${!availability.available && !availability.switching ? ' unavailable' : ''}`;
   c.details.classList.toggle('bypass-on', a.bypass);
-  c.avatar.textContent = (a.name.match(/[A-Za-z0-9]+/g) || [a.name])
-    .slice(0, 2)
-    .map((part) => part.charAt(0).toUpperCase())
-    .join('');
+  c.avatar.textContent = agentInitials(a.name);
   c.name.textContent = a.name;
   const roleLabel = roleOf(a.role)?.name || a.role;
   const shown = modelInfo(a);
