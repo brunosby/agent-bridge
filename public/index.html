@@ -172,7 +172,10 @@
             ></textarea>
             <div id="mentionSuggestions" class="mention-suggestions" role="listbox" aria-label="Agent mentions" hidden></div>
           </div>
-          <button id="send" class="btn btn--primary composer__send" title="Enter to send, Shift+Enter for a new line">Send</button>
+          <div class="composer__actions">
+            <button id="interruptSend" type="button" class="btn" hidden>Interrupt and send</button>
+            <button id="send" class="btn btn--primary composer__send" title="Enter to send, Shift+Enter for a new line">Send</button>
+          </div>
         </div>
       </footer>
     </div>

@@ -357,7 +357,9 @@ export class CodexAgent extends EventEmitter implements Agent {
       if (refused && !pending.cancelled) {
         this.blockedSteerTurn = expectedTurnId;
         this.queue.unshift(...pending.batch);
+        this.emitEvent('inputDeferred', { taskIds });
       } else {
+        this.emitEvent('inputUnconfirmed', { taskIds });
         if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
         this.emitEvent('error', { text: 'Codex could not confirm the steering input. It was not resent: ' + errorText(err) });
       }
@@ -404,6 +406,11 @@ export class CodexAgent extends EventEmitter implements Agent {
 
   cancelQueued(): void {
     cancelQueuedTasks(this.queue, (taskIds) => this.emitEvent('tasksCancelled', { taskIds }));
+  }
+
+  async interruptTurn(turnId: string) {
+    if (!this.threadId || this.activeTurnId !== turnId) throw new Error('Codex already finished that task.');
+    await this.request('turn/interrupt', { threadId: this.threadId, turnId });
   }
 
   async interrupt() {

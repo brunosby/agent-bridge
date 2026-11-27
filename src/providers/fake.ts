@@ -166,6 +166,16 @@ export class FakeAgent extends EventEmitter implements Agent {
     return false;
   }
 
+  async interruptTurn(turnId: string) {
+    const timer = [...this.timers].find(([, id]) => id === turnId)?.[0];
+    if (!timer) throw new Error('Agent already finished that task.');
+    clearTimeout(timer);
+    this.timers.delete(timer);
+    this.busyCount--;
+    this.emitEvent('tasksCancelled', { taskIds: [turnId] });
+    this.emitEvent('status', { busy: this.busy });
+  }
+
   async interrupt(): Promise<void> {
     if (this.config.finishAfterInterrupt && this.busy) return;
     for (const timer of this.timers.keys()) clearTimeout(timer);

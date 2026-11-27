@@ -5,7 +5,8 @@ import type { Conversation, AgentSpec, Size, SpecAttempt, TaskDecision, TaskPlan
 import { relay, S } from './state.ts';
 import { publish, recordWorkflow } from './events.ts';
 import { deliver } from './delivery.ts';
-import { relayOrHold, drainHeld, offerRecommendedRoles, orchestratorId } from './routing.ts';
+import { targetReport } from './question-delegations.ts';
+import { relayOrHold, questionDelegation, drainHeld, offerRecommendedRoles, orchestratorId } from './routing.ts';
 import { addAgent, setRole, statusFor, validateAgentChoice } from './team.ts';
 import { buildProviderHandoff } from './provider-handoff.ts';
 import { captureTaskBaseline, growth, question, saveSpecification, specification } from './task-plan.ts';
@@ -126,12 +127,15 @@ export function readTaskBlocks(
   hasAction: boolean,
   specAttempt?: SpecAttempt,
   p = owner.plan,
+  replyText = '',
+  sourceSeq?: number,
 ) {
   if (!p || owner.routingMode !== 'orchestrator') return false;
   const role = owner.team.find((a) => a.id === agent)?.role;
   let handled = false;
   let invalidSpec = false;
   let receivedSpec = false;
+  let remainingText = replyText.trim();
   for (const block of blocks) {
     if (block.kind === 'SIZE' && agent === orchestratorId()) {
       classify(owner, block.size as Size, block.value, false, p);
@@ -142,10 +146,13 @@ export function readTaskBlocks(
       handled = true;
       try {
         const decision = block.kind === 'SPEC' ? specification(agent, block.value) : question(agent, block.value);
+        if (decision.kind === 'question' && remainingText) decision.delegation = questionDelegation(owner, agent, remainingText, sourceSeq);
         if (decision.kind === 'spec') {
+          if (remainingText) decision.notes = remainingText;
           receivedSpec = true;
           delete p.specNeedsRetry;
         }
+        remainingText = '';
         if (p.pending) {
           (p.queuedDecisions ??= []).push(decision);
           publish({
@@ -169,6 +176,13 @@ export function readTaskBlocks(
       }
     }
   }
+  const coordinator = orchestratorId();
+  if (invalidSpec && remainingText && coordinator)
+    deliver(coordinator, "[Architect's notes with the specification]\nSpecification invalid.\n" + remainingText, {
+      from: agent,
+      requestSeq: p.seq,
+      sourceSeq,
+    });
   if (
     role === 'architect' &&
     p.size === 'large' &&
@@ -258,6 +272,27 @@ export function resolveTask(owner: Conversation, body: Record<string, any>) {
   if (!canReceiveWork(statusFor(owner, lead))) throw new Error('The coordinator is unavailable.');
   const pending = plan.pending;
   if (!pending || pending.id !== body.requestId) throw new Error('This request is no longer open.');
+  if (body.action === 'sendDelegations') {
+    if (pending.kind !== 'question' || !pending.delegation || pending.agent !== lead)
+      throw new Error('This question has no delegations from the current coordinator.');
+    const record = pending.delegation;
+    const waiting = record.targets.filter((target) => target.state === 'pending');
+    if (waiting.length)
+      relayOrHold(
+        owner,
+        {
+          kind: 'reply',
+          from: lead,
+          sourceSeq: record.sourceSeq,
+          requestSeq: plan.seq,
+          targets: waiting.map((t) => t.agent),
+          updates: Object.fromEntries(waiting.flatMap((t) => (t.updateOf ? [[t.agent, t.updateOf]] : []))),
+          parts: [{ from: lead, text: record.text }],
+        },
+        record,
+      );
+    return;
+  }
   let recipient = lead;
   let message = '';
   if (body.action === 'dismiss') {
@@ -284,9 +319,24 @@ export function resolveTask(owner: Conversation, body: Record<string, any>) {
     message = pending.questions.map((q, i) => '[Answer to question ' + (i + 1) + '] ' + q.question + '\n' + body.answers[i]).join('\n\n');
   } else throw new Error('Invalid decision.');
   if (!owner.agents[recipient]) throw new Error('The intended recipient is unavailable.');
+  if (pending.kind === 'question' && pending.delegation) {
+    const record = pending.delegation;
+    const statuses = record.targets.map((t) =>
+      t.state === 'preparing' ? '@' + t.agent + ' — not sent (preparation cancelled)' : targetReport(t),
+    );
+    message += '\n\n[Delegations from the question]\n' + record.text + '\n' + statuses.join('\n');
+    if (record.targets.some((t) => t.state === 'pending' || t.state === 'preparing')) {
+      message += '\nThese instructions waited for your decision. Based on the answers, resend, adjust or drop the pending instructions.';
+      publish({ kind: 'system', text: 'Pending delegations returned to @' + lead + ' with the question decision.' });
+    } else message += '\nAll delegations have already been submitted. Do not send them again.';
+  }
+  const specNotes = pending.kind === 'spec' && pending.notes ? "\n\n[Architect's notes with the specification]\n" + pending.notes : '';
+  if (recipient === lead) message += specNotes;
   closeDecision(owner, body.action, true, plan);
   publish({ kind: 'system', text: message });
   deliver(recipient, message, { from: 'user', sourceSeq: plan.seq, specAttempt: body.action === 'revise' ? 'draft' : undefined });
+  if (specNotes && recipient !== lead)
+    deliver(lead, 'Specification revision requested.' + specNotes, { from: pending.agent, requestSeq: plan.seq, sourceSeq: plan.seq });
   drainHeld(owner);
 }
 

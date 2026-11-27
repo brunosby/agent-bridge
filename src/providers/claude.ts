@@ -362,6 +362,11 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     this.emitEvent('status', { busy: this.busy });
   }
 
+  async interruptTurn(turnId: string) {
+    if (!this.proc || this.activeBatch?.uuid !== turnId) throw new Error('Claude already finished that task.');
+    this.proc.write({ type: 'control_request', request_id: randomUUID(), request: { subtype: 'interrupt' } });
+  }
+
   /** Stop the current work: kill the process and restart it on the same session. */
   async interrupt() {
     if (!this.proc || !this.busy) return;
@@ -490,6 +495,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
         if (!batch && this.unconfirmed.size) {
           const taskIds = [...this.unconfirmed.values()].filter((id): id is string => Boolean(id));
           this.unconfirmed.clear();
+          this.emitEvent('inputUnconfirmed', { taskIds });
           if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
           this.emitEvent('error', { text: 'Claude returned without acknowledging its inputs. Unconfirmed inputs were not resent.' });
         }

@@ -30,7 +30,29 @@ export function refreshApprovalNames() {
 
 /** Pending approvals stay pinned above the message box until answered. */
 export function updatePending() {
-  const n = approvals.size;
+  const panel = $('pending');
+  const updates = store.state?.staleUpdates || [];
+  for (const el of panel.querySelectorAll('[data-stale-update]')) if (!updates.some((u) => u.key === el.dataset.staleUpdate)) el.remove();
+  for (const { key, agent } of updates) {
+    if ([...panel.children].some((el) => el.dataset.staleUpdate === key)) continue;
+    const card = h('div', 'approval');
+    card.dataset.staleUpdate = key;
+    card.id = key;
+    const conversationId = store.state.conversationId;
+    card.append(h('div', 'title', label(agent) + ' already finished the task this update was for.'));
+    const actions = h('div', 'actions');
+    for (const [action, title] of [
+      ['send', 'Send as new task'],
+      ['discard', 'Discard'],
+    ]) {
+      const button = h('button', 'btn', title);
+      button.onclick = () => api('resolveUpdate', { conversationId, key, action }).catch((error) => addSys(error.message, true));
+      actions.append(button);
+    }
+    card.append(actions);
+    panel.append(card);
+  }
+  const n = approvals.size + updates.length;
   $('pending').hidden = n === 0;
   const count = $('pendingCount');
   count.hidden = n === 0;

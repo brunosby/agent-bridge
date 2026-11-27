@@ -1,8 +1,11 @@
+import { currentTurn, interruptConfirmed, validateTurns, type ConfirmedTurn } from './interrupt-send.ts';
+import { setTarget, discardQuestionDelegations } from './question-delegations.ts';
 import { latest, originPlan, forTask } from './request-progress.ts';
 import { cancelMilestoneDecision, hasActiveMilestones, milestoneInstructions } from './milestones.ts';
 // Routing: who receives each message, review rounds, missing roles, delivery to agents.
 import type {
   TaskPlan,
+  QuestionDelegation,
   AgentSpec,
   BatchEvent,
   Conversation,
@@ -89,10 +92,41 @@ function reviewRoundNote(text: string): string {
   return `[Agent Bridge: review round ${S.conv.reviewRounds} of ${max}. Send the findings to the coder.]`;
 }
 
-function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): boolean {
-  const eligible = item.targets.filter((id) => canQueueWork(statusFor(owner, id)) && !owner.batch?.pending.has(id));
-  const lead = orchestratorId();
+export function questionDelegation(owner: Conversation, from: string, text: string, sourceSeq?: number): QuestionDelegation | undefined {
+  const { body, summary } = parseSummary(text);
+  const targets = routeTargets(from, summary ? body : text).map((agent) => ({
+    agent,
+    state: 'pending' as const,
+    updateOf: owner.batch?.pending.get(agent)?.id,
+  }));
+  return targets.length ? { text, sourceSeq, targets } : undefined;
+}
+
+function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false, decision?: QuestionDelegation): boolean {
   const plan = originPlan(owner, item.requestSeq);
+  const outcome = (id: string, reason: string) => {
+    const target = decision?.targets.find((t) => t.agent === id);
+    if (plan && decision && target) setTarget(owner, plan, decision, target, 'pending', reason);
+  };
+  const eligible = item.targets.filter((id) => {
+    const expected = item.updates?.[id];
+    if (expected && owner.batch?.pending.get(id)?.id !== expected) {
+      if (decision) {
+        outcome(id, 'the original delegation has ended');
+        return false;
+      }
+      if (![...owner.staleUpdates.values()].some((held) => held.sourceSeq === item.sourceSeq && held.targets.includes(id))) {
+        owner.staleUpdates.set(randomUUID(), { ...item, targets: [id], updates: undefined });
+        publish({ kind: 'system', text: '@' + id + ' already finished the task this update was for.' });
+        publishState();
+      }
+      return false;
+    }
+    const ready = canQueueWork(statusFor(owner, id)) && (!owner.batch?.pending.has(id) || Boolean(expected));
+    if (!ready) outcome(id, 'agent unavailable or working on a different delegation');
+    return ready;
+  });
+  const lead = orchestratorId();
   const needsSpec = plan?.size === 'large' && (!plan.approved || plan.awaitingSpecRevision);
   if (
     item.kind === 'spec' &&
@@ -108,6 +142,8 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
   let targets = eligible.filter((id) => !coders.includes(id));
   const skipped = plan?.size === 'small' && item.from === lead ? targets.slice(1) : [];
   if (skipped.length) targets = targets.slice(0, 1);
+  for (const id of coders) outcome(id, 'specification approval is pending');
+  for (const id of skipped) outcome(id, 'small tasks use one worker');
   const { limit, size } = hopBudget(owner.routingMode, relay.maxHops, plan);
   const cost = targets.reduce((sum, id) => sum + hopCost(owner.routingMode, lead, item.from, id), 0);
   if (eligible.length && (limit === 0 || (cost > 0 && owner.relay.hops + cost > limit))) {
@@ -115,6 +151,7 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
       .filter(Boolean)
       .join(', ');
     publish({ kind: 'system', text: `Relay paused after ${owner.relay.hops} hand-offs (limit ${limit}, ${context}).` });
+    for (const id of targets) outcome(id, 'hand-off limit reached');
     owner.relay.limitPause = 'hops';
     owner.relay.halted = true;
     return false;
@@ -144,7 +181,7 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
     : skipped.length
       ? 'Small task: only @' + targets[0] + ' received the delegation. Do not wait for ' + skipped.map((id) => '@' + id).join(', ') + '.'
       : '';
-  if (note && plan && lead) {
+  if (!decision && note && plan && lead) {
     publish({ kind: 'system', text: note });
     if (!plan.routingNotices?.includes(note)) {
       (plan.routingNotices ??= []).push(note);
@@ -158,7 +195,9 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
   const deliveries = targets.map((to) => ({
     to,
     taskId:
-      item.kind === 'reply' && owner.routingMode === 'orchestrator' && item.from === orchestratorId() ? addBatchPart(owner, to) : undefined,
+      item.kind === 'reply' && owner.routingMode === 'orchestrator' && item.from === orchestratorId()
+        ? addBatchPart(owner, to, item.updates?.[to], item.requestSeq)
+        : undefined,
   }));
   for (const { to, taskId } of deliveries) {
     owner.relay.hops += hopCost(owner.routingMode, lead, item.from, to);
@@ -168,13 +207,25 @@ function dispatchRelay(owner: Conversation, item: HeldRelay, resumed = false): b
       .join('\n\n');
     const intro = item.parts.length > 1 ? '[Results from ' + item.parts.length + ' agents]\n\n' : '';
     const draft = needsDraft && to === architect ? '\nPrepare the specification and decisions as [[SPEC]] for user approval.' : '';
+    const target = decision?.targets.find((t) => t.agent === to);
+    if (decision && target && plan) {
+      target.taskId = taskId;
+      setTarget(owner, plan, decision, target, 'preparing');
+    }
     deliver(to, intro + body + draft, {
+      beforeSend: decision && target && plan ? () => setTarget(owner, plan, decision, target, 'submitted') : undefined,
       requestSeq: item.requestSeq,
       from: item.from,
       sourceSeq: item.sourceSeq,
+      updateOf: item.updates?.[to],
       specAttempt: draft ? 'draft' : undefined,
       taskId,
-      discarded: taskId ? (reason) => completeBatch(owner, to, taskId, '(not delivered: ' + reason + ')') : undefined,
+      discarded: taskId
+        ? (reason) => {
+            outcome(to, reason);
+            completeBatch(owner, to, taskId, '(not delivered: ' + reason + ')');
+          }
+        : undefined,
     });
   }
   if (targets.length && coders.length && lead && !architect) requestSpec(owner, lead, plan);
@@ -187,9 +238,40 @@ function activeLimitPause(owner: Conversation) {
   );
 }
 
-export function relayOrHold(owner: Conversation, item: HeldRelay): void {
+export function relayOrHold(owner: Conversation, item: HeldRelay, decision?: QuestionDelegation): void {
   const plan = originPlan(owner, item.requestSeq);
+  if (decision) {
+    if (!plan || plan.pending?.kind !== 'question' || plan.pending.delegation !== decision)
+      throw new Error('This question is no longer open.');
+    checkTokenLimit();
+    const blocked = !relay.auto
+      ? 'manual mode is enabled'
+      : owner.succession
+        ? 'awaiting a coordinator'
+        : owner.relay.limitPause === 'tokens'
+          ? 'token limit reached'
+          : owner.relay.halted
+            ? 'relay is paused'
+            : preparingSmallBaseline(owner)
+              ? 'preparing the task baseline'
+              : plan.size === 'small' && decision.targets.some((t) => t.state !== 'pending')
+                ? 'small tasks use one worker'
+                : '';
+    if (blocked) {
+      for (const target of decision.targets.filter((t) => t.state === 'pending'))
+        setTarget(owner, plan, decision, target, 'pending', blocked);
+    } else if (item.targets.length) dispatchRelay(owner, item, false, decision);
+    return;
+  }
   if (!relay.auto || (owner.relay.halted && !activeLimitPause(owner) && !plan?.pending && !owner.succession)) return;
+  if (item.kind === 'reply' && owner.routingMode === 'orchestrator' && item.from === orchestratorId() && !item.updates) {
+    item.updates = Object.fromEntries(
+      item.targets.flatMap((id) => {
+        const part = owner.batch?.pending.get(id);
+        return part ? [[id, part.id]] : [];
+      }),
+    );
+  }
   checkTokenLimit();
   if (preparingSmallBaseline(owner)) {
     owner.heldRelays.push(item);
@@ -201,6 +283,20 @@ export function relayOrHold(owner: Conversation, item: HeldRelay): void {
     kind: 'system',
     text: 'Relay paused. Reply from @' + item.from + ' to ' + item.targets.map((id) => '@' + id).join(', ') + ' is waiting for Resume.',
   });
+  publishState();
+}
+
+export function resolveStaleUpdate(key: string, action: string) {
+  const owner = S.conv;
+  const item = owner.staleUpdates.get(key);
+  if (!item || !['send', 'discard'].includes(action)) throw new Error('This update is no longer pending.');
+  if (action === 'send') {
+    const id = item.targets[0];
+    if (owner.batch?.pending.has(id) || !canQueueWork(statusFor(owner, id)))
+      throw new Error('Wait until the agent is ready for a new delegation.');
+    if (!relay.auto || owner.relay.halted || !dispatchRelay(owner, item)) owner.heldRelays.push(item);
+  }
+  owner.staleUpdates.delete(key);
   publishState();
 }
 
@@ -271,8 +367,8 @@ export function completeBatch(owner: Conversation, agent: string, taskId: string
 }
 
 export function cancelBatchPart(owner: Conversation, agent: string, reason: string, taskIds?: string[]) {
-  const taskId = owner.batch?.pending.get(agent);
-  if (taskId && (!taskIds || taskIds.includes(taskId))) completeBatch(owner, agent, taskId, '(' + reason + ')');
+  const pending = owner.batch?.pending.get(agent)?.tasks;
+  if (pending) for (const id of taskIds ?? [...pending.keys()]) if (pending.has(id)) completeBatch(owner, agent, id, '(' + reason + ')');
 }
 
 // An unavailable target can otherwise prompt another identical free turn indefinitely.
@@ -291,13 +387,14 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
   const orch = orchestratorId();
 
   const owner = S.conv;
-  const task = owner.batch?.pending.get(fromId);
-  if (task) {
-    if (ev.taskIds?.includes(task)) {
+  const part = owner.batch?.pending.get(fromId);
+  const completed = ev.taskIds.filter((id) => part?.tasks.has(id));
+  if (completed.length) {
+    for (const taskId of completed) {
       completeBatch(
         owner,
         fromId,
-        task,
+        taskId,
         text || '(no answer' + (ev.detail ? ': ' + ev.detail : '') + ')',
         ev.sourceSeq ?? ev.seq,
         shortText,
@@ -352,7 +449,9 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
   if (owner.relay.halted && !activeLimitPause(owner) && !owner.succession && !owner.plan?.pending) return;
   const requested = routeTargets(fromId, summary ? body : text).filter((id) => owner.agents[id] || owner.succession?.agent === id);
   const targets = requested.filter(
-    (id) => (owner.succession?.agent === id || canQueueWork(statusFor(owner, id))) && !owner.batch?.pending.has(id),
+    (id) =>
+      (owner.succession?.agent === id || canQueueWork(statusFor(owner, id))) &&
+      (!owner.batch?.pending.has(id) || (owner.routingMode === 'orchestrator' && fromId === orch)),
   );
   const blocked = requested.filter((id) => !canQueueWork(statusFor(owner, id)));
   const note = blocked.length
@@ -730,7 +829,7 @@ const pendingUserSends = new WeakMap<Conversation, Promise<void>>();
 export function hasPendingSend(owner: Conversation) {
   return pendingUserSends.has(owner);
 }
-export async function userSend(text: string, target?: string, mentionChecks?: unknown): Promise<void> {
+export async function userSend(text: string, target?: string, mentionChecks?: unknown, interrupts?: ConfirmedTurn[]): Promise<void> {
   const owner = S.conv;
   const previous = pendingUserSends.get(owner);
   const delivery = (previous ?? Promise.resolve())
@@ -748,6 +847,26 @@ export async function userSend(text: string, target?: string, mentionChecks?: un
       validateMentionChecks(owner.team, mentionChecks);
       const targets = userTargets(target, canonical);
       if (!targets.length) throw new Error('no agent to receive this message');
+      if (interrupts) {
+        validateTurns(owner, targets, interrupts);
+        const outcomes = await Promise.allSettled(interrupts.map((turn) => interruptConfirmed(owner, turn)));
+        const failure = outcomes.find((outcome) => outcome.status === 'rejected');
+        if (S.conv !== owner) throw new Error('Conversation changed before sending.');
+        const changed =
+          targets.join() !== userTargets(target, canonical).join() || interrupts.some((turn) => currentTurn(owner, turn.agent));
+        for (const [index, turn] of interrupts.entries())
+          if (outcomes[index].status === 'fulfilled')
+            cancelBatchPart(
+              owner,
+              turn.agent,
+              failure || changed
+                ? 'interrupted by the user; message not sent'
+                : 'interrupted by ' + setting('userName') + '; new instructions sent directly: ' + canonical,
+            );
+        if (failure) throw failure.reason;
+        if (changed) throw new Error('The recipients changed after interruption. Use Send to deliver normally.');
+      }
+      discardQuestionDelegations(owner, 'Your new message takes precedence.');
       closeDecision(owner, 'new message');
       discardHeldRelays(owner, 'Your new message takes precedence.');
       clearRoleDecisions(owner, 'new message');
@@ -773,6 +892,11 @@ export async function userSend(text: string, target?: string, mentionChecks?: un
           requestSeq: source.seq,
         });
       }
+      if (interrupts)
+        publish({
+          kind: 'system',
+          text: 'Interrupted ' + interrupts.map((turn) => '@' + turn.agent).join(', ') + ' and sent your message.',
+        });
       publishState();
     });
   pendingUserSends.set(owner, delivery);

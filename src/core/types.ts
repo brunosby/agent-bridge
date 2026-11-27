@@ -5,8 +5,21 @@ import type { WriteStream } from 'node:fs';
 export type Size = 'small' | 'medium' | 'large';
 export type SpecDoc = { path: string; text: string };
 export type Question = { question: string; options: string[]; recommendation: string; evidence: string };
+export interface QuestionTarget {
+  agent: string;
+  updateOf?: string;
+  state: 'pending' | 'preparing' | 'submitted' | 'received' | 'unconfirmed';
+  reason?: string;
+  taskId?: string;
+}
+export interface QuestionDelegation {
+  text: string;
+  sourceSeq?: number;
+  targets: QuestionTarget[];
+}
 export type TaskDecision =
-  { kind: 'spec'; id: string; agent: string; docs: SpecDoc[] } | { kind: 'question'; id: string; agent: string; questions: Question[] };
+  | { kind: 'spec'; id: string; agent: string; docs: SpecDoc[]; notes?: string }
+  | { kind: 'question'; id: string; agent: string; questions: Question[]; delegation?: QuestionDelegation };
 export interface TaskPlan {
   seq: number;
   size: Size;
@@ -89,6 +102,10 @@ export interface TrackedTask {
   sourceSeq: number | null;
   state: 'queued' | 'working';
   activity?: string;
+  turnId?: string;
+  updateOf?: string;
+  expectedTurn?: string;
+  updateStatus?: string;
 }
 
 export type TaskEvent = AgentTaskEvent | ({ kind: 'taskQueued'; state: 'queued' } & TrackedTask);
@@ -102,7 +119,10 @@ export interface RelayPart {
 }
 
 export interface DeliveryBatch {
-  pending: Map<string, string>;
+  pending: Map<
+    string,
+    { id: string; tasks: Map<string, number>; next: number; resultOrder: number; requestSeq?: number; result?: RelayPart }
+  >;
   results: RelayPart[];
 }
 
@@ -180,6 +200,7 @@ export interface Agent extends EventEmitter {
   respondApproval(requestId: string, decision: string, reason?: string): boolean;
   approveShellCommand?(requestId: string, command: string): boolean;
   interrupt(): Promise<void>;
+  interruptTurn?(turnId: string): Promise<void>;
   restart(): Promise<void>;
   shutdown(): Promise<void>;
   setInstructions?(text: string): void;
@@ -297,6 +318,7 @@ export type MilestoneEvent =
 export type AgentIdentity = Pick<AgentSpec, 'id' | 'name' | 'driver' | 'role'>;
 
 export interface HeldRelay {
+  updates?: Record<string, string>;
   requestSeq?: number;
   from: string;
   parts: RelayPart[];
@@ -322,6 +344,7 @@ export interface Conversation {
   succession?: Succession;
   stoppedTasks: Set<string>;
   heldRelays: HeldRelay[];
+  staleUpdates: Map<string, HeldRelay>;
   team: AgentSpec[];
   agents: Record<string, Agent>;
   nextAgent: number;

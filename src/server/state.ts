@@ -16,8 +16,8 @@ export interface AppState {
 
 export const S: AppState = { conv: null as unknown as Conversation, history: [], seq: 0, roles: loadRoles(ROLES_DIR) };
 
-export function orchestratorId() {
-  return S.conv.succession?.agent ?? (S.conv.team.find((a) => a.role === 'orchestrator') || S.conv.team[0])?.id;
+export function orchestratorId(team = S.conv.team) {
+  return S.conv.succession?.agent ?? (team.find((a) => a.role === 'orchestrator') || team[0])?.id;
 }
 
 export const DONE_MARKER = /^\s*\[\[DONE\]\]\s*$/m;

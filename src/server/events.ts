@@ -210,6 +210,7 @@ export function stateEvent() {
       : null,
     succession: S.conv.succession ? { ...S.conv.succession, choices: successorChoices(S.conv) } : null,
     tasks: [...S.conv.tasks.values()],
+    staleUpdates: [...(S.conv.staleUpdates || [])].map(([key, item]) => ({ key, agent: item.targets[0] })),
     project: projectLabel(S.conv),
     milestones: milestoneViews(S.conv),
     milestoneCommitAvailable: milestoneCommitAvailable(S.conv),

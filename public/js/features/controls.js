@@ -13,6 +13,7 @@ const drafts = new Map();
 let conversationId = null;
 let previewTimer;
 let previewVersion = 0;
+let busyTargets = [];
 let previewKey = '';
 let matches = [];
 let active = -1;
@@ -73,6 +74,7 @@ export function updateComposer() {
   const key = JSON.stringify([
     conversationId,
     state.routingMode,
+    state.tasks?.map((task) => [task.agent, task.turnId]),
     target.value,
     prefix,
     current.problem,
@@ -81,6 +83,8 @@ export function updateComposer() {
   ]);
   if (key === previewKey) return;
   previewKey = key;
+  $('interruptSend').hidden = true;
+  busyTargets = [];
   const version = ++previewVersion;
   clearTimeout(previewTimer);
   targetPreview.textContent = current.problem;
@@ -94,6 +98,8 @@ export function updateComposer() {
         mentionChecks: current.checks,
       });
       if (version !== previewVersion) return;
+      busyTargets = targets.filter((agent) => agent.turnId);
+      $('interruptSend').hidden = !busyTargets.length;
       if (!targets.length) {
         targetPreview.textContent = 'No recipient';
       } else if (changedByMention || targets.some((agent) => !agent.available)) {
@@ -153,7 +159,7 @@ function showMentions() {
   selectMention(0);
 }
 
-export async function sendMessage() {
+export async function sendMessage(interrupt) {
   const text = input.value;
   const id = conversationId;
   if (!text.trim() || $('send').disabled) return;
@@ -164,7 +170,7 @@ export async function sendMessage() {
   }
   $('send').disabled = true;
   try {
-    await api('send', { text: current.text, target: target.value, conversationId: id, mentionChecks: current.checks });
+    await api('send', { text: current.text, target: target.value, conversationId: id, mentionChecks: current.checks, interrupt });
     if (draft(id)?.text === text) saveDraft(id, '');
     if (conversationId === id && input.value === text) {
       input.value = '';
@@ -179,7 +185,16 @@ export async function sendMessage() {
   }
 }
 
-$('send').onclick = sendMessage;
+$('send').onclick = () => sendMessage();
+$('interruptSend').onclick = () => {
+  const turns = busyTargets.map(({ id, turnId }) => ({ agent: id, turnId }));
+  if (!turns.length || !input.value.trim()) return;
+  const names = busyTargets.map((a) => '@' + a.name).join(', ');
+  if (
+    confirm('Interrupt the current task for ' + names + ' and send your message? Commands may stop. File edits already made stay in place.')
+  )
+    void sendMessage(turns);
+};
 target.addEventListener('change', updateComposer);
 input.addEventListener('blur', hideMentions);
 input.addEventListener('input', () => {

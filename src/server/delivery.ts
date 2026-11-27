@@ -1,4 +1,4 @@
-import type { Conversation, SpecAttempt, TaskEvent } from '../core/types.ts';
+import type { Conversation, SpecAttempt, TaskEvent, TrackedTask } from '../core/types.ts';
 import { DRIVERS } from '../providers/registry.ts';
 import { canReceiveWork } from '../core/agent-status.ts';
 import { rosterText } from '../core/prompts.ts';
@@ -17,10 +17,12 @@ import { orchestratorId, S } from './state.ts';
 type Delivery = {
   requestSeq?: number;
   originalRequest?: string;
+  updateOf?: string;
   specAttempt?: SpecAttempt;
   from: string;
   sourceSeq?: number;
   taskId?: string;
+  beforeSend?: () => boolean;
   discarded?: (reason: string) => void;
 };
 const reviewerQueues = new WeakMap<Conversation, Map<string, Promise<void>>>();
@@ -38,7 +40,7 @@ export function finishProviderDeliveries(owner: Conversation, id: string, failur
   for (const { text, delivery } of queued) {
     const row = register(owner).get(delivery.requestSeq ?? -1);
     if (row?.preparing) row.preparing--;
-    if (delivery.taskId && owner.batch?.pending.get(id) !== delivery.taskId) continue;
+    if (delivery.taskId && !owner.batch?.pending.get(id)?.tasks.has(delivery.taskId)) continue;
     if (!failure) deliver(id, text, delivery);
     else if (delivery.discarded) delivery.discarded(failure);
     else publish({ kind: 'error', agent: id, text: `Queued delivery to @${id} failed: ${failure}.` });
@@ -81,7 +83,7 @@ export function deliver(toId: string, text: string, delivery: Delivery): void {
     S.conv === owner &&
     owner.agents[toId] === agent &&
     spec.role === role &&
-    (!delivery.taskId || owner.batch?.pending.get(toId) === delivery.taskId);
+    (!delivery.taskId || owner.batch?.pending.get(toId)?.tasks.has(delivery.taskId));
   const discard = () => delivery.discarded?.('agent or batch changed while preparing the delivery');
   if (row) row.preparing = (row.preparing || 0) + 1;
   const pending = (previous || Promise.resolve())
@@ -130,6 +132,7 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
     discarded?.(reason);
     return;
   }
+  if (delivery.beforeSend && !delivery.beforeSend()) return discarded?.('the decision is closed');
   const id = taskId || randomUUID();
   const extras: string[] = [];
   const plan = originPlan(owner, delivery.requestSeq);
@@ -172,8 +175,11 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
   extras.push(...context);
   S.conv.lastSender[toId] = from;
   if (from !== 'user') publish({ kind: 'routed', from, to: toId, relayed: true, hop: S.conv.relay.hops });
+  const working = [...owner.tasks.values()].find((task) => task.agent === toId && task.state === 'working');
+  const updateOf = delivery.updateOf || (from === 'user' ? working?.id : undefined);
   const task = {
     id,
+    ...(updateOf && { updateOf, expectedTurn: working?.turnId }),
     ...(delivery.specAttempt && { specAttempt: delivery.specAttempt }),
     agent: toId,
     requestSeq: delivery.requestSeq,
@@ -188,24 +194,39 @@ function sendDelivery(toId: string, text: string, delivery: Delivery, context: s
     ...task,
     role: member?.role,
     name: member?.name,
-    description: redact(text, loggingPrefixes())
-      .split('\n')
-      .filter((line) => line && !line.startsWith('['))
-      .slice(0, 2)
-      .join(' ')
-      .slice(0, 180),
+    description:
+      (updateOf ? 'Update: ' : '') +
+      redact(text, loggingPrefixes())
+        .split('\n')
+        .filter((line) => line && !line.startsWith('['))
+        .slice(0, 2)
+        .join(' ')
+        .slice(0, 180),
   });
   try {
+    if (updateOf) updateNotice(owner, task, 'Update sent to @' + toId + '.');
     agent.send(extras.length ? extras.join('\n\n') + '\n\n' + text : text, id);
-    if (notices?.length && plan && plan === owner.plan && plan.pendingRoutingNotices === notices) {
+    if (notices?.length && plan && plan.pendingRoutingNotices === notices) {
       delete plan.pendingRoutingNotices;
-      recordWorkflow(owner);
+      recordWorkflow(owner, plan);
     }
   } catch {
     handoff?.taskIds.delete(id);
     owner.tasks.delete(id);
     publish({ kind: 'tasksCancelled', agent: toId, taskIds: [id] } satisfies TaskEvent);
     discarded?.('provider rejected the delivery');
+  }
+}
+
+export function updateNotice(owner: Conversation, task: TrackedTask, text: string) {
+  if (!task.updateOf || task.updateStatus === text) return;
+  task.updateStatus = text;
+  publish({ kind: 'info', agent: task.agent, text, requestSeq: task.requestSeq });
+  const part = owner.batch?.pending.get(task.agent);
+  const plan = originPlan(owner, part?.requestSeq ?? task.requestSeq);
+  if (plan && task.from !== 'user') {
+    (plan.pendingRoutingNotices ??= []).push(text);
+    recordWorkflow(owner, plan);
   }
 }
 

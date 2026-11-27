@@ -260,6 +260,8 @@ export function pendingWork(owner: Conversation): Wait[] {
   const milestone = milestonePending(owner);
   if (milestone) add(milestone.reason, milestone.action, milestone.card);
   if (owner.pendingFinal) add('Final confirmation', 'Open confirmation', owner.pendingFinal);
+  for (const [key, item] of owner.staleUpdates || [])
+    add('Update needs a new delegation', 'Review update', key, item.targets[0], item.requestSeq);
   for (const h of owner.heldRelays) add('Held reply to ' + h.targets.join(', '), 'Resume', 'resume', h.from, h.requestSeq);
   for (const [id, task] of owner.batch?.pending || [])
     add(
@@ -267,7 +269,7 @@ export function pendingWork(owner: Conversation): Wait[] {
       undefined,
       undefined,
       owner.team.find((m) => m.role === 'orchestrator')?.id,
-      forTask(owner, task)?.seq,
+      task.requestSeq ?? forTask(owner, task.id)?.seq,
     );
   for (const member of owner.team) {
     if (owner.providerChanges.has(member.id)) add('Switching provider', undefined, undefined, member.id);

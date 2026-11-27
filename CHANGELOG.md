@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Added
 
+- Question cards retain accompanying delegations, show delivery status per agent, and let you send eligible work before answering. Answering or dismissing returns outstanding instructions to the coordinator. Architect notes accompany specification decisions.
+
+- Update a busy agent’s delegation and see delivery confirmations. Held updates remain tied to the original task. **Interrupt and send** waits for the confirmed turn to finish before delivering new instructions.
+- OpenCode can receive corrections during an active session on compatible servers. The Bridge preserves the selected model, session permissions, and one result per completed batch.
+
 - First-run setup checks provider accounts and Git, offers confirmed installation and Windows shortcuts, and helps choose a starting team. Windows launchers check native TypeScript support before opening the server.
 
 - Save named teams, select a default for new conversations, and replace a paused team after outstanding work is resolved. Agents with missing roles wait for a replacement role.

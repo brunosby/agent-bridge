@@ -11,7 +11,7 @@ export function buildProviderHandoff(owner: Conversation, spec: AgentSpec, role:
       recent.unshift(clip(event.text.trim(), 1000));
   }
   const tasks = [...owner.tasks.values()]
-    .filter((task) => task.agent === spec.id || (spec.role === 'orchestrator' && owner.batch?.pending.get(task.agent) === task.id))
+    .filter((task) => task.agent === spec.id || (spec.role === 'orchestrator' && owner.batch?.pending.get(task.agent)?.tasks.has(task.id)))
     .slice(0, 5)
     .map((task) => {
       const source = task.sourceSeq ? history.findLast((event) => event.seq === task.sourceSeq) : undefined;

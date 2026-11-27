@@ -51,6 +51,16 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
   queue: AgentInput[];
   activeBatch: AgentInput[] | null = null;
   running: boolean;
+  liveInputs = false;
+  recoveringSession = false;
+  liveTurn?: string;
+  admission?: string;
+  private checkingAdmission?: string;
+  private messageSequence = 0;
+  private submissions = new Map<
+    string,
+    { inputs: AgentInput[]; turnId: string; started: boolean; settled: boolean; result?: any; error?: unknown }
+  >();
   ready: Promise<void> | null;
   proc: ChildProcess | null;
   sse: AbortController | null;
@@ -250,6 +260,8 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
       this.proc = null;
       this.ready = null;
       this.running = false;
+      this.submissions.clear();
+      this.admission = this.liveTurn = undefined;
       const taskIds = inputTaskIds(this.activeBatch);
       this.activeBatch = null;
       if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
@@ -278,11 +290,22 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     }
 
     if (review) await this.http('GET', '/mcp').catch(() => {});
+    this.liveInputs = await this.supportsLiveInputs();
     await this.loadModels();
     await this.restoreOrCreateSession();
     this.emitEvent('session', { sessionId: this.sessionId });
     this.listen();
     this.emitEvent('status', { busy: this.busy });
+  }
+
+  async supportsLiveInputs(): Promise<boolean> {
+    const spec = await this.http('GET', '/doc').catch(() => null);
+    const fields = (route: string) => spec?.paths?.[route]?.post?.requestBody?.content?.['application/json']?.schema?.properties;
+    // Verified with OpenCode 1.19.6: these fields identified a server that consumed concurrent inputs in one session loop.
+    // Keep the execution endpoint that carries the role instructions, model and permission events.
+    return Boolean(
+      fields('/api/session/{sessionID}/prompt')?.delivery?.enum?.includes('steer') && fields('/session/{sessionID}/message')?.messageID,
+    );
   }
 
   async restoreOrCreateSession() {
@@ -413,6 +436,21 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     const p = ev.properties || {};
     const sid = p.sessionID || p.part?.sessionID || p.info?.sessionID;
     if (sid && sid !== this.sessionId) return;
+    if (this.liveInputs && sid === this.sessionId) {
+      if (type === 'session.idle') this.liveTurn = undefined;
+      if (type === 'message.updated' && p.info?.role === 'user' && this.admission === p.info.id) {
+        this.admission = undefined;
+        this.pump();
+      }
+      if (type === 'message.updated' && p.info?.role === 'assistant') {
+        const entry = this.submissions.get(p.info.parentID);
+        if (entry && !entry.started) {
+          entry.turnId = this.liveTurn ??= entry.inputs[0]?.taskId || p.info.parentID;
+          entry.started = true;
+          this.emitEvent('taskStarted', { taskIds: inputTaskIds(entry.inputs), turnId: entry.turnId });
+        }
+      }
+    }
     if (type === 'message.part.delta') {
       // Streaming text: { messageID, partID, field: "text", delta }. Reasoning parts stream the same way,
       // so the part type decides whether it is shown.
@@ -548,6 +586,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
 
   // ---------- messages ----------
   async send(text: string, taskId?: string): Promise<void> {
+    if (this.running && !this.liveInputs && taskId) this.emitEvent('inputDeferred', { taskIds: [taskId] });
     this.queue.push({ text, taskId });
     this.emitEvent('status', { busy: true });
     try {
@@ -562,57 +601,19 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
 
   /** One message at a time: POST /session/:id/message waits for the full answer. */
   async pump() {
+    if (this.liveInputs) return this.submitLive();
     if (this.running || !this.queue.length) return;
     this.running = true;
     const batch = this.queue.splice(0);
     this.activeBatch = batch;
     const taskIds = inputTaskIds(batch);
     const text = batch.map((input) => input.text).join('\n\n');
-    if (taskIds.length) this.emitEvent('taskStarted', { taskIds });
-    const body: Record<string, unknown> = {
-      parts: [{ type: 'text', text }],
-      agent: this.readOnly ? 'plan' : 'build',
-      system: this.instructions,
-    };
-    const model = this.config.model;
-    if (model) {
-      const i = model.indexOf('/');
-      body.model = { providerID: model.slice(0, i), modelID: model.slice(i + 1) };
-    }
+    if (taskIds.length) this.emitEvent('taskStarted', { taskIds, turnId: batch[0]?.taskId });
+    const body = this.promptBody(text);
     try {
       const res = await this.http('POST', `/session/${encodeURIComponent(this.sessionId || '')}/message`, body);
       if (this.activeBatch !== batch) return;
-      const info = res?.info || {};
-      if (res?.info && !info.error && taskIds.length) this.emitEvent('inputAccepted', { taskIds });
-      // Only the answer goes to the chat and to the other agents: not a compaction summary, and not
-      // synthetic or ignored text that OpenCode adds itself.
-      const summary = OpenCodeAgent.isSummaryMessage(info);
-      if (summary && info.id) this.summaryMessages.add(info.id);
-      const answerParts = summary ? [] : (res?.parts || []).filter((x: any) => OpenCodeAgent.isAnswerText(x));
-      const answer = answerParts
-        .map((x: any) => x.text || '')
-        .join('\n')
-        .trim();
-      for (const x of answerParts) this.emitEvent('text', { key: x.id || `${info.id}-text`, text: x.text || '', final: true });
-      if (summary)
-        this.emitEvent('info', {
-          text: `${this.name} ended its turn with OpenCode's context summary instead of an answer; nothing was passed on. Send it a message to continue.`,
-        });
-      const t = info.tokens || {};
-      const used = (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (t.cache?.write || 0);
-      this.cachedTokens += t.cache?.read || 0;
-      if (used) {
-        this.tokens += used;
-        this.emitEvent('usage', { tokens: this.tokens });
-      }
-      if (info.providerID && info.modelID) this.resolvedModel = `${info.providerID}/${info.modelID}`;
-      if (info.error) {
-        const msg = info.error.data?.message || info.error.message || info.error.name || 'error';
-        this.emitEvent('turnEnd', { taskIds, text: answer, ok: false, detail: clip(msg, 300) });
-      } else {
-        this.emitEvent('account', { state: 'ok' });
-        this.emitEvent('turnEnd', { taskIds, text: answer, ok: true });
-      }
+      this.reportAnswer(res, taskIds, batch[0]?.taskId);
     } catch (err) {
       if (this.activeBatch !== batch) return;
       this.emitEvent('error', { text: `OpenCode message failed: ${errorText(err)}` });
@@ -625,8 +626,152 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     if (this.queue.length) this.pump();
   }
 
+  private promptBody(text: string) {
+    const body: Record<string, unknown> = {
+      parts: [{ type: 'text', text }],
+      agent: this.readOnly ? 'plan' : 'build',
+      system: this.instructions,
+    };
+    const model = this.config.model;
+    if (model) {
+      const i = model.indexOf('/');
+      body.model = { providerID: model.slice(0, i), modelID: model.slice(i + 1) };
+    }
+    return body;
+  }
+
+  private reportAnswer(res: any, taskIds: string[], turnId?: string) {
+    const info = res?.info || {};
+    if (res?.info && !info.error && taskIds.length) this.emitEvent('inputAccepted', { taskIds });
+    // Only the answer goes to the chat and to the other agents: not a compaction summary, and not
+    // synthetic or ignored text that OpenCode adds itself.
+    const summary = OpenCodeAgent.isSummaryMessage(info);
+    if (summary && info.id) this.summaryMessages.add(info.id);
+    const answerParts = summary ? [] : (res?.parts || []).filter((x: any) => OpenCodeAgent.isAnswerText(x));
+    const answer = answerParts
+      .map((x: any) => x.text || '')
+      .join('\n')
+      .trim();
+    for (const x of answerParts) this.emitEvent('text', { key: x.id || `${info.id}-text`, text: x.text || '', final: true });
+    if (summary)
+      this.emitEvent('info', {
+        text: `${this.name} ended its turn with OpenCode's context summary instead of an answer; nothing was passed on. Send it a message to continue.`,
+      });
+    const t = info.tokens || {};
+    const used = (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (t.cache?.write || 0);
+    this.cachedTokens += t.cache?.read || 0;
+    if (used) {
+      this.tokens += used;
+      this.emitEvent('usage', { tokens: this.tokens });
+    }
+    if (info.providerID && info.modelID) this.resolvedModel = `${info.providerID}/${info.modelID}`;
+    if (info.error) {
+      const msg = info.error.data?.message || info.error.message || info.error.name || 'error';
+      this.emitEvent('turnEnd', { taskIds, turnId, text: answer, ok: false, detail: clip(msg, 300) });
+    } else {
+      this.emitEvent('account', { state: 'ok' });
+      this.emitEvent('turnEnd', { taskIds, turnId, text: answer, ok: true });
+    }
+  }
+
+  // A reconnecting or slow event stream can miss the user-message event. Confirm the
+  // specific input by ID before releasing its successor. Only read while a successor waits.
+  private async checkAdmission(session: string, messageID: string) {
+    if (this.checkingAdmission === messageID) return;
+    this.checkingAdmission = messageID;
+    try {
+      while (this.admission === messageID && this.sessionId === session && this.queue.length && !this.stopping) {
+        await sleep(400);
+        if (this.admission !== messageID || !this.queue.length || this.stopping) break;
+        const message = await this.http('GET', '/session/' + encodeURIComponent(session) + '/message/' + messageID).catch(() => null);
+        if (this.admission === messageID && message?.info?.id === messageID && message.info.role === 'user') {
+          this.admission = undefined;
+          void this.pump();
+        }
+      }
+    } finally {
+      if (this.checkingAdmission === messageID) this.checkingAdmission = undefined;
+    }
+  }
+
+  // OpenCode 1.19.6 returned the same final assistant message to every input
+  // consumed in one loop. Wait for durable admission before submitting the next input.
+  private async submitLive() {
+    if (this.recoveringSession || !this.queue.length || !this.sessionId || this.stopping) return;
+    if (this.admission) return this.checkAdmission(this.sessionId, this.admission);
+    const inputs = this.queue.splice(0);
+    this.messageSequence = Math.max(this.messageSequence + 1, Date.now() * 4096);
+    const messageID = 'msg_' + this.messageSequence.toString(16).slice(-12).padStart(12, '0') + crypto.randomBytes(6).toString('hex');
+    const first = !this.liveTurn;
+    const turnId = (this.liveTurn ??= inputs[0].taskId || messageID);
+    const entry = { inputs, turnId, started: first, settled: false, result: undefined as any, error: undefined as unknown };
+    this.submissions.set(messageID, entry);
+    this.admission = messageID;
+    this.running = true;
+    (this.activeBatch ??= []).push(...inputs);
+    const taskIds = inputTaskIds(inputs);
+    if (first) this.emitEvent('taskStarted', { taskIds, turnId });
+    try {
+      const text = inputs.map((input) => input.text).join('\n\n');
+      entry.result = await this.http('POST', '/session/' + encodeURIComponent(this.sessionId) + '/message', {
+        ...this.promptBody(text),
+        messageID,
+      });
+      if (!entry.result?.info?.id) throw new Error('OpenCode returned no assistant message ID.');
+    } catch (error) {
+      entry.error = error;
+      if (this.submissions.has(messageID) && !(error instanceof SessionHttpError)) this.emitEvent('inputUnconfirmed', { taskIds });
+    }
+    if (!this.submissions.has(messageID)) return;
+    entry.settled = true;
+    if (this.admission === messageID) this.admission = undefined;
+    if ([...this.submissions.values()].every((item) => item.settled)) {
+      const entries = [...this.submissions.values()];
+      this.submissions.clear();
+      this.activeBatch = null;
+      this.liveTurn = undefined;
+      const restoring = entries.some((item) => item.error instanceof SessionHttpError && item.error.status === 404);
+      if (restoring) {
+        this.recoveringSession = true;
+        try {
+          await this.restoreOrCreateSession();
+          this.emitEvent('session', { sessionId: this.sessionId });
+        } catch (err) {
+          this.markUnavailable('Could not restore the OpenCode session: ' + errorText(err));
+          this.cancelQueued();
+        } finally {
+          this.recoveringSession = false;
+        }
+      }
+      const groups = new Map<string, { result: any; turnId: string; taskIds: string[] }>();
+      for (const item of entries) {
+        const ids = inputTaskIds(item.inputs);
+        if (item.error) {
+          this.emitEvent('error', { text: 'OpenCode input failed: ' + errorText(item.error) });
+          this.emitEvent('turnEnd', { taskIds: ids, turnId: item.turnId, text: '', ok: false, detail: clip(errorText(item.error), 300) });
+          continue;
+        }
+        const key = item.result.info.id;
+        const group = groups.get(key) || { result: item.result, turnId: item.turnId, taskIds: [] };
+        group.taskIds.push(...ids);
+        groups.set(key, group);
+        if (!item.started) this.emitEvent('taskStarted', { taskIds: ids, turnId: group.turnId });
+      }
+      this.running = false;
+      for (const group of groups.values()) this.reportAnswer(group.result, group.taskIds, group.turnId);
+      this.emitEvent('status', { busy: this.busy });
+    }
+    if (this.queue.length && this.available) void this.pump();
+  }
+
   cancelQueued(): void {
     cancelQueuedTasks(this.queue, (taskIds) => this.emitEvent('tasksCancelled', { taskIds }));
+  }
+
+  async interruptTurn(turnId: string) {
+    if (!this.sessionId || (this.liveInputs ? this.liveTurn : this.activeBatch?.[0]?.taskId) !== turnId)
+      throw new Error('OpenCode already finished that task.');
+    await this.http('POST', '/session/' + encodeURIComponent(this.sessionId) + '/abort');
   }
 
   async interrupt() {

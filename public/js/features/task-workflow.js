@@ -1,6 +1,6 @@
 import { $, h } from '../core/dom.js';
 import { api } from '../core/api.js';
-import { approvals, cards, store } from '../core/store.js';
+import { approvals, cards, label, store } from '../core/store.js';
 import { updatePending } from './approvals.js';
 import { openAddDialog } from './add-agent.js';
 
@@ -70,6 +70,28 @@ export function sizeBadge(node, state, editable = true) {
   };
 }
 
+function refreshDelegations(card, record) {
+  const section = card.querySelector('.question-delegations');
+  if (!section) return;
+  section.hidden = !record;
+  if (!record) return;
+  const targets = record.targets;
+  const names = targets.map((t) => '@' + label(t.agent));
+  const signature = JSON.stringify([names, targets]);
+  if (section.dataset.signature === signature) return;
+  section.dataset.signature = signature;
+  section.querySelector('p').textContent = 'This reply also delegates to ' + names.join(', ') + '.';
+  const statuses = {
+    pending: 'Waiting for your answer',
+    preparing: 'Preparing delivery',
+    submitted: 'Sent · awaiting confirmation',
+    received: 'Received',
+    unconfirmed: 'Delivery unconfirmed',
+  };
+  section.querySelector('ul').replaceChildren(...targets.map((t, i) => h('li', null, names[i] + ' · ' + (t.reason || statuses[t.state]))));
+  section.querySelector('.actions').hidden = !targets.some((t) => t.state === 'pending');
+}
+
 export function renderWorkflow(state) {
   const pending = state.taskPlan?.pending;
   const successor = state.succession;
@@ -85,7 +107,10 @@ export function renderWorkflow(state) {
     const succession = request === successor;
     const choicesKey = succession ? JSON.stringify([request.choices, request.waiting, request.removed]) : '';
     const existing = approvals.get(request.id);
-    if (existing && existing.dataset.choices === choicesKey) continue;
+    if (existing && existing.dataset.choices === choicesKey) {
+      refreshDelegations(existing, request.delegation);
+      continue;
+    }
     const selected = existing?.querySelector('.successor')?.value;
     const previous = existing?.querySelector('.previous-role')?.value;
     const title = succession
@@ -183,6 +208,17 @@ export function renderWorkflow(state) {
         body.appendChild(group);
         return input;
       });
+      if (request.delegation) {
+        const section = h('div', 'question-delegations');
+        const controls = h('div', 'actions');
+        const list = h('ul');
+        list.setAttribute('aria-live', 'polite');
+        section.append(h('p'), list, controls);
+        button(controls, 'Wait for my answer', () => inputs[0]?.focus());
+        button(controls, 'Send now', () => send('sendDelegations'));
+        body.append(section);
+        refreshDelegations(card, request.delegation);
+      }
       button(actions, 'Send answers', () => send('answer', { answers: inputs.map((el) => el.value) }));
       button(actions, 'Dismiss', () => send('dismiss'));
     }

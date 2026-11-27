@@ -331,6 +331,13 @@
   }
 }
 
+.composer__actions {
+  grid-area: send;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
 .composer__send {
   grid-area: send;
   align-self: end;

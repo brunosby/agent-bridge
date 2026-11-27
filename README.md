@@ -14,6 +14,10 @@ Mixing providers means one model reviews another's work and each role can use th
 
 On first launch, setup checks the provider CLIs and Git. Choose **Run setup again** in Settings to revisit accounts, install tools, or create a Windows shortcut.
 
+When the coordinator asks a question and delegates work in the same reply, the question card holds those instructions. Choose **Send now** to release eligible work before answering. The card shows the result for each agent. Answering or dismissing the question returns any remaining instructions to the coordinator.
+
+While an agent is working, send a correction normally to let it incorporate the update at its next opportunity. The chat reports when the provider confirms receipt. Older OpenCode servers deliver updates after the current turn. To stop the displayed turn first, choose **Interrupt and send**. Edits already made stay in the project.
+
 Use **Manage** beside the team roster to save, rename, or apply a team. Templates keep role and model choices. Each new member starts with bypass off.
 
 In orchestrator mode, **Max hops** counts each agent the orchestrator delegates to. Results can return even at the limit. The default budget is 8 delegations for an unclassified or small task, 16 for medium and 32 for large. Other routing modes count every hand-off against the base limit. **Resume** resets the counter.

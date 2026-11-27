@@ -1,4 +1,5 @@
 import { savedTeams, manageTeam, applyTeam } from './saved-teams.ts';
+import { discardQuestionDelegations } from './question-delegations.ts';
 import { clearRoleDecisions } from './routing.ts';
 import { setup } from './setup.ts';
 import { withRequest, decisionOrigin, register } from './request-progress.ts';
@@ -12,6 +13,7 @@ import { validateMentionChecks } from '../core/recipients.ts';
 import { cancelMilestoneDecision, resolveMilestoneCommit, resolveMilestonePlan } from './milestones.ts';
 // API actions called by the page.
 import type { Agent, RoutingMode } from '../core/types.ts';
+import { currentTurn } from './interrupt-send.ts';
 import { S } from './state.ts';
 import { agentName, logError, publish, publishState } from './events.ts';
 import { DRIVERS } from '../providers/registry.ts';
@@ -24,6 +26,7 @@ import { finishProviderDeliveries } from './delivery.ts';
 import { newConversation, restoreConversation, saveSettings, settingsView } from './conversation.ts';
 import {
   cancelBatchPart,
+  resolveStaleUpdate,
   discardHeldRelays,
   resumeRelay,
   dismissRoleDecision,
@@ -109,6 +112,10 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       return savedTeams();
     case 'manageTeam':
       return manageTeam(body);
+    case 'resolveUpdate':
+      if (body.conversationId !== S.conv.id) throw new Error('Conversation changed.');
+      resolveStaleUpdate(body.key, body.action);
+      return { ok: true };
     case 'applyTeam':
       return applyTeam(body);
     case 'setup':
@@ -138,6 +145,7 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
           id,
           name: agentName(id),
           available: canQueueWork(statusFor(S.conv, id)),
+          turnId: currentTurn(S.conv, id),
         })),
       };
     }
@@ -146,7 +154,14 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       textField(body.conversationId, 'conversation ID', true);
       if (body.conversationId && body.conversationId !== S.conv.id) throw new Error('conversation changed before sending');
       if (typeof body.text !== 'string' || !body.text.trim()) throw new Error('empty message');
-      await userSend(body.text, body.target, body.mentionChecks);
+      if ('interrupt' in body && (body.conversationId !== S.conv.id || !body.interrupt || typeof body.interrupt !== 'object'))
+        throw new Error('Invalid interrupt confirmation.');
+      await userSend(
+        body.text,
+        body.target,
+        body.mentionChecks,
+        body.interrupt && (Array.isArray(body.interrupt) ? body.interrupt : [body.interrupt]),
+      );
       return { ok: true };
     case 'relay':
       for (const key of ['auto', 'resume', 'pause']) optionalBoolean(body[key], key);
@@ -155,7 +170,7 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       if (typeof body.auto === 'boolean') relay.auto = body.auto;
       if (Number.isFinite(body.maxHops) && body.maxHops >= 0) relay.maxHops = body.maxHops;
       if (body.resume) {
-        if (S.conv.plan?.pending?.kind === 'question')
+        if (S.conv.plan?.pending?.kind === 'question' && !S.conv.plan.pending.delegation)
           resolveTask(S.conv, { conversationId: S.conv.id, seq: S.conv.plan.seq, requestId: S.conv.plan.pending.id, action: 'dismiss' });
         resumeRelay(S.conv);
       }
@@ -289,6 +304,7 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       const ids = body.agent ? [agentOf(body.agent).id] : Object.keys(agents);
       if (body.cancelPending && (body.agent || body.conversationId !== owner.id)) throw new Error('The conversation changed.');
       if (!body.agent) {
+        discardQuestionDelegations(owner, 'The conversation was stopped.');
         if (body.cancelPending === true) {
           for (const row of register(owner).values()) {
             if (row.plan) {
@@ -313,11 +329,15 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
           recordWorkflow(owner);
         }
         owner.batch = null;
+        owner.staleUpdates.clear();
         for (const id of owner.providerChanges) finishProviderDeliveries(owner, id, 'the conversation was stopped');
         discardHeldRelays(owner, 'The conversation was stopped.');
         owner.relay.halted = owner.relay.userPaused = true;
         cancelMilestoneDecision(owner, 'stop');
-      } else cancelBatchPart(owner, body.agent, 'cancelled: stopped by the user');
+      } else {
+        for (const task of owner.tasks.values()) if (task.agent === body.agent) owner.stoppedTasks.add(task.id);
+        cancelBatchPart(owner, body.agent, 'cancelled: stopped by the user');
+      }
       await Promise.all(ids.filter((id) => !owner.providerChanges.has(id)).map((id) => agents[id]?.interrupt()));
       if (S.conv === owner) {
         publish({ kind: 'system', text: 'Stopped ' + ids.map((id) => '@' + id).join(', ') + (body.agent ? '.' : '. Relay paused.') });

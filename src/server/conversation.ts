@@ -1,10 +1,11 @@
 import { chosenTeam } from './saved-teams.ts';
-import { agentRequest, withRequest, originPlan, restoreProgress } from './request-progress.ts';
+import { agentRequest, withRequest, originPlan, restoreProgress, register } from './request-progress.ts';
 import { activateSecretPatterns, loggingPrefixes } from '../workspace/secret-patterns.ts';
 import { markApprovalReady } from './shell-approvals.ts';
 import { reviewPublication, forgetReview } from './publication-approval.ts';
 import { redactRecord } from '../core/secret-detection.ts';
 import { requestsBridgeAccess } from './browser-session.ts';
+import { questionReceipt, restoreQuestionDelegations } from './question-delegations.ts';
 import { workflowMarkers } from '../../public/js/core/workflow-markers.js';
 import { checkGrowth, readTaskBlocks, requestSpec, stopWatching } from './task-workflow.ts';
 import { closeShellApproval, mayBypassApproval, processShellApproval } from './shell-approvals.ts';
@@ -32,6 +33,8 @@ import { approvalTimers, cliCache, providerRuntime, relay } from './state.ts';
 import { createAgent, defaultName, defaultTeam, startAgent, uniqueName } from './team.ts';
 import { driverModelCache } from './state.ts';
 import { DRIVERS } from '../providers/registry.ts';
+import { matchesCut } from './interrupt-send.ts';
+import { updateNotice } from './delivery.ts';
 import { completeBatch, cancelBatchPart, onTurnEnd, offerRecommendedRoles } from './routing.ts';
 import { parseRoleMarkers } from '../../public/js/core/role-markers.js';
 import { isTestCommand } from '../core/test-command.ts';
@@ -70,6 +73,7 @@ function prepareConversation({ workDir, restoreId, team, routingMode }: OpenOpti
     relay: { hops: 0, halted: Boolean(saved), userPaused: Boolean(saved) },
     stoppedTasks: new Set(),
     heldRelays: [],
+    staleUpdates: new Map(),
     team: [],
     agents: {},
     nextAgent: saved?.lastAgentId || 0,
@@ -130,6 +134,10 @@ function prepareConversation({ workDir, restoreId, team, routingMode }: OpenOpti
     const workflow = saved?.events.findLast((event) => event.kind === 'workflowChanged' && event.current !== false);
     if (saved) restoreProgress(owner, saved.events);
     owner.plan = workflow?.plan ?? undefined;
+    if (saved) {
+      restoreQuestionDelegations(owner.plan);
+      for (const row of register(owner).values()) restoreQuestionDelegations(row.plan);
+    }
     owner.succession = workflow?.succession ?? undefined;
     if (saved) restoreMilestoneViews(owner, saved.events.findLast((event) => event.kind === 'milestoneProgress')?.milestones);
     return { owner, saved };
@@ -210,7 +218,23 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       }, 120000);
       silence.unref();
     }
+    if (event.kind === 'inputDeferred' || event.kind === 'inputUnconfirmed') {
+      for (const taskId of taskIdsFromLog(event.taskIds)) {
+        if (event.kind === 'inputUnconfirmed') questionReceipt(owner, taskId, 'unconfirmed');
+        const task = owner.tasks.get(taskId);
+        if (task?.agent === id)
+          updateNotice(
+            owner,
+            task,
+            event.kind === 'inputDeferred'
+              ? '@' + id + ' will get the update after its current task.'
+              : 'Delivery to @' + id + ' was not confirmed.',
+          );
+      }
+      return;
+    }
     if (event.kind === 'inputAccepted') {
+      for (const taskId of taskIdsFromLog(event.taskIds)) questionReceipt(owner, taskId, 'received');
       settleProviderHandoff(owner, id, taskIdsFromLog(event.taskIds), true);
       publish({ kind: 'inputAccepted', agent: id, taskIds: taskIdsFromLog(event.taskIds) });
       publishState();
@@ -340,6 +364,7 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       publish({ kind: 'info', agent: id, text: 'Ignored a malformed provider task event.' });
       return;
     }
+    const interrupted = matchesCut(agent, ev);
     const finishedTasks =
       lifecycle?.kind === 'turnEnd'
         ? lifecycle.taskIds.flatMap((taskId) => {
@@ -352,8 +377,18 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       for (const taskId of lifecycle.taskIds) {
         const task = owner.tasks.get(taskId);
         if (task?.agent !== id) continue;
-        if (lifecycle.kind === 'taskStarted') task.state = 'working';
-        else owner.tasks.delete(taskId);
+        if (lifecycle.kind !== 'taskStarted')
+          questionReceipt(owner, taskId, lifecycle.kind === 'turnEnd' && lifecycle.ok ? 'received' : 'unconfirmed');
+        if (lifecycle.kind === 'taskStarted') {
+          task.state = 'working';
+          task.turnId = lifecycle.turnId || task.id;
+          for (const other of owner.tasks.values()) if (other.updateOf === task.id && !other.expectedTurn) other.expectedTurn = task.turnId;
+          if (task.updateOf) {
+            const expected = task.expectedTurn ?? owner.tasks.get(task.updateOf)?.turnId;
+            if (expected && lifecycle.turnId === expected) updateNotice(owner, task, 'Received by @' + id + ' during its current task.');
+            else if (expected && lifecycle.turnId) updateNotice(owner, task, 'Received by @' + id + ' in a later turn.');
+          }
+        } else owner.tasks.delete(taskId);
       }
     }
     const toolKey = id + '|' + ev.key;
@@ -385,6 +420,12 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
     const text = markers ? toMentionIds(markers.text, owner.team) : undefined;
     const clean = text !== undefined ? { ...ev, text } : ev;
     if (lifecycle?.kind === 'turnEnd' || (lifecycle?.kind === 'tasksCancelled' && !agent.busy)) flushMentionStreams(owner, id);
+    if (interrupted && lifecycle) {
+      delete owner.lastAnswerSeq[id];
+      publish({ kind: 'tasksCancelled', agent: id, taskIds: lifecycle.taskIds, interrupted: true });
+      publishState();
+      return;
+    }
     const published = publish(clean);
     if (ev.kind === 'text' && ev.final && published.seq) owner.lastAnswerSeq[id] = published.seq;
     if (lifecycle?.kind === 'turnEnd') {
@@ -409,10 +450,11 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
           Boolean(text?.trim() || markers?.roles.length || milestone?.proposed),
           currentTasks.find((t) => t.specAttempt === 'correction')?.specAttempt ?? currentTasks.find((t) => t.specAttempt)?.specAttempt,
           plan,
+          text,
+          sourceSeq,
         );
         if (handled) {
-          const batchId = owner.batch?.pending.get(id);
-          if (batchId && lifecycle.taskIds.includes(batchId)) completeBatch(owner, id, batchId);
+          for (const taskId of lifecycle.taskIds) completeBatch(owner, id, taskId);
           publishState();
           return;
         }
@@ -454,7 +496,10 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
       });
       publishState();
     }
-    if (lifecycle?.kind === 'tasksCancelled') cancelBatchPart(owner, id, 'cancelled: provider interrupted the task', lifecycle.taskIds);
+    if (lifecycle?.kind === 'tasksCancelled') {
+      for (const task of lifecycle.taskIds) owner.stoppedTasks.delete(task);
+      cancelBatchPart(owner, id, 'cancelled: provider interrupted the task', lifecycle.taskIds);
+    }
     if (['taskStarted', 'tasksCancelled', 'approval', 'approvalClosed'].includes(ev.kind)) publishState();
   }
 }
