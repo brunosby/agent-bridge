@@ -228,12 +228,12 @@ export function renderProgress(state, force = false) {
       }
       body.append(stagesHost);
     }
-    if (row.stages.length) stagesHost.append(timeline(row, side, activities));
-    if ((!side || row.total) && live.length) stagesHost.append(taskList(live, activities, true, wait?.agent));
+    if (row.stages.length) stagesHost.append(timeline(row, side, activities, names));
+    if ((!side || row.total) && live.length) stagesHost.append(taskList(live, activities, true, wait?.agent, names));
     if (waitBox && !side) body.append(waitBox);
     if ((!side || row.total) && row.tasks.length) {
       const d = disclosure('delegations', 'Delegations in this request (' + row.tasks.length + ')', opened);
-      d.append(taskList(row.tasks, activities, false, wait?.agent));
+      d.append(taskList(row.tasks, activities, false, wait?.agent, names));
       stagesHost.append(d);
     }
     for (const reason of row.reasons.filter((w) => !w.action)) {

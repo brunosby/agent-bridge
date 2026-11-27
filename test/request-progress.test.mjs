@@ -147,3 +147,47 @@ test('live activity and its local clock appear in the top panel, rail, collapsed
   renderProgress(state, true);
   assert.match(win.document.getElementById('progressFloat').textContent, /Code · Dev: Editing file.ts/);
 });
+
+test('progress avatars show agent initials instead of internal ids, follow renames and keep removed agents', async (t) => {
+  const win = new Window({ url: 'http://localhost', width: 1280 });
+  t.after(() => win.happyDOM.close());
+  win.document.write(readFileSync(new URL('../public/index.html', import.meta.url), 'utf8').replace(/<script[^>]+><\/script>/g, ''));
+  globalThis.document = win.document;
+  globalThis.window = win;
+  const { renderProgress } = await import('../public/js/features/request-progress.js');
+  const { agentInitials } = await import('../public/js/core/agent-view.js');
+  const c = owner();
+  const emit = (kind, data) => observeProgress(c, { kind, ...data });
+  emit('user', { seq: 5, text: 'Split the tests' });
+  const agents = [
+    ['a1', 'Claude-Orchestrator', 'orchestrator'],
+    ['a2', 'Codex-Coder', 'coder'],
+    ['a10', 'Codex-Tester', 'tester'],
+    ['a11', 'Old-Researcher', 'researcher'],
+  ];
+  for (const [agent, name, role] of agents) {
+    emit('taskQueued', { requestSeq: 5, id: 't-' + agent, agent, name, role });
+    emit('taskStarted', { taskIds: ['t-' + agent], agent });
+  }
+  const team = agents.slice(0, 3).map(([id, name]) => ({ id, name }));
+  const state = { conversationId: 'initials', progressLayout: 'top', progress: progressView(c, pendingWork(c)), team };
+  const host = win.document.getElementById('requestProgress');
+  const avatars = () =>
+    Object.fromEntries(
+      [...host.querySelectorAll('.progress-live li')].map((li) => [
+        li.querySelector('b').textContent,
+        li.querySelector('.agent-avatar').textContent,
+      ]),
+    );
+  renderProgress(state, true);
+  // Earlier tests in this file may leave the top panel collapsed.
+  const toggle = host.querySelector('[data-focus="toggle"]');
+  if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+  assert.deepEqual(avatars(), { 'Claude-Orchestrator': 'CO', 'Codex-Coder': 'CC', 'Codex-Tester': 'CT', 'Old-Researcher': 'OR' });
+  for (const [, name] of agents) assert.equal(agentInitials(name), avatars()[name]);
+  assert.doesNotMatch(host.querySelector('.progress-live').textContent, /\ba1\b|\ba10\b/);
+  renderProgress({ ...state, team: team.map((a) => (a.id === 'a10' ? { ...a, name: 'Browser-Tester' } : a)) });
+  assert.equal(avatars()['Browser-Tester'], 'BT');
+  assert.equal(agentInitials('lead'), 'L');
+  assert.equal(agentInitials(''), '');
+});

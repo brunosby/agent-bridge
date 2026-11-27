@@ -1,5 +1,6 @@
 import { h } from '../core/dom.js';
 import { applyAgentAccent } from '../core/agent-accent.js';
+import { agentInitials } from '../core/agent-view.js';
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
 const shortTime = (at) => clock.format(at);
@@ -79,15 +80,17 @@ function totals(task) {
     (task.files === 1 ? ' file changed' : ' files changed')
   );
 }
-export function taskList(tasks, activities, live = false, waitingAgent) {
+export function taskList(tasks, activities, live = false, waitingAgent, names = new Map()) {
   const list = h('ul', live ? 'progress-tasks progress-live' : 'progress-tasks');
   for (const task of tasks) {
     const item = h('li');
     applyAgentAccent(item, task.agent);
-    const avatar = h('span', 'agent-avatar', task.agent);
+    // The current name follows renames; a removed agent keeps the name recorded with its task.
+    const name = names.get(task.agent) || task.name || task.agent;
+    const avatar = h('span', 'agent-avatar', agentInitials(name));
     avatar.setAttribute('aria-hidden', 'true');
     const desc = h('span', 'progress-task-title');
-    desc.append(h('b', null, task.name));
+    desc.append(h('b', null, name));
     if (task.description) desc.append(' · ' + task.description);
     desc.title = desc.textContent;
     item.append(avatar, desc);
@@ -121,7 +124,7 @@ export function taskList(tasks, activities, live = false, waitingAgent) {
   }
   return list;
 }
-export function timeline(row, side, activities) {
+export function timeline(row, side, activities, names) {
   const list = h('ol', 'progress-stages');
   list.setAttribute('aria-label', 'Request stages');
   for (const stage of row.stages) {
@@ -135,7 +138,7 @@ export function timeline(row, side, activities) {
     item.append(marker, title, h('span', 'progress-meta', info));
     if (side && !row.total) {
       const tasks = row.tasks.filter((t) => t.stage === stage.name || (stage.name === 'Answer' && t.stage === 'Plan'));
-      if (tasks.length) item.append(taskList(tasks, activities, false, row.waiting?.agent));
+      if (tasks.length) item.append(taskList(tasks, activities, false, row.waiting?.agent, names));
     }
     list.append(item);
   }

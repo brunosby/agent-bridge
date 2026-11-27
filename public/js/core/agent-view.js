@@ -61,6 +61,15 @@ const labels = {
   idle: 'idle',
 };
 
+/** Avatar text: the first letter of the first two words of the name ("Claude-Orchestrator" → "CO"). */
+export function agentInitials(name) {
+  const text = String(name || '');
+  return (text.match(/[A-Za-z0-9]+/g) || [text])
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('');
+}
+
 export function describeAgent(agent) {
   const availability = agent.status?.availability || agent.account?.state || (agent.available ? 'ready' : 'unavailable');
   const activity = agent.status?.activity || (agent.waitingApproval ? 'waiting' : agent.busy ? 'working' : 'idle');

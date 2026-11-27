@@ -67,6 +67,7 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
+- Progress avatars use the same initials as team cards. Renaming an agent updates its displayed name, and earlier tasks keep the last recorded name for removed agents.
 - Conversation logs save a team checkpoint when restoration data changes and on close or restart. Live activity updates reach connected tabs without adding snapshots to the transcript.
 
 - After **Sign in**, Agent Bridge follows the login and updates the setup and Settings > Accounts by itself: on Windows when the login window closes, and on every system by checking the provider status every 5 seconds for up to 10 minutes, and when you return to the page. Claude Code uses the documented exit code of `claude auth status`. Idle agents of that provider that could not work restart once the sign-in is confirmed. No credential file is read.
