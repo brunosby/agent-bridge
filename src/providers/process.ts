@@ -16,7 +16,7 @@ export interface JsonlOptions {
 export interface JsonlProcess {
   child: ChildProcess;
   write(obj: unknown): void;
-  kill(): Promise<void>;
+  kill(requireExit?: boolean): Promise<void>;
 }
 
 /**
@@ -80,17 +80,17 @@ export function spawnJsonl(
     write(obj: unknown) {
       if (child.exitCode === null && child.stdin.writable) child.stdin.write(JSON.stringify(obj) + '\n');
     },
-    kill() {
-      return killTree(child);
+    kill(requireExit = false) {
+      return killTree(child, requireExit);
     },
   };
 }
 
 /** Kill a process and its children (needed on Windows when a .cmd shim is used). */
-export function killTree(child: ChildProcess | null | undefined): Promise<void> {
-  return new Promise<void>((resolve) => {
+export function killTree(child: ChildProcess | null | undefined, requireExit = false): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     if (!child || child.exitCode !== null || child.signalCode !== null) return resolve();
-    const timer = setTimeout(resolve, 5000);
+    const timer = setTimeout(() => (requireExit ? reject(new Error('The previous provider process has not exited.')) : resolve()), 5000);
     child.once('exit', () => {
       clearTimeout(timer);
       resolve();

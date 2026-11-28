@@ -1,4 +1,5 @@
 import { cancelQueuedTasks, inputTaskIds } from './task-queue.ts';
+import { CompactTurn } from './compact-turn.ts';
 import type { ProviderEventArgs } from '../core/types.ts';
 import { EventEmitter } from 'node:events';
 import { spawn, spawnSync } from 'node:child_process';
@@ -134,8 +135,50 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     return result;
   }
 
+  contextTokens?: number;
+  private supportsSummary = false;
+  private compactTurn?: CompactTurn;
+  private summaryTransportError?: Error;
+
+  get compact() {
+    return this.supportsSummary ? this.summarizeSession : undefined;
+  }
+
+  private async summarizeSession(_instructions: string, signal: AbortSignal) {
+    const model = this.config.model || this.resolvedModel;
+    const split = model?.indexOf('/') ?? -1;
+    if (this.busy || !this.sessionId || !model || split < 1) throw new Error('An idle session with a selected model is required.');
+    const path = '/session/' + encodeURIComponent(this.sessionId);
+    const run = (this.compactTurn = new CompactTurn());
+    const interrupt = () => {
+      void this.http('POST', path + '/abort').catch(() => {});
+    };
+    signal.addEventListener('abort', interrupt, { once: true });
+    try {
+      void this.http('POST', path + '/summarize', { providerID: model.slice(0, split), modelID: model.slice(split + 1) }).then(
+        (result) => {
+          if (result !== true) return run.fail(new Error('OpenCode did not confirm compaction.'));
+          run.boundary = true;
+          run.finish();
+        },
+        (error: Error) => {
+          if (this.compactTurn !== run) return;
+          if (error instanceof SessionHttpError) run.fail(error);
+          else this.summaryTransportError = error; // A broken connection alone cannot confirm an idle session.
+        },
+      );
+      return await run.done;
+    } finally {
+      signal.removeEventListener('abort', interrupt);
+      if (this.compactTurn === run) {
+        this.compactTurn = undefined;
+        this.summaryTransportError = undefined;
+      }
+    }
+  }
+
   get busy() {
-    return this.running || this.queue.length > 0;
+    return Boolean(this.compactTurn) || this.running || this.queue.length > 0;
   }
 
   get model() {
@@ -256,6 +299,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     this.proc.stdout?.on('data', (d) => this.emitEvent('stderr', { text: String(d) }));
     this.proc.stderr?.on('data', (d) => this.emitEvent('stderr', { text: String(d) }));
     this.proc.on('exit', (code) => {
+      this.compactTurn?.fail(new Error('OpenCode process exited.'));
       const expected = this.stopping;
       this.proc = null;
       this.ready = null;
@@ -301,6 +345,9 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
   async supportsLiveInputs(): Promise<boolean> {
     const spec = await this.http('GET', '/doc').catch(() => null);
     const fields = (route: string) => spec?.paths?.[route]?.post?.requestBody?.content?.['application/json']?.schema?.properties;
+    this.supportsSummary = Boolean(
+      fields('/session/{sessionID}/summarize')?.providerID && fields('/session/{sessionID}/summarize')?.modelID,
+    );
     // Verified with OpenCode 1.19.6: these fields identified a server that consumed concurrent inputs in one session loop.
     // Keep the execution endpoint that carries the role instructions, model and permission events.
     return Boolean(
@@ -329,7 +376,7 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
   }
 
   async http(method: string, path: string, body?: unknown): Promise<any> {
-    const turn = method === 'POST' && path.endsWith('/message');
+    const turn = method === 'POST' && (path.endsWith('/message') || path.endsWith('/summarize'));
     try {
       const res = await fetch(this.base + path, {
         signal: turn ? undefined : AbortSignal.timeout(30000),
@@ -436,6 +483,11 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     const p = ev.properties || {};
     const sid = p.sessionID || p.part?.sessionID || p.info?.sessionID;
     if (sid && sid !== this.sessionId) return;
+    if (this.compactTurn && sid === this.sessionId) {
+      if (type === 'message.updated' && OpenCodeAgent.isSummaryMessage(p.info) && p.info.id) this.summaryMessages.add(p.info.id);
+      if (type === 'session.idle' && this.summaryTransportError) this.compactTurn.fail(this.summaryTransportError);
+      if (type.startsWith('message.') || type === 'session.idle') return;
+    }
     if (this.liveInputs && sid === this.sessionId) {
       if (type === 'session.idle') this.liveTurn = undefined;
       if (type === 'message.updated' && p.info?.role === 'user' && this.admission === p.info.id) {
@@ -658,6 +710,10 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
         text: `${this.name} ended its turn with OpenCode's context summary instead of an answer; nothing was passed on. Send it a message to continue.`,
       });
     const t = info.tokens || {};
+    if (!summary && typeof t.input === 'number') {
+      this.contextTokens = t.input + (t.cache?.read || 0) + (t.cache?.write || 0);
+      this.emitEvent('contextUsage', {});
+    }
     const used = (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (t.cache?.write || 0);
     this.cachedTokens += t.cache?.read || 0;
     if (used) {
@@ -785,18 +841,18 @@ export class OpenCodeAgent extends EventEmitter implements Agent {
     }
   }
 
-  async restart() {
+  async restart(requireExit = false) {
     this.available = true;
     this.unavailableReason = null;
-    await this.shutdown();
+    await this.shutdown(requireExit);
     OpenCodeAgent._probe = null;
     await this.start().catch(() => {});
   }
 
-  async shutdown() {
+  async shutdown(requireExit = false) {
     this.stopping = true;
     this.sse?.abort();
-    if (this.proc) await killTree(this.proc);
+    if (this.proc) await killTree(this.proc, requireExit);
     this.proc = null;
     this.ready = null;
   }

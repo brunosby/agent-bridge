@@ -1,3 +1,4 @@
+import { compactAfterResult } from './compaction.ts';
 import { currentTurn, interruptConfirmed, validateTurns, type ConfirmedTurn } from './interrupt-send.ts';
 import { setTarget, discardQuestionDelegations } from './question-delegations.ts';
 import { latest, originPlan, forTask } from './request-progress.ts';
@@ -433,6 +434,7 @@ export function onTurnEnd(fromId: string, ev: TurnEnded & { seq?: number; source
     publish({ kind: 'system', text: `@${fromId} marked the work as done. Waiting for you.` });
     // Final confirmation: the user approves the result or asks for changes, only when files changed.
     if (setting('finalConfirmation') && S.conv.routingMode === 'orchestrator') void offerFinalReview(fromId, text);
+    else if (ev.ok) compactAfterResult(owner, fromId);
     S.conv.reviewRounds = 0;
     publishState();
     return;
@@ -815,6 +817,7 @@ async function offerFinalReview(fromId: string, text: string): Promise<void> {
   if (S.conv !== conv || conv.changeMark !== mark || conv.roleDecisionVersion !== version || !conv.relay.halted) return;
   if (!changed) {
     publish({ kind: 'system', text: 'No files changed, so there is nothing to approve.' });
+    compactAfterResult(conv, fromId);
     return;
   }
   publishFinalReview(conv, fromId, text);
@@ -903,6 +906,9 @@ export async function userSend(text: string, target?: string, mentionChecks?: un
   try {
     await delivery;
   } finally {
-    if (pendingUserSends.get(owner) === delivery) pendingUserSends.delete(owner);
+    if (pendingUserSends.get(owner) === delivery) {
+      pendingUserSends.delete(owner);
+      if (S.conv === owner && !owner.tasks.size && Object.values(owner.agents).some((a) => a.compact)) publishState();
+    }
   }
 }

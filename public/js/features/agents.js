@@ -92,6 +92,10 @@ export function renderCard(a) {
     const roleName = h('span', 'card-role');
     const drv = h('span', 'badge');
     const status = h('span', 'status');
+    const context = h('span', 'card-context');
+    const compact = h('button', 'btn', 'Compact context');
+    compact.onclick = () =>
+      api('compactContext', { agent: a.id, conversationId: store.state.conversationId }).catch((e) => addSys(e.message, true));
     const tokens = h('span', 'tok');
     const stop = h('button', 'btn', 'Stop');
     stop.onclick = () => api('interrupt', { agent: a.id }).catch((e) => addSys(e.message, true));
@@ -105,7 +109,7 @@ export function renderCard(a) {
     };
     el.dataset.agentId = a.id;
     const handle = h('span', 'drag-handle', '⋮⋮');
-    el.append(avatar, name, roleName, status, handle);
+    el.append(avatar, name, roleName, status, handle, context);
     installAgentDrag(el, handle);
 
     const row = h('div', 'card-row');
@@ -188,7 +192,7 @@ export function renderCard(a) {
     };
     meta.append(drv, tokens, taskLink);
     const actions = h('div', 'agent-details__actions');
-    actions.append(stop, retry, remove);
+    actions.append(compact, stop, retry, remove);
     const moves = ['Move up', 'Move down', 'Move to top'].map((label, i) => {
       const button = h('button', 'btn', label);
       button.onclick = () => {
@@ -217,6 +221,8 @@ export function renderCard(a) {
       el,
       avatar,
       handle,
+      compact,
+      context,
       moves,
       name,
       roleName,
@@ -269,6 +275,11 @@ export function renderCard(a) {
   }
   const wait = store.state.pendingWork?.find((w) => w.agent === a.id && w.reason !== 'Agent is working');
   if (wait) c.status.textContent = wait.reason;
+  if (a.compacting && availability.available) c.status.textContent = 'Compacting context';
+  c.context.hidden = !Number.isFinite(a.contextTokens);
+  c.context.textContent = c.context.hidden ? '' : 'Context ≈ ' + fmtTokens(a.contextTokens);
+  c.compact.hidden = !a.supportsCompaction;
+  c.compact.disabled = !a.canCompact;
   c.taskLink.hidden = !task?.sourceSeq;
   c.taskLink.dataset.seq = task?.sourceSeq || '';
   c.tokens.textContent = `${fmtTokens(a.tokens)} tok${a.cachedTokens ? ` (+${fmtTokens(a.cachedTokens)} cache)` : ''}`;

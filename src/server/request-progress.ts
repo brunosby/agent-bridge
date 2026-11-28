@@ -1,3 +1,4 @@
+import { isCompacting } from './compaction-state.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { startActivity, endActivity, recordActivity, type TaskActivity } from './task-activity.ts';
 import { milestonePending } from './milestones.ts';
@@ -275,7 +276,10 @@ export function pendingWork(owner: Conversation): Wait[] {
     if (owner.providerChanges.has(member.id)) add('Switching provider', undefined, undefined, member.id);
     if (owner.agents[member.id]?.approvals.size && !waits.some((w) => w.agent === member.id && w.action === 'Open approval'))
       add('Pending approval', 'Open approval', undefined, member.id);
-    if (owner.agents[member.id]?.busy || [...owner.tasks.values()].some((t) => t.agent === member.id))
+    if (
+      (owner.agents[member.id]?.busy && !isCompacting(owner.agents[member.id])) ||
+      [...owner.tasks.values()].some((t) => t.agent === member.id)
+    )
       add('Agent is working', undefined, undefined, member.id);
   }
   for (const row of register(owner).values()) if (row.preparing) add('Preparing delivery', undefined, undefined, undefined, row.seq);

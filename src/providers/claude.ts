@@ -1,3 +1,4 @@
+import { CompactTurn } from './compact-turn.ts';
 import type { ProviderEventArgs } from '../core/types.ts';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -173,8 +174,30 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     return this.config.model || null;
   }
 
+  private compactTurn?: CompactTurn;
+  contextTokens?: number;
+
+  async compact(instructions: string, signal: AbortSignal) {
+    if (!this.proc || this.busy || this.stopping) throw new Error('Claude is not idle.');
+    const run = (this.compactTurn = new CompactTurn());
+    const interrupt = () => this.proc?.write({ type: 'control_request', request_id: randomUUID(), request: { subtype: 'interrupt' } });
+    signal.addEventListener('abort', interrupt, { once: true });
+    try {
+      this.proc.write({
+        type: 'user',
+        uuid: randomUUID(),
+        message: { role: 'user', content: '/compact ' + instructions },
+        parent_tool_use_id: null,
+      });
+      return await run.done;
+    } finally {
+      signal.removeEventListener('abort', interrupt);
+      if (this.compactTurn === run) this.compactTurn = undefined;
+    }
+  }
+
   get busy() {
-    return Boolean(this.activeBatch) || this.unconfirmed.size > 0;
+    return Boolean(this.compactTurn || this.activeBatch) || this.unconfirmed.size > 0;
   }
 
   emitEvent<const K extends string>(kind: K, ...[data]: ProviderEventArgs<NoInfer<K>>): void {
@@ -261,6 +284,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
           this.emitEvent('stderr', { text: String(t) });
         },
         onExit: (code) => {
+          this.compactTurn?.fail(new Error('Claude process exited.'));
           const wasExpected = this.stopping;
           this.stopping = false;
           this.proc = null;
@@ -337,14 +361,14 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     if (this.proc) await this.restart();
   }
 
-  async restart() {
+  async restart(requireExit = false) {
     this.restartWhenIdle = false;
     this.available = true;
     this.unavailableReason = null;
     this.stderrTail = '';
     if (this.proc) {
       this.stopping = true;
-      await this.proc.kill();
+      await this.proc.kill(requireExit);
     }
     this.start();
   }
@@ -381,7 +405,28 @@ export class ClaudeAgent extends EventEmitter implements Agent {
     await this.proc?.kill();
   }
 
+  private recordUsage(u: Record<string, number>) {
+    this.tokens += (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_creation_input_tokens || 0);
+    this.cachedTokens += u.cache_read_input_tokens || 0;
+    this.emitEvent('usage', { tokens: this.tokens });
+  }
+
   handle(m: any): void {
+    const run = this.compactTurn;
+    if (run && !m.parent_tool_use_id) {
+      if (m.type === 'system' && m.subtype === 'compact_boundary') {
+        run.boundary = true;
+        run.before = m.compact_metadata?.pre_tokens;
+      }
+      if (m.type === 'result') {
+        if (m.is_error || m.subtype !== 'success') run.fail(new Error(m.subtype || 'Claude compaction failed.'));
+        else run.finish();
+      }
+      if (['system', 'stream_event', 'assistant', 'user', 'result'].includes(m.type)) {
+        if (m.type === 'result' && m.usage) this.recordUsage(m.usage);
+        return;
+      }
+    }
     switch (m.type) {
       case 'control_request':
         this.handleControlRequest(m);
@@ -447,6 +492,11 @@ export class ClaudeAgent extends EventEmitter implements Agent {
       case 'assistant': {
         if (m.parent_tool_use_id) break;
         const msg = m.message || {};
+        if (typeof msg.usage?.input_tokens === 'number') {
+          this.contextTokens =
+            msg.usage.input_tokens + (msg.usage.cache_read_input_tokens || 0) + (msg.usage.cache_creation_input_tokens || 0);
+          this.emitEvent('contextUsage', {});
+        }
         if (m.error === 'authentication_failed' || m.error === 'billing_error') {
           this.emitEvent('account', {
             state: 'no_access',
@@ -499,13 +549,7 @@ export class ClaudeAgent extends EventEmitter implements Agent {
           if (taskIds.length) this.emitEvent('tasksCancelled', { taskIds });
           this.emitEvent('error', { text: 'Claude returned without acknowledging its inputs. Unconfirmed inputs were not resent.' });
         }
-        if (m.usage) {
-          const u = m.usage;
-          // tokens = new tokens (input, output, cache writes); cachedTokens = cache reads, which cost much less
-          this.tokens += (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_creation_input_tokens || 0);
-          this.cachedTokens += u.cache_read_input_tokens || 0;
-          this.emitEvent('usage', { tokens: this.tokens });
-        }
+        if (m.usage) this.recordUsage(m.usage);
         if (
           m.is_error &&
           /invalid api key|please run \/login|not logged in|oauth token|credit balance|billing|subscription/i.test(String(m.result || ''))

@@ -1,3 +1,5 @@
+import { isCompacting } from './compaction-state.ts';
+import { canCompact } from './compaction.ts';
 import { hopBudget } from '../core/relay-limit.ts';
 import { activityPublisher } from './task-activity.ts';
 import { signInState } from './login-watch.ts';
@@ -140,7 +142,7 @@ export function decorateModels(spec: AgentSpec, agent: Agent): ModelInfo[] {
   }));
 }
 
-export function teamState() {
+export function teamState(waits?: ReturnType<typeof pendingWork>) {
   return S.conv.team.map((spec) => {
     const a = S.conv.agents[spec.id];
     const status = statusFor(S.conv, spec.id);
@@ -153,6 +155,10 @@ export function teamState() {
       cwd: a?.cwd || S.conv.workDir,
       worktree: spec.worktree || null,
       busy: Boolean(a?.busy),
+      compacting: isCompacting(a),
+      supportsCompaction: Boolean(a?.compact),
+      canCompact: Boolean(waits && a && canCompact(S.conv, a, waits)),
+      contextTokens: a?.contextTokens,
       waitingApproval: a?.approvals?.size || 0,
       bypass: Boolean(spec.bypass),
       sessionId: a?.sessionId || a?.threadId || spec.sessionId || null,
@@ -187,8 +193,8 @@ export function recordWorkflow(owner: Conversation, plan = owner.plan) {
 }
 
 export function stateEvent() {
-  const team = teamState();
   const waits = pendingWork(S.conv);
+  const team = teamState(waits);
   return {
     kind: 'state',
     progressLayout: setting('progressLayout'),

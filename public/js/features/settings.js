@@ -37,6 +37,10 @@ export const SETTING_LABELS = {
     'Send only agent summaries to the orchestrator',
     'Full replies stay in the chat. Replies without a complete summary are sent in full.',
   ],
+  compactCoordinatorAfterResult: [
+    'Compact the orchestrator after each finished result',
+    "Summarizes the orchestrator's history at a natural break to reduce tokens on later turns. The orchestrator keeps the decisions and open items.",
+  ],
   finalConfirmation: [
     'Ask me to approve the final result',
     'Show Approve / Ask for changes when the orchestrator finishes and files changed since your last message.',
@@ -66,6 +70,7 @@ export const SETTING_LAYOUT = {
   maxHops: ['flow', 'Limits', 'number', 'hand-offs'],
   tokenLimit: ['flow', 'Limits', 'number', 'tokens'],
   summarizeAgentReplies: ['flow', 'Orchestrator and review', 'boolean'],
+  compactCoordinatorAfterResult: ['flow', 'Orchestrator and review', 'boolean'],
   finalConfirmation: ['flow', 'Orchestrator and review', 'boolean'],
   maxReviewRounds: ['flow', 'Orchestrator and review', 'number', 'rounds'],
   reviewDiffMaxChars: ['flow', 'Orchestrator and review', 'number', 'characters'],

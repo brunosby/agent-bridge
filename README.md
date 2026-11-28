@@ -18,6 +18,8 @@ Drag a team card to reorder the agents, or open its details and choose **Move up
 
 When the coordinator asks a question and delegates work in the same reply, the question card holds those instructions. Choose **Send now** to release eligible work before answering. The card shows the result for each agent. Answering or dismissing the question returns any remaining instructions to the coordinator.
 
+In **Settings > Conversation flow**, **Compact the orchestrator after each finished result** is enabled by default. At an idle break after approval or completion, supported providers summarize the coordinator's history. Agent cards show the latest reported input size as **Context ≈**, and **Compact context** in agent details starts a manual summary. Messages and hand-offs wait in order while the agent compacts. If an interruption cannot be confirmed, use **Retry** to restore the session and release its queue.
+
 While an agent is working, send a correction normally to let it incorporate the update at its next opportunity. The chat reports when the provider confirms receipt. Older OpenCode servers deliver updates after the current turn. To stop the displayed turn first, choose **Interrupt and send**. Edits already made stay in the project.
 
 Use **Manage** beside the team roster to save, rename, or apply a team. Templates keep role and model choices. Each new member starts with bypass off.

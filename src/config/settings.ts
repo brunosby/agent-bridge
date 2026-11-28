@@ -52,6 +52,7 @@ export const SETTINGS: Record<string, SettingDef> = {
   reviewDiffMaxChars: { type: 'number', min: 0, default: 40000 },
   maxReviewRounds: { type: 'number', min: 0, default: 2 },
   summarizeAgentReplies: { type: 'boolean', default: true },
+  compactCoordinatorAfterResult: { type: 'boolean', default: true },
   finalConfirmation: { type: 'boolean', default: true },
   milestoneCommitMode: { type: 'enum', values: ['ask', 'automatic'], default: 'ask' },
   sensitiveModelPatterns: { type: 'list', default: ['big-pickle', 'stealth', ':free', '-free'] },

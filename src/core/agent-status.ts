@@ -26,6 +26,6 @@ export function canReceiveWork(status: ReturnType<typeof agentStatus>): boolean 
   return status.availability === 'ready';
 }
 
-export function canQueueWork(status: ReturnType<typeof agentStatus>): boolean {
-  return canReceiveWork(status) || status.availability === 'switching_provider';
+export function canQueueWork(status: ReturnType<typeof agentStatus> & { holdingDeliveries?: boolean }): boolean {
+  return canReceiveWork(status) || status.availability === 'switching_provider' || Boolean(status.holdingDeliveries);
 }

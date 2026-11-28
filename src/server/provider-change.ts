@@ -1,3 +1,4 @@
+import { isCompacting } from './compaction-state.ts';
 import { randomUUID } from 'node:crypto';
 import { canReceiveWork } from '../core/agent-status.ts';
 import type { Agent, AgentSpec, Conversation } from '../core/types.ts';
@@ -17,7 +18,7 @@ function checkIdle(owner: Conversation, agent: Agent): void {
   if (S.conv !== owner || owner.agents[agent.id] !== agent) throw new Error('The conversation or agent changed. Try again.');
   if (agentOperationPending(agent) || statusOf(agent).availability === 'starting')
     throw new Error('Wait for the current agent update to finish before changing provider.');
-  if (agent.busy || agent.approvals.size || isPreparingDelivery(owner, agent.id))
+  if (agent.busy || isCompacting(agent) || agent.approvals.size || isPreparingDelivery(owner, agent.id))
     throw new Error('Use Stop or wait for the agent to finish before changing provider.');
 }
 

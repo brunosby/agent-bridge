@@ -42,7 +42,16 @@ test('agent card shows the role and a short model name, with the full id and eff
     };
 
     renderCard(agent);
-    const { el } = cards[agent.id];
+    const { el, compact, context } = cards[agent.id];
+    assert.equal(compact.hidden, true);
+    assert.equal(context.hidden, true);
+    renderCard({ ...agent, supportsCompaction: true, canCompact: true, contextTokens: 230000 });
+    assert.equal(compact.hidden, false);
+    assert.equal(compact.disabled, false);
+    assert.match(context.textContent, /Context ≈ 230/);
+    renderCard({ ...agent, supportsCompaction: true, compacting: true });
+    assert.equal(compact.disabled, true);
+    renderCard(agent);
     const role = el.querySelector('.card-role');
     assert.equal(el.querySelector('.name').textContent, 'Claude');
     assert.equal(role.textContent, 'Orchestrator · Opus 5.5');

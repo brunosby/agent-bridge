@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Added
 
+- The orchestrator automatically compacts its context after a finished result when idle. You can turn this off in **Settings > Conversation flow** or use **Compact context** in a supported agent’s details. Messages and hand-offs stay in order while compaction runs.
+- Agent cards show the latest context estimate. After compaction, the chat reports how many input tokens the next model call used, when the provider supplies that measurement.
 - Question cards retain accompanying delegations, show delivery status per agent, and let you send eligible work before answering. Answering or dismissing returns outstanding instructions to the coordinator. Architect notes accompany specification decisions.
 
 - Update a busy agent’s delegation and see delivery confirmations. Held updates remain tied to the original task. **Interrupt and send** waits for the confirmed turn to finish before delivering new instructions.
@@ -73,6 +75,7 @@ All notable changes to this project are documented here. The format follows Keep
 
 ### Fixed
 
+- Final confirmations leave the progress panel when you approve the result or request changes. On mobile, opening a confirmation that already closed keeps the panel visible so you can read the notice.
 - Progress avatars use the same initials as team cards. Renaming an agent updates its displayed name, and earlier tasks keep the last recorded name for removed agents.
 - Conversation logs save a team checkpoint when restoration data changes and on close or restart. Live activity updates reach connected tabs without adding snapshots to the transcript.
 

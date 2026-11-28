@@ -7,6 +7,8 @@ import { redactRecord } from '../core/secret-detection.ts';
 import { requestsBridgeAccess } from './browser-session.ts';
 import { questionReceipt, restoreQuestionDelegations } from './question-delegations.ts';
 import { workflowMarkers } from '../../public/js/core/workflow-markers.js';
+import { isCompacting } from './compaction-state.ts';
+import { reportContext, stopCompaction } from './compaction.ts';
 import { checkGrowth, readTaskBlocks, requestSpec, stopWatching } from './task-workflow.ts';
 import { closeShellApproval, mayBypassApproval, processShellApproval } from './shell-approvals.ts';
 import { parseMilestoneMarkers } from '../../public/js/core/milestone-markers.js';
@@ -164,6 +166,7 @@ async function closeActiveConversation() {
   if (!S.conv) return true;
   const old = S.conv;
   stopWatching(old);
+  for (const agent of Object.values(old.agents)) stopCompaction(old, agent, true);
   flushMentionStreams(old);
   cancelMilestoneDecision(old, 'closed');
   publish(stateEvent(), { finalState: true });
@@ -207,7 +210,12 @@ export function wireAgent(owner: Conversation, id: string, agent: Agent): void {
   async function handleEvent(event: AgentEvent) {
     if (S.conv !== owner || owner.agents[id] !== agent) return; // late events from a closed conversation or replaced agent
     clearTimeout(silence);
-    if (agent.busy && !agent.approvals.size && !['turnEnd', 'tasksCancelled', 'unavailable'].includes(event.kind)) {
+    if (event.kind === 'contextUsage') {
+      reportContext(agent);
+      publishState();
+      return;
+    }
+    if (!isCompacting(agent) && agent.busy && !agent.approvals.size && !['turnEnd', 'tasksCancelled', 'unavailable'].includes(event.kind)) {
       silence = setTimeout(() => {
         if (S.conv === owner && owner.agents[id] === agent && agent.busy && !agent.approvals.size)
           publish({

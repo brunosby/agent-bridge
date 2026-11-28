@@ -4,6 +4,7 @@ import { S } from './state.ts';
 import { DRIVERS } from '../providers/registry.ts';
 import { buildAgent, installAgent, startAgent, validateAgentChoice, defaultName, validateNameFormat, providerBlocked } from './team.ts';
 import { cliStatus, PROVIDERS } from '../providers/accounts.ts';
+import { isCompacting } from './compaction-state.ts';
 import { pendingWork } from './request-progress.ts';
 import { agentOperationPending } from './agent-lifecycle.ts';
 import { hasPendingSend } from './routing.ts';
@@ -75,7 +76,11 @@ export function manageTeam(body: Record<string, unknown>, source = S.conv.team) 
 }
 function blockers(owner: Conversation) {
   const items = pendingWork(owner).map((w) => w.reason);
-  if (hasPendingSend(owner) || owner.pendingAgentNames.size || Object.values(owner.agents).some(agentOperationPending))
+  if (
+    hasPendingSend(owner) ||
+    owner.pendingAgentNames.size ||
+    Object.values(owner.agents).some((agent) => agentOperationPending(agent) || isCompacting(agent))
+  )
     items.push('An agent or delivery is being updated.');
   if (!owner.relay.halted) items.push('Pause the conversation before applying a team.');
   return [...new Set(items)];

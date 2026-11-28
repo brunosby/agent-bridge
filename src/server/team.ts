@@ -1,3 +1,4 @@
+import { needsCompactRetry } from './compaction-state.ts';
 import { EventEmitter } from 'node:events';
 import { chosenTeam } from './saved-teams.ts';
 import { projectSnapshot } from '../workspace/git-context.ts';
@@ -89,7 +90,9 @@ export function providerBlocked(driver: string | undefined): RuntimeStatus | nul
 }
 
 export function statusFor(owner: Conversation, id: string) {
-  return statusOf(owner.agents[id], providerBlocked(owner.team.find((spec) => spec.id === id)?.driver), owner.providerChanges.has(id));
+  const agent = owner.agents[id];
+  const status = statusOf(agent, providerBlocked(owner.team.find((spec) => spec.id === id)?.driver), owner.providerChanges.has(id));
+  return needsCompactRetry(agent) ? { ...status, holdingDeliveries: true } : status;
 }
 
 const RESERVED_AGENT_NAME = /^a\d+$/i;

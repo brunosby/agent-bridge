@@ -1,3 +1,4 @@
+import { isCompacting } from './compaction-state.ts';
 import type { Conversation, SpecAttempt, TaskEvent, TrackedTask } from '../core/types.ts';
 import { DRIVERS } from '../providers/registry.ts';
 import { canReceiveWork } from '../core/agent-status.ts';
@@ -37,13 +38,15 @@ export function finishProviderDeliveries(owner: Conversation, id: string, failur
   const queued = queues?.get(id);
   if (!queued) return;
   queues?.delete(id);
+  const stopped = Boolean(failure && isCompacting(owner.agents[id]) && failure === 'the conversation was stopped');
+  if (stopped) publish({ kind: 'system', text: 'Stopped: discarded ' + queued.length + ' queued deliveries to @' + id + '.' });
   for (const { text, delivery } of queued) {
     const row = register(owner).get(delivery.requestSeq ?? -1);
     if (row?.preparing) row.preparing--;
-    if (delivery.taskId && !owner.batch?.pending.get(id)?.tasks.has(delivery.taskId)) continue;
+    if (!failure && delivery.taskId && !owner.batch?.pending.get(id)?.tasks.has(delivery.taskId)) continue;
     if (!failure) deliver(id, text, delivery);
     else if (delivery.discarded) delivery.discarded(failure);
-    else publish({ kind: 'error', agent: id, text: `Queued delivery to @${id} failed: ${failure}.` });
+    else if (!stopped) publish({ kind: 'error', agent: id, text: `Queued delivery to @${id} failed: ${failure}.` });
   }
 }
 
@@ -58,7 +61,9 @@ export function deliver(toId: string, text: string, delivery: Delivery): void {
     requestSeq: delivery.requestSeq ?? row?.seq,
     originalRequest: delivery.originalRequest ?? row?.original ?? owner.lastUserText,
   };
-  if (owner.providerChanges.has(toId)) {
+  if (owner.providerChanges.has(toId) || isCompacting(owner.agents[toId])) {
+    if (delivery.from === 'user' && isCompacting(owner.agents[toId]))
+      publish({ kind: 'system', text: '@' + toId + ' is compacting; your message will be delivered when it finishes.' });
     let queues = providerQueues.get(owner);
     if (!queues) providerQueues.set(owner, (queues = new Map()));
     let queued = queues.get(toId);

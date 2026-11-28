@@ -189,6 +189,8 @@ export interface Agent extends EventEmitter {
   threadId?: string | null;
   commands?: { name: string; description: string }[];
   isDestructive?: (input: { command?: string; cwd?: string; deletePaths?: string[] }) => Promise<string | null>;
+  compact?(instructions: string, signal: AbortSignal): Promise<{ compacted: boolean; before?: number }>;
+  contextTokens?: number;
   readonly busy: boolean;
   readonly model: string | null;
   readonly effort: string | null;
@@ -201,7 +203,7 @@ export interface Agent extends EventEmitter {
   approveShellCommand?(requestId: string, command: string): boolean;
   interrupt(): Promise<void>;
   interruptTurn?(turnId: string): Promise<void>;
-  restart(): Promise<void>;
+  restart(requireExit?: boolean): Promise<void>;
   shutdown(): Promise<void>;
   setInstructions?(text: string): void;
   syncThreadName?(): Promise<void>;

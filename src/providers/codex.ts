@@ -1,3 +1,4 @@
+import { CompactTurn } from './compact-turn.ts';
 import { wrappedShellCommand } from '../core/read-only-shell.ts';
 import { randomUUID } from 'node:crypto';
 import { cancelQueuedTasks, inputTaskIds } from './task-queue.ts';
@@ -84,8 +85,32 @@ export class CodexAgent extends EventEmitter implements Agent {
     this.fileChanges = new Map();
   }
 
+  private compactTurn?: CompactTurn;
+  contextTokens?: number;
+
+  async compact(_instructions: string, signal: AbortSignal) {
+    if (!this.threadId || this.busy) throw new Error('Codex is not idle.');
+    const run = (this.compactTurn = new CompactTurn());
+    const interrupt = () => {
+      if (run.turnId) void this.request('turn/interrupt', { threadId: this.threadId, turnId: run.turnId }).catch(() => {});
+    };
+    this.compactSignal = signal;
+    signal.addEventListener('abort', interrupt, { once: true });
+    try {
+      void this.request('thread/compact/start', { threadId: this.threadId }, 0).catch((error) => run.fail(error));
+      return await run.done;
+    } finally {
+      signal.removeEventListener('abort', interrupt);
+      if (this.compactTurn === run) {
+        this.compactTurn = undefined;
+        this.compactSignal = undefined;
+      }
+    }
+  }
+  private compactSignal?: AbortSignal;
+
   get busy() {
-    return Boolean(this.activeBatch || this.activeTurnId || this.steering) || this.queue.length > 0;
+    return Boolean(this.compactTurn || this.activeBatch || this.activeTurnId || this.steering) || this.queue.length > 0;
   }
 
   emitEvent<const K extends string>(kind: K, ...[data]: ProviderEventArgs<NoInfer<K>>): void {
@@ -137,6 +162,7 @@ export class CodexAgent extends EventEmitter implements Agent {
       onText: (t) => this.emitEvent('info', { text: t }),
       onStderr: (t) => this.emitEvent('stderr', { text: String(t) }),
       onExit: (code) => {
+        this.compactTurn?.fail(new Error('Codex process exited.'));
         const expected = this.stopping;
         this.stopping = false;
         this.proc = null;
@@ -394,12 +420,12 @@ export class CodexAgent extends EventEmitter implements Agent {
     this.readOnly = Boolean(readOnly);
   }
 
-  async restart() {
+  async restart(requireExit = false) {
     this.available = true;
     this.unavailableReason = null;
     if (this.proc) {
       this.stopping = true;
-      await this.proc.kill();
+      await this.proc.kill(requireExit);
     }
     await this.start().catch(() => {});
   }
@@ -511,6 +537,21 @@ export class CodexAgent extends EventEmitter implements Agent {
   }
 
   handleNotification(method: string, p: any): void {
+    const run = this.compactTurn;
+    if (run && (method.startsWith('turn/') || method.startsWith('item/'))) {
+      if (p.threadId !== this.threadId) return;
+      if (method === 'turn/started' && !run.turnId) {
+        run.turnId = p.turn?.id;
+        if (this.compactSignal?.aborted && run.turnId)
+          void this.request('turn/interrupt', { threadId: this.threadId, turnId: run.turnId }).catch(() => {});
+      }
+      if (method === 'item/completed' && p.turnId === run.turnId && p.item?.type === 'contextCompaction') run.boundary = true;
+      if (method === 'turn/completed' && run.turnId && p.turn?.id === run.turnId) {
+        if (p.turn.status === 'completed' && run.boundary) run.finish();
+        else run.fail(new Error(p.turn.error?.message || 'Codex compaction did not complete.'));
+      }
+      return;
+    }
     switch (method) {
       case 'turn/started':
         this.activeTurnId = p.turn?.id || this.activeTurnId;
@@ -607,6 +648,11 @@ export class CodexAgent extends EventEmitter implements Agent {
 
       case 'thread/tokenUsage/updated': {
         // Thread totals (cumulative, also across resume): new tokens = total - cached input.
+        if (p.threadId && p.threadId !== this.threadId) break;
+        if (!run && typeof p.tokenUsage?.last?.inputTokens === 'number') {
+          this.contextTokens = p.tokenUsage.last.inputTokens;
+          this.emitEvent('contextUsage', {});
+        }
         const t = p.tokenUsage?.total;
         if (t && typeof t.totalTokens === 'number') {
           const cached = t.cachedInputTokens || 0;

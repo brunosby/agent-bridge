@@ -1,3 +1,5 @@
+import { isCompacting, needsCompactRetry } from './compaction-state.ts';
+import { compactAfterResult, startCompaction, stopCompaction, recoverCompaction } from './compaction.ts';
 import { savedTeams, manageTeam, applyTeam } from './saved-teams.ts';
 import { discardQuestionDelegations } from './question-delegations.ts';
 import { clearRoleDecisions } from './routing.ts';
@@ -76,7 +78,20 @@ export async function api(action: string, body: Record<string, any>): Promise<un
     const owner = S.conv;
     if (owner?.providerChanges.has(id)) throw new Error('This agent is switching provider. Try again when it finishes.');
     const agent = owner && Object.hasOwn(owner.agents, id) ? owner.agents[id] : undefined;
-    if (agent) return runAgentOperation(agent, () => dispatch(action, body));
+    if (
+      agent &&
+      isCompacting(agent) &&
+      !['interrupt', 'rename', 'bypass'].includes(action) &&
+      !(action === 'retry' && needsCompactRetry(agent))
+    )
+      throw new Error('Wait for context compaction to finish.');
+    if (agent) {
+      try {
+        return await runAgentOperation(agent, () => dispatch(action, body));
+      } finally {
+        if (agent.compact && S.conv === owner && owner.agents[id] === agent && !agent.busy) publishState();
+      }
+    }
   }
   const owner = S.conv;
   if (
@@ -102,6 +117,10 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
     return a;
   };
   switch (action) {
+    case 'compactContext':
+      if (body.conversationId !== S.conv.id) throw new Error('Conversation changed.');
+      startCompaction(S.conv, agentOf(body.agent));
+      return { ok: true };
     case 'taskDecision':
       resolveTask(S.conv, body);
       return { ok: true };
@@ -228,11 +247,13 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       if (body.action !== 'approve' && body.action !== 'changes') throw new Error('unknown final review decision');
       textField(body.requestId, 'review request ID');
       if (S.conv.pendingFinal !== body.requestId) throw new Error('this confirmation is no longer pending');
+      const request = decisionOrigin(S.conv, body.requestId);
       S.conv.pendingFinal = null;
       publish({ kind: 'finalReviewClosed', requestId: body.requestId, action: body.action });
       if (body.action === 'approve') {
         publish({ kind: 'system', text: `${setting('userName')} approved the result.` });
         logError('bridge', 'final result approved by the user');
+        compactAfterResult(S.conv, orchestratorId(), request);
       } else {
         publish({ kind: 'system', text: `${setting('userName')} asked for changes: write what to change in the message box.` });
       }
@@ -257,7 +278,12 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       if (typeof body.role !== 'string' || !Object.hasOwn(S.roles, body.role)) throw new Error('unknown role');
       const owner = S.conv;
       const members = owner.team.filter((spec) => spec.role === body.role);
-      if (members.some((spec) => owner.providerChanges.has(spec.id) || agentOperationPending(owner.agents[spec.id])))
+      if (
+        members.some(
+          (spec) =>
+            owner.providerChanges.has(spec.id) || isCompacting(owner.agents[spec.id]) || agentOperationPending(owner.agents[spec.id]),
+        )
+      )
         throw new Error('An agent with this role is being updated. Try again when it finishes.');
       const roleOverrides = { ...(config.roleOverrides || {}) };
       if (body.reset) delete roleOverrides[body.role];
@@ -366,11 +392,15 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
         discardHeldRelays(owner, 'The conversation was stopped.');
         owner.relay.halted = owner.relay.userPaused = true;
         cancelMilestoneDecision(owner, 'stop');
-      } else {
+      } else if (!isCompacting(agents[body.agent])) {
         for (const task of owner.tasks.values()) if (task.agent === body.agent) owner.stoppedTasks.add(task.id);
         cancelBatchPart(owner, body.agent, 'cancelled: stopped by the user');
       }
-      await Promise.all(ids.filter((id) => !owner.providerChanges.has(id)).map((id) => agents[id]?.interrupt()));
+      await Promise.all(
+        ids
+          .filter((id) => !owner.providerChanges.has(id))
+          .map((id) => stopCompaction(owner, agents[id], !body.agent) || agents[id]?.interrupt()),
+      );
       if (S.conv === owner) {
         publish({ kind: 'system', text: 'Stopped ' + ids.map((id) => '@' + id).join(', ') + (body.agent ? '.' : '. Relay paused.') });
         publishState();
@@ -503,7 +533,8 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
     case 'retry': {
       const agent = agentOf(body.agent);
       publish({ kind: 'system', text: `Retrying @${body.agent}...` });
-      await startAgent(agent, () => agent.restart());
+      const owner = S.conv;
+      if (await startAgent(agent, () => agent.restart(needsCompactRetry(agent)))) recoverCompaction(owner, agent);
       return { ok: true };
     }
     case 'settings':
