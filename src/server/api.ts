@@ -236,6 +236,8 @@ async function dispatch(action: string, body: Record<string, any>): Promise<unkn
       } else {
         publish({ kind: 'system', text: `${setting('userName')} asked for changes: write what to change in the message box.` });
       }
+      // The progress panel lists pending work from the state, so it must drop the confirmation now.
+      publishState();
       return { ok: true };
     }
     case 'skills':

@@ -39,8 +39,17 @@ test('orchestrator delegates in parallel, gets both results in one message, then
     assert.equal(routes.filter((r) => r.endsWith('>Lead')).length, 1, routes.join(','));
     assert.ok(b.events.some((e) => e.kind === 'system' && /Waiting for/.test(e.text)));
 
+    const waiting = await b.waitFor(
+      (e) => e.kind === 'state' && e.pendingWork.some((/** @type {any} */ w) => w.reason === 'Final confirmation'),
+    );
+    assert.equal(waiting.pendingWork.find((/** @type {any} */ w) => w.reason === 'Final confirmation').card, final.requestId);
     await b.api('finalReview', { requestId: final.requestId, action: 'approve' });
     await b.waitFor((e) => e.kind === 'system' && /approved the result/.test(e.text));
+    // The progress panel reads pending work from the state, so the confirmation must leave it right away.
+    const closed = b.events.find((e) => e.kind === 'finalReviewClosed').seq;
+    await b.waitFor(
+      (e) => e.kind === 'state' && e.seq > closed && !e.pendingWork.some((/** @type {any} */ w) => w.reason === 'Final confirmation'),
+    );
   } finally {
     await b.stop();
   }
@@ -68,6 +77,11 @@ test('review loop stops after the configured number of rounds', async () => {
     await b.waitFor((e) => e.kind === 'system' && /still requests changes after 1/.test(e.text));
     const final = await b.waitFor((e) => e.kind === 'finalReview');
     assert.match(final.summary, /Open findings/);
+    await b.api('finalReview', { requestId: final.requestId, action: 'changes' });
+    const closed = (await b.waitFor((e) => e.kind === 'finalReviewClosed')).seq;
+    await b.waitFor(
+      (e) => e.kind === 'state' && e.seq > closed && !e.pendingWork.some((/** @type {any} */ w) => w.reason === 'Final confirmation'),
+    );
   } finally {
     await b.stop();
   }

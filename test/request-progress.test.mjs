@@ -191,3 +191,44 @@ test('progress avatars show agent initials instead of internal ids, follow renam
   assert.equal(agentInitials('lead'), 'L');
   assert.equal(agentInitials(''), '');
 });
+
+test('a progress action whose card is already closed reports it instead of doing nothing', async (t) => {
+  const win = new Window({ url: 'http://localhost', width: 1280 });
+  t.after(() => win.happyDOM.close());
+  win.document.write(readFileSync(new URL('../public/index.html', import.meta.url), 'utf8').replace(/<script[^>]+><\/script>/g, ''));
+  globalThis.document = win.document;
+  globalThis.window = win;
+  const { renderProgress } = await import('../public/js/features/request-progress.js');
+  const c = owner();
+  observeProgress(c, { kind: 'user', seq: 20, text: 'Ship it' });
+  c.pendingFinal = 'final-closed-card';
+  const state = { conversationId: 'stale-card', progressLayout: 'top', progress: progressView(c, pendingWork(c)) };
+  renderProgress(state, true);
+  const host = win.document.getElementById('requestProgress');
+  const toggle = host.querySelector('[data-focus="toggle"]');
+  if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+  const open = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Open confirmation');
+  assert.ok(open);
+  await open.onclick();
+  assert.equal(open.disabled, true);
+  assert.equal(host.querySelector('[role="status"]').textContent, 'This item was already resolved.');
+
+  win.happyDOM.setWindowSize({ width: 390, height: 780 });
+  const mobile = { ...state, progressLayout: 'sidebar' };
+  renderProgress(mobile, true);
+  const drawer = win.document.getElementById('progressDrawer');
+  win.document.getElementById('progressFloat').click();
+  const openConfirmation = () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Open confirmation').click();
+  openConfirmation();
+  assert.equal(drawer.open, true);
+  assert.equal(drawer.querySelector('[role="status"]').textContent, 'This item was already resolved.');
+
+  const active = win.document.createElement('button');
+  active.id = 'final-open-card';
+  win.document.body.append(active);
+  c.pendingFinal = active.id;
+  renderProgress({ ...mobile, progress: progressView(c, pendingWork(c)) });
+  openConfirmation();
+  assert.equal(drawer.open, false);
+  assert.equal(win.document.activeElement, active);
+});

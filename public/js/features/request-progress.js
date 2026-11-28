@@ -138,18 +138,27 @@ export function renderProgress(state, force = false) {
   host.replaceChildren();
   function action(w, seq) {
     const el = button(w.action, async () => {
-      if (drawer.open) drawer.close();
       if (w.card === 'retry') {
         try {
           await api('taskDecision', { action: 'retrySpec', seq, conversationId: state.conversationId });
+          if (drawer.open) drawer.close();
         } catch (e) {
           host.append(h('p', 'err', e.message));
         }
         return;
       }
-      const card = approvals.get(w.card) || $(w.card) || $('pending');
-      card?.scrollIntoView?.({ block: 'nearest' });
-      (card?.matches('button') ? card : card?.querySelector('button,input,select'))?.focus();
+      const card = w.card ? approvals.get(w.card) || $(w.card) : $('pending');
+      if (!card) {
+        // The page can show a wait for a card that was already closed until the next state arrives.
+        el.disabled = true;
+        const note = h('p', 'progress-meta', 'This item was already resolved.');
+        note.setAttribute('role', 'status');
+        el.after(note);
+        return;
+      }
+      if (drawer.open) drawer.close();
+      card.scrollIntoView?.({ block: 'nearest' });
+      (card.matches('button') ? card : card.querySelector('button,input,select'))?.focus();
     });
     el.classList.add('btn--primary');
     el.dataset.focus = 'action-' + seq + '-' + (w.card || 'decision');
